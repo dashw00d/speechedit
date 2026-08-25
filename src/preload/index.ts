@@ -32,6 +32,7 @@ const api = {
   loudness: (file: string) => ipcRenderer.invoke('media:loudness', file),
   transcribe: (file: string, opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
     ipcRenderer.invoke('media:transcribe', file, opts),
+  asrPath: () => ipcRenderer.invoke('media:asrPath'),
   complete: (req: {
     endpoint: { baseUrl?: string; model?: string; apiKey?: string }
     messages: { role: string; content: string }[]
@@ -51,6 +52,11 @@ const api = {
     const listener = (_e: unknown, info: { stage: string; ratio: number }) => fn(info)
     ipcRenderer.on('media:analyze-progress', listener)
     return () => ipcRenderer.removeListener('media:analyze-progress', listener)
+  },
+  onTranscribeProgress: (fn: (info: { stage: string; ratio: number }) => void) => {
+    const listener = (_e: unknown, info: { stage: string; ratio: number }) => fn(info)
+    ipcRenderer.on('media:transcribe-progress', listener)
+    return () => ipcRenderer.removeListener('media:transcribe-progress', listener)
   }
 }
 

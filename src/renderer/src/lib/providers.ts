@@ -1,4 +1,20 @@
-import type { ModelEndpoint } from './settings'
+import { parseAsrPayload, transcriptionsUrl } from '../../../shared/asr'
+import type { ModelEndpoint, ProviderKind } from './settings'
+
+export function transcriptReady(endpoint: ModelEndpoint): boolean {
+  if (endpoint.kind === 'off') return false
+  if (endpoint.kind === 'openai-compatible') return Boolean(endpoint.baseUrl && endpoint.model)
+  return (
+    endpoint.kind === 'whisper-cli' ||
+    endpoint.kind === 'faster-whisper' ||
+    endpoint.kind === 'whisper-cpp' ||
+    endpoint.kind === 'mlx-whisper'
+  )
+}
+
+export function isHttpTranscript(kind: ProviderKind): boolean {
+  return kind === 'openai-compatible'
+}
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -55,8 +71,10 @@ export async function transcribeOpenAI(
   file: Blob,
   filename = 'audio.wav'
 ): Promise<ApiWord[]> {
-  if (!endpointReady(endpoint)) throw new Error('Transcript endpoint is not configured.')
-  const url = `${endpoint.baseUrl.replace(/\/$/, '')}/audio/transcriptions`
+  if (!transcriptReady(endpoint) || endpoint.kind !== 'openai-compatible') {
+    throw new Error('Transcript endpoint is not configured.')
+  }
+  const url = transcriptionsUrl(endpoint.baseUrl)
   const body = new FormData()
   body.append('file', file, filename)
   body.append('model', endpoint.model)
@@ -69,22 +87,6 @@ export async function transcribeOpenAI(
     const detail = await res.text().catch(() => res.statusText)
     throw new Error(`Transcribe ${res.status}: ${detail.slice(0, 240)}`)
   }
-  const data = (await res.json()) as {
-    words?: { word?: string; text?: string; start: number; end: number }[]
-    segments?: { text: string; start: number; end: number; words?: { word: string; start: number; end: number }[] }[]
-  }
-  if (data.words?.length) {
-    return data.words.map((w) => ({
-      text: String(w.word ?? w.text ?? '').trim(),
-      start: w.start,
-      end: w.end
-    })).filter((w) => w.text)
-  }
-  const fromSegs =
-    data.segments?.flatMap((seg) =>
-      seg.words?.length
-        ? seg.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-        : [{ text: seg.text.trim(), start: seg.start, end: seg.end }]
-    ) ?? []
-  return fromSegs.filter((w) => w.text)
+  const parsed = parseAsrPayload(await res.json(), 'openai-compatible')
+  return parsed?.cues ?? []
 }

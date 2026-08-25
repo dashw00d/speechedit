@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { host, isElectron } from '../host'
+import { wordsFromAsr } from '../lib/asr'
 import { extractJson } from '../lib/providers'
 import { intelligencePrompt, parseIntelligence } from '../lib/intelligence'
 import { planIntent } from '../lib/intent'
@@ -10,6 +11,7 @@ import {
   saveSettings,
   type AppSettings
 } from '../lib/settings'
+import { presetIdFor } from '../../../shared/asr'
 import { applyCommand } from '../lib/commands'
 import { useEditor } from '../store'
 
@@ -18,6 +20,13 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   const dispatch = useEditor((s) => s.dispatch)
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [busy, setBusy] = useState<string | null>(null)
+  const [pathStatus, setPathStatus] = useState<{ kind: string; available: boolean; found: string[] }[]>(
+    []
+  )
+
+  useEffect(() => {
+    void host.asrPath().then(setPathStatus).catch(() => undefined)
+  }, [])
 
   function update(next: AppSettings) {
     const saved = saveSettings(next)
@@ -34,18 +43,10 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
     setBusy('transcribe')
     try {
       const cues = await host.transcribe(asset.path, settings.transcript)
-      if (!cues?.length) throw new Error('No transcript came back. Check the provider.')
-      useEditor.getState().loadTranscript(
-        cues.map((c, i) => ({
-          id: `w${i}`,
-          text: c.text,
-          start: c.start,
-          end: c.end,
-          speaker: project.transcript.speakers[0]?.id ?? 'ryan',
-          deleted: false
-        }))
-      )
-      onToast(`Transcript · ${cues.length} cues`)
+      const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
+      if (!words.length) throw new Error('No transcript came back. Check the provider, or use speech islands.')
+      useEditor.getState().loadTranscript(words)
+      onToast(`Transcript · ${words.length} words`)
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Transcribe failed.')
     } finally {
@@ -95,33 +96,56 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   return (
     <>
       <p className="help">
-        Transcribe with Whisper on PATH, or any OpenAI-compatible API (Speaches, faster-whisper,
-        Groq, OpenAI). A second model groups scenes and retakes. MCP agents use the same command bus.
+        File → Open media uses this provider and lands Word[] on the project. Local OSS CLIs spawn
+        from PATH; Groq / OpenAI / Speaches use the same OpenAI-spec HTTP call. Missing ASR falls
+        back to speech islands.
       </p>
       <Field label="Transcript">
         <select
-          value={settings.transcript.kind === 'whisper-cli' ? 'whisper-cli' : settings.transcript.baseUrl}
+          value={presetIdFor(settings.transcript.kind, settings.transcript.baseUrl)}
           onChange={(e) => {
-            const preset = TRANSCRIPT_PRESETS.find((p) => p.id === e.target.value || p.baseUrl === e.target.value)
+            const preset = TRANSCRIPT_PRESETS.find((p) => p.id === e.target.value)
             if (!preset) return
             update({
               ...settings,
               transcript: {
                 ...settings.transcript,
                 kind: preset.kind,
-                baseUrl: preset.baseUrl || settings.transcript.baseUrl,
+                baseUrl: preset.baseUrl,
                 model: preset.model || settings.transcript.model
               }
             })
           }}
         >
-          {TRANSCRIPT_PRESETS.map((p) => (
-            <option key={p.id} value={p.id === 'local' ? p.baseUrl : p.id}>
-              {p.label}
-            </option>
-          ))}
+          {TRANSCRIPT_PRESETS.map((p) => {
+            const status = pathStatus.find((s) => s.kind === p.kind)
+            const mark =
+              p.kind === 'whisper-cpp' || p.kind === 'mlx-whisper'
+                ? status?.available
+                  ? ''
+                  : ' — not on PATH'
+                : ''
+            return (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {mark}
+              </option>
+            )
+          })}
         </select>
       </Field>
+      <p className="help">{TRANSCRIPT_PRESETS.find((p) => p.id === presetIdFor(settings.transcript.kind, settings.transcript.baseUrl))?.hint}</p>
+      {settings.transcript.kind !== 'off' && (
+        <Field label={settings.transcript.kind === 'openai-compatible' ? 'ASR model' : 'CLI model'}>
+          <input
+            value={settings.transcript.model}
+            placeholder={settings.transcript.kind === 'whisper-cpp' ? 'optional ggml .bin path' : 'base'}
+            onChange={(e) =>
+              update({ ...settings, transcript: { ...settings.transcript, model: e.target.value } })
+            }
+          />
+        </Field>
+      )}
       {settings.transcript.kind === 'openai-compatible' && (
         <>
           <Field label="ASR URL">
@@ -129,14 +153,6 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
               value={settings.transcript.baseUrl}
               onChange={(e) =>
                 update({ ...settings, transcript: { ...settings.transcript, baseUrl: e.target.value } })
-              }
-            />
-          </Field>
-          <Field label="ASR model">
-            <input
-              value={settings.transcript.model}
-              onChange={(e) =>
-                update({ ...settings, transcript: { ...settings.transcript, model: e.target.value } })
               }
             />
           </Field>

@@ -14,6 +14,7 @@ import {
   probe,
   thumbnails,
   completeChat,
+  listAsrPath,
   transcribeMedia,
   waveform
 } from './ffmpeg'
@@ -190,9 +191,12 @@ ipcMain.handle('media:waveform', async (_e, file: string) => waveform(file))
 ipcMain.handle('media:silence', async (_e, file: string) => detectSilence(file))
 ipcMain.handle('media:scenes', async (_e, file: string) => detectScenes(file))
 ipcMain.handle('media:loudness', async (_e, file: string) => detectLoudness(file))
-ipcMain.handle('media:transcribe', async (_e, file: string, opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
-  transcribeMedia(file, opts)
+ipcMain.handle('media:transcribe', async (e, file: string, opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+  transcribeMedia(file, opts, (info) => {
+    e.sender.send('media:transcribe-progress', info)
+  })
 )
+ipcMain.handle('media:asrPath', async () => listAsrPath())
 ipcMain.handle(
   'model:complete',
   async (

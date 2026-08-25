@@ -1,4 +1,10 @@
-export type ProviderKind = 'off' | 'whisper-cli' | 'openai-compatible'
+import {
+  TRANSCRIPT_PROVIDERS,
+  coerceTranscriptKind,
+  type TranscriptKind
+} from '../../../shared/asr'
+
+export type ProviderKind = TranscriptKind
 
 export interface ModelEndpoint {
   kind: ProviderKind
@@ -27,30 +33,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   }
 }
 
-export const TRANSCRIPT_PRESETS = [
-  { id: 'whisper-cli', label: 'Whisper CLI (PATH)', kind: 'whisper-cli' as const, baseUrl: '', model: '' },
-  {
-    id: 'local',
-    label: 'Local OpenAI-compatible',
-    kind: 'openai-compatible' as const,
-    baseUrl: 'http://127.0.0.1:8000/v1',
-    model: 'whisper-1'
-  },
-  {
-    id: 'groq',
-    label: 'Groq Whisper',
-    kind: 'openai-compatible' as const,
-    baseUrl: 'https://api.groq.com/openai/v1',
-    model: 'whisper-large-v3'
-  },
-  {
-    id: 'openai',
-    label: 'OpenAI Whisper',
-    kind: 'openai-compatible' as const,
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'whisper-1'
-  }
-]
+export const TRANSCRIPT_PRESETS = TRANSCRIPT_PROVIDERS.map((p) => ({
+  id: p.id,
+  label: p.label,
+  kind: p.kind,
+  baseUrl: p.baseUrl,
+  model: p.model,
+  hint: p.hint
+}))
 
 export const INTEL_PRESETS = [
   { id: 'off', label: 'Off', kind: 'off' as const, baseUrl: '', model: '' },
@@ -92,18 +82,26 @@ export function loadSettings(): AppSettings {
     if (!raw) return { ...DEFAULT_SETTINGS }
     const parsed = JSON.parse(raw) as Partial<AppSettings>
     return {
-      transcript: { ...DEFAULT_SETTINGS.transcript, ...parsed.transcript },
-      intelligence: { ...DEFAULT_SETTINGS.intelligence, ...parsed.intelligence }
+      transcript: normalizeEndpoint(DEFAULT_SETTINGS.transcript, parsed.transcript),
+      intelligence: normalizeEndpoint(DEFAULT_SETTINGS.intelligence, parsed.intelligence)
     }
   } catch {
     return { ...DEFAULT_SETTINGS }
   }
 }
 
+function normalizeEndpoint(base: ModelEndpoint, patch?: Partial<ModelEndpoint>): ModelEndpoint {
+  const next = { ...base, ...patch }
+  return {
+    ...next,
+    kind: coerceTranscriptKind(next.kind)
+  }
+}
+
 export function saveSettings(settings: AppSettings): AppSettings {
   const next = {
-    transcript: { ...DEFAULT_SETTINGS.transcript, ...settings.transcript },
-    intelligence: { ...DEFAULT_SETTINGS.intelligence, ...settings.intelligence }
+    transcript: normalizeEndpoint(DEFAULT_SETTINGS.transcript, settings.transcript),
+    intelligence: normalizeEndpoint(DEFAULT_SETTINGS.intelligence, settings.intelligence)
   }
   try {
     localStorage.setItem(KEY, JSON.stringify(next))
@@ -117,17 +115,18 @@ export function settingsFromEnv(): AppSettings {
   const env = typeof process !== 'undefined' ? process.env : {}
   return {
     transcript: {
-      kind:
-        (env.SPEECHEDIT_TRANSCRIBE_KIND as ModelEndpoint['kind']) ||
-        (env.SPEECHEDIT_TRANSCRIBE_BASE_URL ? 'openai-compatible' : 'whisper-cli'),
+      kind: coerceTranscriptKind(
+        env.SPEECHEDIT_TRANSCRIBE_KIND ||
+          (env.SPEECHEDIT_TRANSCRIBE_BASE_URL ? 'openai-compatible' : 'whisper-cli')
+      ),
       baseUrl: env.SPEECHEDIT_TRANSCRIBE_BASE_URL || DEFAULT_SETTINGS.transcript.baseUrl,
       model: env.SPEECHEDIT_TRANSCRIBE_MODEL || DEFAULT_SETTINGS.transcript.model,
       apiKey: env.SPEECHEDIT_TRANSCRIBE_API_KEY || ''
     },
     intelligence: {
-      kind:
-        (env.SPEECHEDIT_LLM_KIND as ModelEndpoint['kind']) ||
-        (env.SPEECHEDIT_LLM_BASE_URL ? 'openai-compatible' : 'off'),
+      kind: coerceTranscriptKind(
+        env.SPEECHEDIT_LLM_KIND || (env.SPEECHEDIT_LLM_BASE_URL ? 'openai-compatible' : 'off')
+      ),
       baseUrl: env.SPEECHEDIT_LLM_BASE_URL || DEFAULT_SETTINGS.intelligence.baseUrl,
       model: env.SPEECHEDIT_LLM_MODEL || DEFAULT_SETTINGS.intelligence.model,
       apiKey: env.SPEECHEDIT_LLM_API_KEY || env.OPENAI_API_KEY || ''

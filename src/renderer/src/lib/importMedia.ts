@@ -1,6 +1,7 @@
 import { host } from '../host'
 import type { Asset, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
+import { wordsFromAsr } from './asr'
 import { loadSettings } from './settings'
 import { createEmptyProject } from './demo'
 import { parseSrt } from './transcript'
@@ -24,23 +25,19 @@ export async function importRecording(
     loudness: []
   }))
   onStage?.('transcript')
-  const whispered = await host.transcribe(file, loadSettings().transcript).catch(() => null)
+  const stopProgress = host.onTranscribeProgress((info) => {
+    onStage?.(`transcript:${info.stage}`)
+  })
   let words: Word[] = []
-  if (whispered?.length) {
-    const wordLike = whispered.filter((c) => !/\s/.test(c.text.trim())).length >= whispered.length * 0.6
-    words = whispered.flatMap((seg) => {
-      const tokens = wordLike ? [seg.text.trim()] : seg.text.split(/\s+/).filter(Boolean)
-      return tokens.map((text, i) => ({
-        id: uid('w'),
-        text,
-        start: seg.start + ((seg.end - seg.start) * i) / Math.max(1, tokens.length),
-        end: seg.start + ((seg.end - seg.start) * (i + 1)) / Math.max(1, tokens.length),
-        speaker: 'ryan',
-        deleted: false
-      }))
-    })
-  } else {
-    words = wordsFromIslands(speechIslands(info.duration, analysis.silence))
+  try {
+    const whispered = await host.transcribe(file, loadSettings().transcript).catch(() => null)
+    words = wordsFromAsr(whispered)
+    if (!words.length) {
+      onStage?.('transcript:islands')
+      words = wordsFromIslands(speechIslands(info.duration, analysis.silence))
+    }
+  } finally {
+    stopProgress()
   }
 
   const name = file.split(/[\\/]/).pop() ?? 'Recording'
