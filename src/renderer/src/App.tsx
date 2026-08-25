@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ConfirmSheet } from './components/ConfirmSheet'
 import { ExportSheet } from './components/ExportSheet'
+import { PreferencesSheet } from './components/PreferencesSheet'
 import { ContextMenuHost, useContextMenu } from './components/ContextMenu'
 import { AgentPanel } from './components/AgentPanel'
 import { Inspector } from './components/Inspector'
@@ -33,8 +34,10 @@ import { extendSelection, sentenceIds, shrinkSelection, wordRange } from './lib/
 import { cancelExport, cancelImport, mediaBusyToast } from './lib/mediaJobs'
 import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
 import { useClearSelection } from './useClearSelection'
+import { activeThemeId, subscribeTheme } from './lib/theme'
 
 export function App() {
+  const [, setThemeId] = useState(activeThemeId)
   const [toast, setToast] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
@@ -44,6 +47,8 @@ export function App() {
   const agentOpen = useEditor((s) => s.agentOpen)
   const recoveryOffer = useEditor((s) => s.recoveryOffer)
   const missingAssets = useEditor((s) => s.missingAssets)
+
+  useEffect(() => subscribeTheme(setThemeId), [])
 
   useEffect(() => {
     void hydrateWorkspace()
@@ -186,6 +191,7 @@ export function App() {
       {agentOpen && <AgentPanel variant="dock" onToast={setToast} />}
       {toast && <div className="toast">{toast}</div>}
       <ConfirmSheet />
+      <PreferencesSheet />
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
       <ShortcutsOverlay open={keysOpen} onClose={() => setKeysOpen(false)} />
       <ContextMenuHost menu={contextMenu} onClose={closeContextMenu} />

@@ -41,6 +41,7 @@ const api = {
   chooseExport: () => ipcRenderer.invoke('dialog:export') as Promise<string | null>,
   probe: (file: string) => ipcRenderer.invoke('media:probe', file),
   makeProxy: (file: string) => ipcRenderer.invoke('media:proxy', file) as Promise<string>,
+  probeProxyGop: (file: string) => ipcRenderer.invoke('media:proxyGop', file) as Promise<number>,
   waveform: (file: string) => ipcRenderer.invoke('media:waveform', file),
   thumbnails: (file: string) => ipcRenderer.invoke('media:thumbnails', file) as Promise<string[]>,
   silence: (file: string) => ipcRenderer.invoke('media:silence', file),
@@ -75,8 +76,21 @@ const api = {
     ipcRenderer.on('media:analyze-progress', listener)
     return () => ipcRenderer.removeListener('media:analyze-progress', listener)
   },
-  onTranscribeProgress: (fn: (info: { stage: string; ratio: number }) => void) => {
-    const listener = (_e: unknown, info: { stage: string; ratio: number }) => fn(info)
+  onTranscribeProgress: (fn: (info: {
+    stage: string
+    ratio: number
+    cues?: { text: string; start: number; end: number; speaker?: string }[]
+    chunk?: { finished: number; total: number }
+  }) => void) => {
+    const listener = (
+      _e: unknown,
+      info: {
+        stage: string
+        ratio: number
+        cues?: { text: string; start: number; end: number; speaker?: string }[]
+        chunk?: { finished: number; total: number }
+      }
+    ) => fn(info)
     ipcRenderer.on('media:transcribe-progress', listener)
     return () => ipcRenderer.removeListener('media:transcribe-progress', listener)
   }

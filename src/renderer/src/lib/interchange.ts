@@ -5,7 +5,9 @@ import {
   type CaptionStyle,
   type Clip,
   type Cut,
+  type InsertKind,
   type Interval,
+  type ProgramInsert,
   type Project,
   type SegmentStyle,
   type Track
@@ -173,6 +175,51 @@ function restoreMediaClips(project: Project, clips: RestoredMediaClip[]): Projec
   return next
 }
 
+interface RestoredInsert {
+  programStart: number
+  duration: number
+  kind?: InsertKind
+  holdSourceTime?: number
+}
+
+function serialInserts(project: Project): RestoredInsert[] {
+  return (project.inserts ?? [])
+    .filter((row) => row.duration > 0.03)
+    .map((row) => ({
+      programStart: row.programStart,
+      duration: row.duration,
+      kind: row.kind,
+      holdSourceTime: row.holdSourceTime
+    }))
+}
+
+function restoreInserts(project: Project, rows: RestoredInsert[]): Project {
+  const merged: RestoredInsert[] = []
+  for (const row of [...rows]
+    .filter((item) => item.duration > 0.03)
+    .sort((a, b) => a.programStart - b.programStart || b.duration - a.duration)) {
+    const last = merged[merged.length - 1]
+    if (last && Math.abs(last.programStart - row.programStart) < 0.08) {
+      last.duration = Math.max(last.duration, row.duration)
+      last.holdSourceTime ??= row.holdSourceTime
+      continue
+    }
+    merged.push({ ...row })
+  }
+  const inserts: ProgramInsert[] = merged.map((row) => ({
+    id: uid('ins'),
+    programStart: row.programStart,
+    duration: row.duration,
+    kind: row.kind === 'silence' || row.kind === 'hold' ? row.kind : 'black',
+    ...(row.holdSourceTime != null ? { holdSourceTime: row.holdSourceTime } : {})
+  }))
+  return normalizeProject({ ...project, inserts })
+}
+
+function isOtioGap(clip: { OTIO_SCHEMA?: string; metadata?: { speechedit?: { kind?: string } } }): boolean {
+  return clip.OTIO_SCHEMA === 'Gap.1' || clip.metadata?.speechedit?.kind === 'slug'
+}
+
 function resourceForTime(project: Project, resources: TakeResource[], sourceTime: number): TakeResource | undefined {
   const take = primaryAssetAt(project, sourceTime)
   return resources.find((row) => row.take.id === take?.id) ?? resources[0]
@@ -225,7 +272,9 @@ export function projectToOtio(project: Project): string {
           start_time: rational(0),
           duration: rational(seg.duration)
         },
-        metadata: { speechedit: { kind: 'slug', programStart: seg.start } }
+        metadata: {
+          speechedit: { kind: 'slug', programStart: seg.start, holdSourceTime: seg.inPoint }
+        }
       }
     }
     const clip = localClip(current, resources, seg)
@@ -350,7 +399,8 @@ export function projectToOtio(project: Project): string {
             path: asset.path,
             name: asset.name,
             kind: track.type === 'audio' ? 'audio' : 'overlay'
-          }))
+          })),
+          inserts: serialInserts(current)
         }
       }
     },
@@ -393,10 +443,14 @@ export function projectToFcpxml(project: Project): string {
     })
     .filter(Boolean)
     .join('\n            ')
+  const firstMedia = segs.findIndex((seg) => seg.kind !== 'slug')
   const clipXml = segs
     .map((seg, i) => {
+      if (seg.kind === 'slug') {
+        return `<gap name="Hold" offset="${tick(seg.start)}" duration="${tick(seg.duration)}" start="0s" />`
+      }
       const clip = localClip(current, resources, seg)
-      const children = i === 0 ? titles.map(titleXml).join('\n              ') : ''
+      const children = i === firstMedia ? titles.map(titleXml).join('\n              ') : ''
       const inner = children ? `\n              ${children}\n            ` : ''
       return `<asset-clip name="seg${i + 1}" ref="${clip.resource?.id ?? 'r1'}" offset="${tick(clip.programStart)}" start="${tick(clip.localIn)}" duration="${tick(clip.localOut - clip.localIn)}">${inner}</asset-clip>`
     })
@@ -604,6 +658,7 @@ export function projectToMlt(project: Project): string {
   const segs = resolveSegments(current)
   const entries = segs
     .map((seg) => {
+      if (seg.kind === 'slug') return `    <blank length="${mltClock(seg.duration)}" />`
       const clip = localClip(current, resources, seg)
       const producer = clip.resource?.producerId ?? 'src'
       return `    <entry producer="${producer}" in="${mltClock(clip.localIn)}" out="${mltClock(Math.max(clip.localIn, clip.localOut - 1 / current.fps))}" />`
@@ -671,6 +726,19 @@ export function projectToPremiere(project: Project): string {
   const frames = (seconds: number) => Math.round(seconds * fps)
   const clipItems = segs
     .map((seg, i) => {
+      if (seg.kind === 'slug') {
+        const start = frames(seg.start)
+        const end = frames(seg.start + seg.duration)
+        return `          <clipitem id="slug${i + 1}">
+            <name>Hold</name>
+            <duration>${end - start}</duration>
+            <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+            <start>${start}</start>
+            <end>${end}</end>
+            <in>-1</in>
+            <out>-1</out>
+          </clipitem>`
+      }
       const clip = localClip(current, resources, seg)
       const take = clip.take
       const start = frames(clip.programStart)
@@ -830,6 +898,40 @@ function restoreCaptions(
   )
 }
 
+type OtioChild = {
+  OTIO_SCHEMA?: string
+  source_range?: { start_time?: unknown; duration?: unknown }
+  media_reference?: { target_url?: string }
+  metadata?: { speechedit?: { path?: string; kind?: string; programStart?: number; holdSourceTime?: number } }
+}
+
+function otioVideoChildren(data: {
+  tracks?: { children?: Array<{ kind?: string; name?: string; children?: unknown[] }> }
+}): OtioChild[] {
+  const video = (data.tracks?.children ?? []).find(
+    (t) => (t.kind ?? '').toLowerCase() === 'video' || (t.name ?? '').toLowerCase().includes('picture')
+  )
+  return (video?.children ?? []) as OtioChild[]
+}
+
+function insertsFromOtioTrack(children: OtioChild[]): RestoredInsert[] {
+  const rows: RestoredInsert[] = []
+  let program = 0
+  for (const clip of children) {
+    const duration = secondsFromRational(clip.source_range?.duration)
+    if (isOtioGap(clip) && duration > 0.03) {
+      rows.push({
+        programStart: clip.metadata?.speechedit?.programStart ?? program,
+        duration,
+        kind: 'black',
+        holdSourceTime: clip.metadata?.speechedit?.holdSourceTime
+      })
+    }
+    program += duration
+  }
+  return rows
+}
+
 function importOtio(project: Project, raw: unknown): Project {
   const data = raw as {
     metadata?: {
@@ -838,10 +940,12 @@ function importOtio(project: Project, raw: unknown): Project {
         captions?: Array<{ start: number; duration: number; text: string; style?: CaptionStyle }>
         styles?: SegmentStyle[]
         overlays?: RestoredMediaClip[]
+        inserts?: RestoredInsert[]
       }
     }
     tracks?: { children?: Array<{ kind?: string; name?: string; children?: unknown[] }> }
   }
+  const picture = otioVideoChildren(data)
   let next = project
   if (data.metadata?.speechedit?.cuts?.length) {
     next = applyTimeline(
@@ -855,15 +959,9 @@ function importOtio(project: Project, raw: unknown): Project {
       data.metadata.speechedit.styles?.length ? data.metadata.speechedit.styles : project.styles
     )
   } else {
-    const video = (data.tracks?.children ?? []).find(
-      (t) => (t.kind ?? '').toLowerCase() === 'video' || (t.name ?? '').toLowerCase().includes('picture')
-    )
     const kept: Interval[] = []
-    for (const clip of (video?.children ?? []) as Array<{
-      source_range?: { start_time?: unknown; duration?: unknown }
-      media_reference?: { target_url?: string }
-      metadata?: { speechedit?: { path?: string } }
-    }>) {
+    for (const clip of picture) {
+      if (isOtioGap(clip)) continue
       const start = secondsFromRational(clip.source_range?.start_time)
       const duration = secondsFromRational(clip.source_range?.duration)
       const path = clip.metadata?.speechedit?.path ?? clip.media_reference?.target_url
@@ -895,37 +993,41 @@ function importOtio(project: Project, raw: unknown): Project {
     if (graphics.length) next = restoreCaptions(next, graphics)
   }
   const metaOverlays = data.metadata?.speechedit?.overlays ?? []
-  if (metaOverlays.length) return restoreMediaClips(next, metaOverlays)
-  const parsed: RestoredMediaClip[] = []
-  for (const track of data.tracks?.children ?? []) {
-    const name = (track.name ?? '').toLowerCase()
-    if (name.includes('picture') || name.includes('voice') || name.includes('caption') || name.includes('title')) {
-      continue
-    }
-    const kind = (track.kind ?? '').toLowerCase() === 'audio' || name.includes('music') || name.includes('bed')
-      ? 'audio'
-      : 'overlay'
-    for (const clip of (track.children ?? []) as Array<{
-      media_reference?: { target_url?: string }
-      metadata?: { speechedit?: { start?: number; path?: string; kind?: string; inPoint?: number } }
-      source_range?: { start_time?: unknown; duration?: unknown }
-    }>) {
-      const path = clip.metadata?.speechedit?.path ?? clip.media_reference?.target_url
-      const start = clip.metadata?.speechedit?.start ?? 0
-      const duration = secondsFromRational(clip.source_range?.duration)
-      const inPoint = clip.metadata?.speechedit?.inPoint ?? secondsFromRational(clip.source_range?.start_time)
-      if (path && duration > 0.03) {
-        parsed.push({
-          path,
-          start,
-          duration,
-          inPoint,
-          kind: clip.metadata?.speechedit?.kind === 'audio' ? 'audio' : kind
-        })
+  if (metaOverlays.length) next = restoreMediaClips(next, metaOverlays)
+  else {
+    const parsed: RestoredMediaClip[] = []
+    for (const track of data.tracks?.children ?? []) {
+      const name = (track.name ?? '').toLowerCase()
+      if (name.includes('picture') || name.includes('voice') || name.includes('caption') || name.includes('title')) {
+        continue
+      }
+      const kind = (track.kind ?? '').toLowerCase() === 'audio' || name.includes('music') || name.includes('bed')
+        ? 'audio'
+        : 'overlay'
+      for (const clip of (track.children ?? []) as Array<{
+        media_reference?: { target_url?: string }
+        metadata?: { speechedit?: { start?: number; path?: string; kind?: string; inPoint?: number } }
+        source_range?: { start_time?: unknown; duration?: unknown }
+      }>) {
+        const path = clip.metadata?.speechedit?.path ?? clip.media_reference?.target_url
+        const start = clip.metadata?.speechedit?.start ?? 0
+        const duration = secondsFromRational(clip.source_range?.duration)
+        const inPoint = clip.metadata?.speechedit?.inPoint ?? secondsFromRational(clip.source_range?.start_time)
+        if (path && duration > 0.03) {
+          parsed.push({
+            path,
+            start,
+            duration,
+            inPoint,
+            kind: clip.metadata?.speechedit?.kind === 'audio' ? 'audio' : kind
+          })
+        }
       }
     }
+    next = restoreMediaClips(next, parsed)
   }
-  return restoreMediaClips(next, parsed)
+  const metaInserts = data.metadata?.speechedit?.inserts ?? []
+  return restoreInserts(next, metaInserts.length ? metaInserts : insertsFromOtioTrack(picture))
 }
 
 function importFcpxml(project: Project, xml: string): Project {
@@ -940,6 +1042,20 @@ function importFcpxml(project: Project, xml: string): Project {
   }
   const kept: Interval[] = []
   const overlays: RestoredMediaClip[] = []
+  const inserts: RestoredInsert[] = []
+  const gapRe = /<gap\b([^>]*)\/?>/g
+  let gapMatch: RegExpExecArray | null
+  while ((gapMatch = gapRe.exec(xml))) {
+    const attrs = xmlAttrs(gapMatch[1])
+    const duration = secondsFromStamp(attrs.duration ?? '0')
+    if (duration > 0.03) {
+      inserts.push({
+        programStart: secondsFromStamp(attrs.offset ?? '0'),
+        duration,
+        kind: 'black'
+      })
+    }
+  }
   const clipRe = /<asset-clip\b([^>]*)\/?>/g
   let match: RegExpExecArray | null
   while ((match = clipRe.exec(xml))) {
@@ -977,7 +1093,7 @@ function importFcpxml(project: Project, xml: string): Project {
     if (text && duration > 0.03) titles.push({ start, duration, text })
   }
   const withTitles = titles.length ? restoreCaptions(next, titles) : next
-  return restoreMediaClips(withTitles, overlays)
+  return restoreInserts(restoreMediaClips(withTitles, overlays), inserts)
 }
 
 function importMlt(project: Project, xml: string): Project {
@@ -1026,10 +1142,13 @@ function importMlt(project: Project, xml: string): Project {
     if (text) titles.push({ start, duration: Math.max(0.4, duration), text })
   }
   const withTitles = titles.length ? restoreCaptions(next, titles) : next
-  return restoreMediaClips(withTitles, [
-    ...mediaFromPlaylist(xml, 'broll', producers, 'overlay', frame),
-    ...mediaFromPlaylist(xml, 'beds', producers, 'audio', frame)
-  ])
+  return restoreInserts(
+    restoreMediaClips(withTitles, [
+      ...mediaFromPlaylist(xml, 'broll', producers, 'overlay', frame),
+      ...mediaFromPlaylist(xml, 'beds', producers, 'audio', frame)
+    ]),
+    insertsFromPlaylist(xml, 'video', frame)
+  )
 }
 
 function mediaFromPlaylist(
@@ -1061,11 +1180,34 @@ function mediaFromPlaylist(
   return rows
 }
 
+function insertsFromPlaylist(xml: string, playlistId: string, frame: number): RestoredInsert[] {
+  const block = xml.match(new RegExp(`<playlist id="${playlistId}">([\\s\\S]*?)</playlist>`))?.[1]
+  if (!block) return []
+  let cursor = 0
+  const rows: RestoredInsert[] = []
+  const tokenRe = /<(blank|entry)\b([^>]*)\/?>/g
+  let token: RegExpExecArray | null
+  while ((token = tokenRe.exec(block))) {
+    const attrs = xmlAttrs(token[2] ?? '')
+    if (token[1] === 'blank') {
+      const duration = secondsFromStamp(attrs.length ?? '0')
+      if (duration > 0.03) rows.push({ programStart: cursor, duration, kind: 'black' })
+      cursor += duration
+      continue
+    }
+    const inn = secondsFromStamp(attrs.in ?? '0')
+    const out = secondsFromStamp(attrs.out ?? '0') + frame
+    cursor += Math.max(0.04, out - inn)
+  }
+  return rows
+}
+
 function importPremiere(project: Project, xml: string): Project {
   const rateMatch = xml.match(/<timebase>(\d+)<\/timebase>/)
   const rate = Number(rateMatch?.[1] ?? project.fps ?? 30)
   const kept: Interval[] = []
   const overlays: RestoredMediaClip[] = []
+  const inserts: RestoredInsert[] = []
   const clipRe = /<clipitem[\s\S]*?<\/clipitem>/g
   let match: RegExpExecArray | null
   while ((match = clipRe.exec(xml))) {
@@ -1075,6 +1217,15 @@ function importPremiere(project: Project, xml: string): Project {
     const path = block.match(/<pathurl>([^<]*)<\/pathurl>/)?.[1]?.replace(/^file:\/\//i, '')
     const clipId = block.match(/<clipitem id="([^"]+)"/)?.[1] ?? ''
     const fileId = block.match(/<file id="([^"]+)"/)?.[1] ?? ''
+    const name = block.match(/<name>([^<]*)<\/name>/)?.[1] ?? ''
+    if (/^slug/i.test(clipId) || (!path && /^Hold$/i.test(name))) {
+      const programStart = Number(block.match(/<start>([^<]+)<\/start>/)?.[1] ?? 0) / rate
+      const programEnd = Number(block.match(/<end>([^<]+)<\/end>/)?.[1] ?? 0) / rate
+      if (programEnd - programStart > 0.03) {
+        inserts.push({ programStart, duration: programEnd - programStart, kind: 'black' })
+      }
+      continue
+    }
     if (!inn || !out) continue
     if (/^ovfile/i.test(fileId) || /^ovclip|^bedclip/i.test(clipId)) {
       const programStart = Number(block.match(/<start>([^<]+)<\/start>/)?.[1] ?? 0) / rate
@@ -1107,7 +1258,7 @@ function importPremiere(project: Project, xml: string): Project {
     if (text && end > start) titles.push({ start, duration: end - start, text })
   }
   const withTitles = titles.length ? restoreCaptions(next, titles) : next
-  return restoreMediaClips(withTitles, overlays)
+  return restoreInserts(restoreMediaClips(withTitles, overlays), inserts)
 }
 
 function asChunk(item: unknown): { start: number; end: number; speed: number } | null {

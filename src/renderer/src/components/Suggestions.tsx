@@ -1,4 +1,4 @@
-import { blockedByLabel } from '../lib/analysis'
+import { blockedByLabel, leftoverItems, leftoverKind, leftoverReviewQueue } from '../lib/analysis'
 import { PACE_PRESETS, paceFromMargin, suggestTask } from '../lib/contextActions'
 import { commandForScene, suggestionForScene, takeFamily } from '../lib/sceneAnalysis'
 import { sourceToProgramOf } from '../lib/resolver'
@@ -40,6 +40,12 @@ export function Suggestions() {
   function hearSuggestion(s: EditSuggestion) {
     selectSuggestion(s.id)
     playLoop(sourceToProgramOf(project, s.start), sourceToProgramOf(project, s.end))
+  }
+
+  function resolveLeftover(command: { type: 'applySuggestion' | 'dismissSuggestion'; suggestionId: string }) {
+    dispatch(command)
+    const next = leftoverReviewQueue(useEditor.getState().project)[0]
+    if (next) hearSuggestion(next)
   }
 
   function hearScene(start: number, end: number) {
@@ -228,8 +234,151 @@ export function Suggestions() {
               </div>
             )
           })}
+          {(() => {
+            const stills = leftoverItems(project, 'still')
+            const breaths = leftoverItems(project, 'breath')
+            const statics = leftoverItems(project, 'static')
+            const hots = leftoverItems(project, 'loud')
+            return (
+              <>
+                {stills.length > 0 && (
+                  <section className="drawer-group">
+                    <div className="drawer-row drawer-head">
+                      <span className="kind">Silent stills</span>
+                      <span>{stills.length} need a listen</span>
+                      <span />
+                      <span />
+                    </div>
+                    {stills.map((s) => (
+                      <SuggestionRow
+                        key={s.id}
+                        s={s}
+                        selected={selected === s.id}
+                        blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
+                        onHear={() => hearSuggestion(s)}
+                        onApply={() => resolveLeftover({ type: 'applySuggestion', suggestionId: s.id })}
+                        onSkip={() => resolveLeftover({ type: 'dismissSuggestion', suggestionId: s.id })}
+                      />
+                    ))}
+                  </section>
+                )}
+                {breaths.length > 0 && (
+                  <section className="drawer-group">
+                    <div className="drawer-row drawer-head">
+                      <span className="kind">Breaths</span>
+                      <span>{breaths.length} kept in the reel</span>
+                      <span />
+                      <span>
+                        <button
+                          className="chip"
+                          type="button"
+                          title="Leave every leftover breath in the picture"
+                          onClick={() =>
+                            dispatch({
+                              type: 'dismissSuggestions',
+                              suggestionIds: breaths.map((row) => row.id)
+                            })
+                          }
+                        >
+                          Keep all breaths
+                        </button>
+                      </span>
+                    </div>
+                    {breaths.map((s) => (
+                      <SuggestionRow
+                        key={s.id}
+                        s={s}
+                        selected={selected === s.id}
+                        blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
+                        onHear={() => hearSuggestion(s)}
+                        onApply={() => dispatch({ type: 'applySuggestion', suggestionId: s.id })}
+                        onSkip={() => dispatch({ type: 'dismissSuggestion', suggestionId: s.id })}
+                      />
+                    ))}
+                  </section>
+                )}
+                {statics.length > 0 && (
+                  <section className="drawer-group">
+                    <div className="drawer-row drawer-head">
+                      <span className="kind">Static screens</span>
+                      <span>{statics.length} can be sped up</span>
+                      <span />
+                      <span>
+                        <button
+                          className="chip"
+                          type="button"
+                          title="Play every leftover static screen at 4×. One undo."
+                          onClick={() =>
+                            dispatch({
+                              type: 'applySuggestions',
+                              suggestionIds: statics.map((row) => row.id)
+                            })
+                          }
+                        >
+                          Speed all
+                        </button>
+                      </span>
+                    </div>
+                    {statics.map((s) => (
+                      <SuggestionRow
+                        key={s.id}
+                        s={s}
+                        selected={selected === s.id}
+                        blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
+                        onHear={() => hearSuggestion(s)}
+                        onApply={() => resolveLeftover({ type: 'applySuggestion', suggestionId: s.id })}
+                        onSkip={() => resolveLeftover({ type: 'dismissSuggestion', suggestionId: s.id })}
+                      />
+                    ))}
+                  </section>
+                )}
+                {hots.length > 0 && (
+                  <section className="drawer-group">
+                    <div className="drawer-row drawer-head">
+                      <span className="kind">Hot audio</span>
+                      <span>{hots.length} can be quieted</span>
+                      <span />
+                      <span>
+                        <button
+                          className="chip"
+                          type="button"
+                          title="Lower every leftover hot spike. One undo."
+                          onClick={() =>
+                            dispatch({
+                              type: 'applySuggestions',
+                              suggestionIds: hots.map((row) => row.id)
+                            })
+                          }
+                        >
+                          Quiet all
+                        </button>
+                      </span>
+                    </div>
+                    {hots.map((s) => (
+                      <SuggestionRow
+                        key={s.id}
+                        s={s}
+                        selected={selected === s.id}
+                        blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
+                        onHear={() => hearSuggestion(s)}
+                        onApply={() => resolveLeftover({ type: 'applySuggestion', suggestionId: s.id })}
+                        onSkip={() => resolveLeftover({ type: 'dismissSuggestion', suggestionId: s.id })}
+                      />
+                    ))}
+                  </section>
+                )}
+              </>
+            )
+          })()}
           {GROUPS.map((group) => {
-            const rows = pending.filter((s) => group.types.includes(s.type))
+            const rows = pending.filter(
+              (s) =>
+                group.types.includes(s.type) &&
+                leftoverKind(s) !== 'still' &&
+                leftoverKind(s) !== 'breath' &&
+                leftoverKind(s) !== 'static' &&
+                leftoverKind(s) !== 'loud'
+            )
             if (!rows.length) return null
             return (
               <section key={group.title} className="drawer-group">
@@ -353,7 +502,23 @@ function SuggestionRow({
 }) {
   return (
     <div className="drawer-row" data-on={selected} data-blocked={Boolean(s.blockedBy)} onClick={onHear}>
-        <span className="kind">{s.blockedBy ? 'protected' : s.type === 'repeat' ? 'retake' : s.type}</span>
+        <span className="kind">
+          {s.blockedBy
+            ? 'protected'
+            : leftoverKind(s) === 'still'
+              ? 'still'
+              : leftoverKind(s) === 'breath'
+                ? 'breath'
+                : leftoverKind(s) === 'static'
+                  ? 'static'
+                  : leftoverKind(s) === 'low-motion'
+                    ? 'talking'
+                    : leftoverKind(s) === 'loud'
+                      ? 'hot'
+                      : s.type === 'repeat'
+                      ? 'retake'
+                      : s.type}
+        </span>
       <span>
         {s.label}
         {blockedLabel ? <em className="blocked-by">Blocked by {blockedLabel}</em> : null}
@@ -383,28 +548,62 @@ function SuggestionRow({
           >
             Skip
           </button>
-        ) : s.action === 'review' ? (
-          <button
-            className="chip"
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onSkip()
-            }}
-          >
-            Keep
-          </button>
+        ) : leftoverKind(s) === 'still' || s.action === 'review' ? (
+          <>
+            {leftoverKind(s) === 'still' && (
+              <>
+                <button
+                  className="chip"
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onApply()
+                  }}
+                >
+                  Cut
+                </button>{' '}
+              </>
+            )}
+            <button
+              className="chip"
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSkip()
+              }}
+            >
+              Keep
+            </button>
+          </>
         ) : (
-          <button
-            className="chip"
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onApply()
-            }}
-          >
-            {s.action === 'speed' ? `Speed ${s.speed ?? 4}×` : s.action === 'normalize' ? 'Normalize' : 'Apply'}
-          </button>
+          <>
+            <button
+              className="chip"
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onApply()
+              }}
+            >
+              {s.action === 'speed'
+                ? `Speed ${s.speed ?? 4}×`
+                : s.action === 'volume'
+                  ? 'Quiet'
+                  : s.action === 'normalize'
+                    ? 'Normalize'
+                    : 'Apply'}
+            </button>{' '}
+            <button
+              className="chip"
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSkip()
+              }}
+            >
+              Keep
+            </button>
+          </>
         )}
       </span>
     </div>

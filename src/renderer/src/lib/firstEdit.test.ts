@@ -2,7 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { applyCommand, programLength } from './commands'
 import { suggestTask } from './contextActions'
 import { createDemoProject } from './demo'
-import { applySafeFirstEdit, describeFirstEdit, safeEditCandidates } from './firstEdit'
+import {
+  applySafeFirstEdit,
+  describeFirstEdit,
+  looksSafeSpans,
+  safeEditCandidates,
+  startLeftoverReview
+} from './firstEdit'
+import { suggestionsFromLoudness, suggestionsFromStatic } from './analysis'
 import { ffmpegImportBusy } from './mediaJobs'
 import { hasUncollapsedRetakes } from './sceneAnalysis'
 import { importMediaFromPath } from './fileActions'
@@ -68,6 +75,9 @@ describe('safe first edit', () => {
     expect(looks!.applied).toBeGreaterThan(0)
     expect(looks!.retakes).toBe(0)
     expect(safeEditCandidates(useEditor.getState().project)).toHaveLength(0)
+    expect(hasUncollapsedRetakes(useEditor.getState().project)).toBe(true)
+
+    expect(applySafeFirstEdit('fillers')).toBeNull()
     expect(hasUncollapsedRetakes(useEditor.getState().project)).toBe(true)
 
     const words = applySafeFirstEdit('words')
@@ -167,6 +177,8 @@ describe('safe first edit', () => {
       expect(project.suggestions.some((s) => s.safe && !s.applied && !s.blockedBy)).toBe(false)
       expect(programLength(project)).toBeLessThan(12 - 4)
       expect(toasts.some((msg) => /Removed \d+ pause/.test(msg))).toBe(true)
+      expect(toasts.some((msg) => /Captions from the transcript/.test(msg))).toBe(true)
+      expect(project.tracks.find((t) => t.type === 'caption')?.clips.some((c) => c.auto && c.text)).toBe(true)
       expect(suggestTask(project).headline).toMatch(/First edit done|Edit applied/)
     } finally {
       restore()
@@ -231,6 +243,236 @@ describe('safe first edit', () => {
       const project = useEditor.getState().project
       expect(project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)).toBe(true)
       expect(toasts.filter((msg) => /Removed \d+ (pause|filler)/.test(msg)).length).toBeGreaterThanOrEqual(1)
+    } finally {
+      releaseAsr()
+      restore()
+      useEditor.getState().setAnalyzing(null)
+    }
+  })
+
+  test('fillers phase applies new word edits after looks without collapsing retakes', () => {
+    const ready = projectFromTake({
+      asset: {
+        id: 'src',
+        path: '/tmp/a.mp4',
+        name: 'a.mp4',
+        kind: 'video',
+        duration: 12,
+        waveform: [],
+        sourceOffset: 0
+      },
+      words: [],
+      whispered: null,
+      analysis: { silence: [{ start: 2, end: 8 }], scenes: { times: [], staticRegions: [] }, loudness: [] }
+    })
+    useEditor.getState().loadProject(ready, { path: null, clean: false })
+    const skip = looksSafeSpans(useEditor.getState().project)
+    applySafeFirstEdit('looks')
+    useEditor.getState().replay({
+      type: 'attachTakeIntel',
+      assetId: 'src',
+      words: [
+        { id: 'h', text: 'hello', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false },
+        { id: 'u', text: 'um', start: 0.9, end: 1.1, speaker: 'ryan', deleted: false },
+        { id: 'w', text: 'world', start: 9.5, end: 10.1, speaker: 'ryan', deleted: false }
+      ]
+    })
+    const fillers = applySafeFirstEdit('fillers', skip)
+    expect(fillers?.applied).toBeGreaterThan(0)
+    expect(useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)).toBe(
+      true
+    )
+    expect(hasUncollapsedRetakes(useEditor.getState().project)).toBe(false)
+  })
+
+  test('Open media lands words and fillers as ASR chunks arrive', async () => {
+    let sendProgress: (info: { stage: 'run'; ratio: number; cues: { text: string; start: number; end: number }[] }) => void =
+      () => undefined
+    let releaseAsr!: () => void
+    const asrGate = new Promise<void>((resolve) => {
+      releaseAsr = resolve
+    })
+    const restore = stubHost({
+      probe: async () => ({
+        duration: 12,
+        hasVideo: true,
+        hasAudio: true,
+        width: 320,
+        height: 240,
+        fps: 30
+      }),
+      makeProxy: async () => {
+        throw new Error('proxy should not run for short SD')
+      },
+      waveform: async () => [0.2],
+      thumbnails: async () => [],
+      analyze: async () => ({
+        silence: [{ start: 2, end: 8 }],
+        scenes: { times: [], staticRegions: [] },
+        loudness: []
+      }),
+      onTranscribeProgress: (fn) => {
+        sendProgress = fn
+        return () => {
+          sendProgress = () => undefined
+        }
+      },
+      transcribe: async () => {
+        await waitUntil(() =>
+          useEditor.getState().project.suggestions.some((s) => s.safe && s.applied && s.type === 'silence')
+        )
+        sendProgress({
+          stage: 'run',
+          ratio: 0.4,
+          cues: [
+            { text: 'hello', start: 0.2, end: 0.6 },
+            { text: 'um', start: 0.9, end: 1.1 }
+          ]
+        })
+        await waitUntil(
+          () =>
+            useEditor.getState().project.transcript.words.some((w) => w.text === 'um') &&
+            useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)
+        )
+        sendProgress({
+          stage: 'run',
+          ratio: 0.8,
+          cues: [
+            { text: 'hello', start: 0.2, end: 0.6 },
+            { text: 'um', start: 0.9, end: 1.1 },
+            { text: 'world', start: 9.5, end: 10.1 },
+            { text: 'uh', start: 10.3, end: 10.5 }
+          ]
+        })
+        await waitUntil(
+          () =>
+            useEditor.getState().project.transcript.words.some((w) => w.text === 'world') &&
+            useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'uh' && s.applied)
+        )
+        await asrGate
+        return [
+          { text: 'hello', start: 0.2, end: 0.6 },
+          { text: 'um', start: 0.9, end: 1.1 },
+          { text: 'world', start: 9.5, end: 10.1 },
+          { text: 'uh', start: 10.3, end: 10.5 }
+        ]
+      },
+      beginJob: async () => undefined,
+      endJob: async () => undefined
+    })
+    const toasts: string[] = []
+    useEditor.getState().newProject()
+    useEditor.getState().setAnalyzing(null)
+    useEditor.getState().setExporting(false)
+    try {
+      const done = importMediaFromPath('/tmp/se-first-edit-stream.mp4', (msg) => toasts.push(msg))
+      await waitUntil(() =>
+        useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'uh' && s.applied)
+      )
+      expect(useEditor.getState().project.transcript.words.some((w) => w.text === 'world')).toBe(true)
+      expect(toasts.some((msg) => /Still transcribing/.test(msg))).toBe(true)
+      releaseAsr()
+      await done
+      const project = useEditor.getState().project
+      expect(project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)).toBe(true)
+      expect(project.suggestions.some((s) => s.type === 'filler' && s.label === 'uh' && s.applied)).toBe(true)
+      expect(project.tracks.find((t) => t.type === 'caption')?.clips.some((c) => c.auto && /hello/i.test(c.text ?? ''))).toBe(
+        true
+      )
+    } finally {
+      releaseAsr()
+      restore()
+      useEditor.getState().setAnalyzing(null)
+    }
+  })
+
+  test('undoing streamed fillers is not re-applied when later chunks finish', async () => {
+    let sendProgress: (info: { stage: 'run'; ratio: number; cues: { text: string; start: number; end: number }[] }) => void =
+      () => undefined
+    let releaseAsr!: () => void
+    const asrGate = new Promise<void>((resolve) => {
+      releaseAsr = resolve
+    })
+    const restore = stubHost({
+      probe: async () => ({
+        duration: 12,
+        hasVideo: true,
+        hasAudio: true,
+        width: 320,
+        height: 240,
+        fps: 30
+      }),
+      makeProxy: async () => {
+        throw new Error('proxy should not run for short SD')
+      },
+      waveform: async () => [0.2],
+      thumbnails: async () => [],
+      analyze: async () => ({
+        silence: [{ start: 2, end: 8 }],
+        scenes: { times: [], staticRegions: [] },
+        loudness: []
+      }),
+      onTranscribeProgress: (fn) => {
+        sendProgress = fn
+        return () => {
+          sendProgress = () => undefined
+        }
+      },
+      transcribe: async () => {
+        await waitUntil(() =>
+          useEditor.getState().project.suggestions.some((s) => s.safe && s.applied && s.type === 'silence')
+        )
+        sendProgress({
+          stage: 'run',
+          ratio: 0.4,
+          cues: [
+            { text: 'hello', start: 0.2, end: 0.6 },
+            { text: 'um', start: 0.9, end: 1.1 }
+          ]
+        })
+        await waitUntil(() =>
+          useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)
+        )
+        useEditor.getState().undo()
+        expect(
+          useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)
+        ).toBe(false)
+        sendProgress({
+          stage: 'run',
+          ratio: 0.8,
+          cues: [
+            { text: 'hello', start: 0.2, end: 0.6 },
+            { text: 'um', start: 0.9, end: 1.1 },
+            { text: 'world', start: 9.5, end: 10.1 },
+            { text: 'uh', start: 10.3, end: 10.5 }
+          ]
+        })
+        await waitUntil(() => useEditor.getState().project.transcript.words.some((w) => w.text === 'world'))
+        await asrGate
+        return [
+          { text: 'hello', start: 0.2, end: 0.6 },
+          { text: 'um', start: 0.9, end: 1.1 },
+          { text: 'world', start: 9.5, end: 10.1 },
+          { text: 'uh', start: 10.3, end: 10.5 }
+        ]
+      },
+      beginJob: async () => undefined,
+      endJob: async () => undefined
+    })
+    useEditor.getState().newProject()
+    useEditor.getState().setAnalyzing(null)
+    useEditor.getState().setExporting(false)
+    try {
+      const done = importMediaFromPath('/tmp/se-first-edit-stream-undo.mp4', () => undefined)
+      await waitUntil(() => useEditor.getState().project.transcript.words.some((w) => w.text === 'world'))
+      releaseAsr()
+      await done
+      expect(
+        useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)
+      ).toBe(false)
+      expect(
+        useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'uh' && s.applied)
+      ).toBe(true)
     } finally {
       releaseAsr()
       restore()
@@ -333,14 +575,164 @@ describe('safe first edit', () => {
     try {
       await importMediaFromPath('/tmp/se-still-demo.mp4', (msg) => toasts.push(msg))
       const project = useEditor.getState().project
-      const still = project.suggestions.find((s) => s.type === 'silence')
+      const still = project.suggestions.find((s) => /still/i.test(s.label))
       expect(still?.safe).toBe(false)
       expect(still?.applied).toBe(false)
+      expect(still?.action).toBe('review')
       expect(programLength(project)).toBeCloseTo(10, 1)
-      expect(toasts.at(-1)).toMatch(/suggestions|words/)
+      expect(useEditor.getState().reviewing).toBe(true)
+      expect(useEditor.getState().selectedSuggestionId).toBe(still?.id)
+      expect(toasts.some((msg) => /Silent stills need a listen/.test(msg))).toBe(true)
+      const cut = applyCommand(project, { type: 'applySuggestion', suggestionId: still!.id })
+      expect(cut.suggestions.find((s) => s.id === still!.id)?.applied).toBe(true)
+      expect(programLength(cut)).toBeLessThan(10 - 3)
     } finally {
       restore()
       useEditor.getState().setAnalyzing(null)
     }
+  })
+
+  test('quiet static screens are left for review, not auto-sped', async () => {
+    const restore = stubHost({
+      probe: async () => ({
+        duration: 10,
+        hasVideo: true,
+        hasAudio: true,
+        width: 320,
+        height: 240,
+        fps: 30
+      }),
+      makeProxy: async () => {
+        throw new Error('proxy should not run for short SD')
+      },
+      waveform: async () => [0.2],
+      thumbnails: async () => [],
+      analyze: async () => ({
+        silence: [],
+        scenes: { times: [], staticRegions: [{ start: 2, end: 6 }] },
+        loudness: []
+      }),
+      transcribe: async () => [
+        { text: 'hello', start: 0.2, end: 0.6 },
+        { text: 'world', start: 8.6, end: 9.85 }
+      ],
+      beginJob: async () => undefined,
+      endJob: async () => undefined
+    })
+    const toasts: string[] = []
+    useEditor.getState().setAnalyzing(null)
+    useEditor.getState().setExporting(false)
+    try {
+      await importMediaFromPath('/tmp/se-static-hold.mp4', (msg) => toasts.push(msg))
+      const project = useEditor.getState().project
+      const screen = project.suggestions.find((s) => s.type === 'static')
+      expect(screen?.safe).toBe(false)
+      expect(screen?.applied).toBe(false)
+      expect(screen?.action).toBe('speed')
+      expect(screen?.start).toBeCloseTo(2, 1)
+      expect(screen?.end).toBeCloseTo(6, 1)
+      expect(programLength(project)).toBeCloseTo(10, 1)
+      expect(useEditor.getState().reviewing).toBe(true)
+      expect(useEditor.getState().selectedSuggestionId).toBe(screen?.id)
+      expect(toasts.some((msg) => /Static screens can be sped up/.test(msg))).toBe(true)
+      const sped = applyCommand(project, { type: 'applySuggestion', suggestionId: screen!.id })
+      expect(sped.suggestions.find((s) => s.id === screen!.id)?.applied).toBe(true)
+      expect(sped.styles.some((style) => style.speed === 4 && style.start < 3 && style.end > 5)).toBe(true)
+      expect(programLength(sped)).toBeLessThan(8)
+    } finally {
+      restore()
+      useEditor.getState().setAnalyzing(null)
+    }
+  })
+
+  test('hot audio is left for review Quiet, not auto-quieted', async () => {
+    const restore = stubHost({
+      probe: async () => ({
+        duration: 10,
+        hasVideo: true,
+        hasAudio: true,
+        width: 320,
+        height: 240,
+        fps: 30
+      }),
+      makeProxy: async () => {
+        throw new Error('proxy should not run for short SD')
+      },
+      waveform: async () => [0.2],
+      thumbnails: async () => [],
+      analyze: async () => ({
+        silence: [],
+        scenes: { times: [], staticRegions: [] },
+        loudness: [{ start: 2, end: 4, lufs: -8 }]
+      }),
+      transcribe: async () => [
+        { text: 'hello', start: 0.2, end: 0.6 },
+        { text: 'world', start: 8.6, end: 9.85 }
+      ],
+      beginJob: async () => undefined,
+      endJob: async () => undefined
+    })
+    const toasts: string[] = []
+    useEditor.getState().setAnalyzing(null)
+    useEditor.getState().setExporting(false)
+    try {
+      await importMediaFromPath('/tmp/se-hot-audio.mp4', (msg) => toasts.push(msg))
+      const project = useEditor.getState().project
+      const hot = project.suggestions.find((s) => s.action === 'volume')
+      expect(hot?.safe).toBe(false)
+      expect(hot?.applied).toBe(false)
+      expect(hot?.type).toBe('loud')
+      expect(useEditor.getState().reviewing).toBe(true)
+      expect(useEditor.getState().selectedSuggestionId).toBe(hot?.id)
+      expect(toasts.some((msg) => /Hot audio can be quieted/.test(msg))).toBe(true)
+      const quiet = applyCommand(project, { type: 'applySuggestion', suggestionId: hot!.id })
+      expect(quiet.suggestions.find((s) => s.id === hot!.id)?.applied).toBe(true)
+      expect(quiet.styles.some((style) => style.volume != null && style.volume < 1 && style.start < 3 && style.end > 3)).toBe(
+        true
+      )
+      expect(programLength(quiet)).toBeCloseTo(10, 1)
+    } finally {
+      restore()
+      useEditor.getState().setAnalyzing(null)
+    }
+  })
+
+  test('startLeftoverReview prefers a silent still over a static screen', () => {
+    const [screen] = suggestionsFromStatic([{ start: 8, end: 12 }])
+    useEditor.getState().loadProject(
+      {
+        ...createDemoProject(),
+        suggestions: [
+          {
+            id: 'still-1',
+            type: 'silence',
+            start: 2,
+            end: 8,
+            action: 'review',
+            label: 'Silent still 5.6s',
+            safe: false,
+            applied: false
+          },
+          screen
+        ]
+      },
+      { clean: true }
+    )
+    expect(startLeftoverReview()).toBe('still')
+    expect(useEditor.getState().selectedSuggestionId).toBe('still-1')
+  })
+
+  test('startLeftoverReview prefers a static screen over a hot spike', () => {
+    const [screen] = suggestionsFromStatic([{ start: 8, end: 12 }])
+    const hot = suggestionsFromLoudness([{ start: 2, end: 4, lufs: -8 }], 10).find((s) => s.action === 'volume')!
+    useEditor.getState().loadProject(
+      {
+        ...createDemoProject(),
+        suggestions: [hot, screen]
+      },
+      { clean: true }
+    )
+    expect(startLeftoverReview()).toBe('static')
+    expect(useEditor.getState().selectedSuggestionId).toBe(screen.id)
   })
 })

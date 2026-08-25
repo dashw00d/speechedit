@@ -11,6 +11,7 @@ import { exportSidecar, type SidecarId } from '../lib/exportActions'
 import { readPaletteRecents, rememberPaletteCommand } from '../lib/paletteRecent'
 import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
 import { hopNote } from '../lib/clipEdit'
+import { applyTheme, openPreferences } from '../lib/theme'
 import { useEditor, usePlayback } from '../store'
 
 export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
@@ -427,6 +428,21 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
         group: 'export' as const,
         run: () => void exportSidecar(id as SidecarId, onToast ?? (() => undefined))
       })),
+      {
+        name: 'Preferences…',
+        group: 'file',
+        run: () => openPreferences()
+      },
+      {
+        name: 'Use Dashwood theme',
+        group: 'file',
+        run: () => applyTheme('dashwood')
+      },
+      {
+        name: 'Use Party theme',
+        group: 'file',
+        run: () => applyTheme('party')
+      },
       { name: 'Save', group: 'file', run: () => void saveCurrentDocument() },
       { name: 'Save As…', group: 'file', run: () => void saveCurrentDocument({ saveAs: true }) },
       {

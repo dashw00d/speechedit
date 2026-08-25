@@ -16,7 +16,7 @@ import {
   type Transform,
   type Word
 } from '../types'
-import { buildSuggestions, cutMinusProtected, protectIntervals, suggestionsFromGaps } from './analysis'
+import { buildSuggestions, cutMinusProtected, leftoverKind, protectIntervals, suggestionsFromGaps } from './analysis'
 import {
   TITLE_PRESETS,
   clipsFromCaptionCues,
@@ -26,7 +26,7 @@ import {
   withLowerThirds
 } from './captions'
 import { autoHideEmptyStackTrack, revealStackTrack } from './timelineTracks'
-import { SPEAKER_PALETTE } from './theme'
+import { speakerPalette } from './theme'
 import { assignmentsFromCues, hasProviderSpeakers, prettySpeakerName, speakerSlug } from './diarize'
 import {
   commandForScene,
@@ -36,7 +36,7 @@ import {
   suggestionsFromScenes,
   takeFamily
 } from './sceneAnalysis'
-import { transcriptIsPlaceholder } from './transcript'
+import { takeWordsNeedReplace, transcriptIsPlaceholder } from './transcript'
 import { coveringAppliedSuggestion, previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
@@ -51,6 +51,7 @@ import {
   asVideoClips,
   programLengthOf,
   programToSourceOf,
+  resolveMediaSegments,
   resolveSegments,
   segmentAtProgram,
   segmentId,
@@ -77,6 +78,13 @@ import {
 
 function touch(project: Project): Project {
   return normalizeProject({ ...project, updatedAt: Date.now() })
+}
+
+function mediaProgramLength(project: Project): number {
+  const segs = resolveMediaSegments(normalizeProject(project))
+  if (!segs.length) return 0
+  const last = segs[segs.length - 1]
+  return last.start + last.duration
 }
 
 function overlayTracks(project: Project): Track[] {
@@ -366,7 +374,7 @@ function styleFromSegment(project: Project, segmentIdValue: string): SegmentStyl
 function applySuggestion(project: Project, suggestionId: string): Project {
   const suggestion = project.suggestions.find((s) => s.id === suggestionId)
   if (!suggestion || suggestion.applied) return project
-  if (suggestion.action === 'review') return project
+  if (suggestion.action === 'review' && leftoverKind(suggestion) !== 'still') return project
   if (suggestion.action === 'normalize') {
     return touch({
       ...project,
@@ -382,6 +390,20 @@ function applySuggestion(project: Project, suggestionId: string): Project {
       start: suggestion.start,
       end: suggestion.end,
       speed: suggestion.speed ?? 4
+    })
+    return touch({
+      ...next,
+      suggestions: next.suggestions.map((s) =>
+        s.id === suggestionId ? { ...s, applied: true } : s
+      )
+    })
+  }
+  if (suggestion.action === 'volume') {
+    const next = applyCommand(project, {
+      type: 'setRangeVolume',
+      start: suggestion.start,
+      end: suggestion.end,
+      volume: suggestion.volume ?? 0.5
     })
     return touch({
       ...next,
@@ -435,6 +457,15 @@ function revertSuggestion(project: Project, suggestionId: string): Project {
       start: suggestion.start,
       end: suggestion.end,
       speed: 1
+    })
+    return markSuggestion(next, suggestionId, false)
+  }
+  if (suggestion.action === 'volume') {
+    const next = applyCommand(project, {
+      type: 'setRangeVolume',
+      start: suggestion.start,
+      end: suggestion.end,
+      volume: 1
     })
     return markSuggestion(next, suggestionId, false)
   }
@@ -530,7 +561,7 @@ function applyDiarization(
   project: Project,
   assignments?: { start: number; end: number; speaker: string }[]
 ): Project {
-  const colors = [...SPEAKER_PALETTE]
+  const colors = [...speakerPalette()]
   const speakers = [...project.transcript.speakers]
   const resolve = (label: string): string => {
     const existing = speakers.find(
@@ -818,15 +849,39 @@ export function applyCommand(project: Project, command: Command): Project {
           splits.push(mark)
         }
       }
-      return upsertStyle({ ...current, splits }, command.start, command.end, {
+      const next = upsertStyle({ ...current, splits }, command.start, command.end, {
         speed: clamp(command.speed, 0.25, 8)
+      })
+      const delta = mediaProgramLength(next) - mediaProgramLength(current)
+      if (Math.abs(delta) < 0.03) return next
+      const afterProgram = sourceToProgramOf(current, command.end)
+      return {
+        ...next,
+        inserts: shiftInserts(next.inserts ?? [], afterProgram, delta),
+        tracks: shiftOverlays(next, afterProgram, delta)
+      }
+    }
+    case 'setRangeVolume': {
+      const splits = [...(current.splits ?? [])]
+      for (const mark of [command.start, command.end]) {
+        if (
+          mark > 0.04 &&
+          mark < (current.sourceDuration || command.end) - 0.04 &&
+          !splits.some((t) => Math.abs(t - mark) < 0.04)
+        ) {
+          splits.push(mark)
+        }
+      }
+      return upsertStyle({ ...current, splits }, command.start, command.end, {
+        volume: clamp(command.volume, 0, 2)
       })
     }
     case 'setText':
-      return mapClip(current, command.clipId, (clip) => ({ ...clip, text: command.text }))
+      return mapClip(current, command.clipId, (clip) => ({ ...clip, text: command.text, auto: false }))
     case 'setCaptionStyle':
       return mapClip(current, command.clipId, (clip) => ({
         ...clip,
+        auto: false,
         style: { ...DEFAULT_CAPTION_STYLE, ...clip.style, ...command.style }
       }))
     case 'addCaption':
@@ -859,6 +914,7 @@ export function applyCommand(project: Project, command: Command): Project {
                   clip.text
                     ? {
                         ...clip,
+                        auto: false,
                         style: { ...DEFAULT_CAPTION_STYLE, ...clip.style, ...command.style }
                       }
                     : clip
@@ -1178,6 +1234,13 @@ export function applyCommand(project: Project, command: Command): Project {
         ...current,
         suggestions: current.suggestions.filter((s) => s.id !== command.suggestionId)
       })
+    case 'dismissSuggestions': {
+      const drop = new Set(command.suggestionIds)
+      if (!drop.size) return current
+      const next = current.suggestions.filter((suggestion) => !drop.has(suggestion.id))
+      if (next.length === current.suggestions.length) return current
+      return touch({ ...current, suggestions: next })
+    }
     case 'dismissPendingSuggestions': {
       const next = current.suggestions.filter((s) => s.applied)
       if (next.length === current.suggestions.length) return current
@@ -1231,7 +1294,7 @@ export function applyCommand(project: Project, command: Command): Project {
         }
       })
     case 'addSpeaker': {
-      const colors = [...SPEAKER_PALETTE]
+      const colors = [...speakerPalette()]
       const id = uid('spk')
       const speaker = {
         id,
@@ -1493,15 +1556,16 @@ export function applyCommand(project: Project, command: Command): Project {
       }
       if (command.words?.length) {
         const inRange = next.transcript.words.filter((word) => overlap(word, span) > 0)
-        if (transcriptIsPlaceholder(inRange)) {
+        const incoming = command.words.map((word) => ({
+          ...word,
+          id: word.id || uid('w'),
+          start: word.start + offset,
+          end: word.end + offset
+        }))
+        if (takeWordsNeedReplace(inRange, incoming)) {
           const words = [
             ...next.transcript.words.filter((word) => overlap(word, span) <= 0),
-            ...command.words.map((word) => ({
-              ...word,
-              id: word.id || uid('w'),
-              start: word.start + offset,
-              end: word.end + offset
-            }))
+            ...incoming
           ]
           next = applyCommand(next, { type: 'setTranscript', words })
         }

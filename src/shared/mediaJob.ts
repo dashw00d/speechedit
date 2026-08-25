@@ -93,9 +93,50 @@ export class JobGate {
 
 export type ImportLingerKind = 'proxy' | 'whisper'
 
+/** Minimal child surface so linger park/resume works in tests without spawning. */
+export interface ParkableChild {
+  pid?: number | undefined
+  exitCode: number | null
+  signalCode: NodeJS.Signals | string | null
+  kill(signal?: NodeJS.Signals | number): boolean
+  once(event: 'close', listener: () => void): unknown
+}
+
+export type ChildParker = (child: ParkableChild) => void
+
+function defaultPark(child: ParkableChild): void {
+  if (child.exitCode != null || child.signalCode != null) return
+  if (process.platform === 'win32') return
+  try {
+    child.kill('SIGSTOP')
+  } catch {
+    /* gone */
+  }
+}
+
+function defaultUnpark(child: ParkableChild): void {
+  if (child.exitCode != null || child.signalCode != null) return
+  if (process.platform === 'win32') return
+  try {
+    child.kill('SIGCONT')
+  } catch {
+    /* gone */
+  }
+}
+
 /** Background import work (Whisper, preview proxy) that must not hold the ffmpeg job gate. */
 export class ImportLinger {
   private controllers = new Map<AbortController, ImportLingerKind>()
+  private children = new Map<AbortController, Set<ParkableChild>>()
+  private parked = new Set<ImportLingerKind>()
+  private park: ChildParker = defaultPark
+  private unpark: ChildParker = defaultUnpark
+
+  /** Main process swaps in SIGSTOP + Windows priority. Tests can inject a spy. */
+  setParker(park: ChildParker, unpark: ChildParker): void {
+    this.park = park
+    this.unpark = unpark
+  }
 
   get size(): number {
     return this.controllers.size
@@ -105,26 +146,72 @@ export class ImportLinger {
     return [...this.controllers.values()].filter((row) => row === kind).length
   }
 
+  isParked(kind: ImportLingerKind): boolean {
+    return this.parked.has(kind)
+  }
+
   begin(kind: ImportLingerKind = 'proxy'): AbortSignal {
     const abort = new AbortController()
     this.controllers.set(abort, kind)
-    abort.signal.addEventListener('abort', () => this.controllers.delete(abort), { once: true })
+    this.children.set(abort, new Set())
+    abort.signal.addEventListener(
+      'abort',
+      () => {
+        this.controllers.delete(abort)
+        this.children.delete(abort)
+      },
+      { once: true }
+    )
     return abort.signal
+  }
+
+  adopt(signal: AbortSignal, child: ParkableChild): void {
+    for (const [abort, kind] of this.controllers) {
+      if (abort.signal !== signal) continue
+      const set = this.children.get(abort) ?? new Set()
+      set.add(child)
+      this.children.set(abort, set)
+      child.once('close', () => set.delete(child))
+      if (this.parked.has(kind)) this.park(child)
+      return
+    }
+  }
+
+  pause(kind: ImportLingerKind): void {
+    this.parked.add(kind)
+    for (const child of this.childrenOf(kind)) this.park(child)
+  }
+
+  resume(kind: ImportLingerKind): void {
+    this.parked.delete(kind)
+    for (const child of this.childrenOf(kind)) this.unpark(child)
+  }
+
+  private childrenOf(kind: ImportLingerKind): ParkableChild[] {
+    const out: ParkableChild[] = []
+    for (const [abort, row] of this.controllers) {
+      if (row !== kind) continue
+      for (const child of this.children.get(abort) ?? []) out.push(child)
+    }
+    return out
   }
 
   finish(signal: AbortSignal): void {
     for (const abort of this.controllers.keys()) {
       if (abort.signal === signal) {
         this.controllers.delete(abort)
+        this.children.delete(abort)
         break
       }
     }
   }
 
   abort(kind?: ImportLingerKind): void {
+    if (!kind || kind === 'whisper') this.resume('whisper')
     for (const [abort, row] of [...this.controllers]) {
       if (kind && row !== kind) continue
       this.controllers.delete(abort)
+      this.children.delete(abort)
       abort.abort()
     }
   }
@@ -137,7 +224,14 @@ export class ImportLinger {
 export function beginExportExclusive(jobs: JobGate, lingers: ImportLinger): AbortSignal {
   const signal = jobs.start('export')
   lingers.abort('proxy')
+  lingers.pause('whisper')
   return signal
+}
+
+/** Drop the export gate and let parked Whisper continue from where it stopped. */
+export function endExportExclusive(jobs: JobGate, lingers: ImportLinger): void {
+  jobs.finish('export')
+  lingers.resume('whisper')
 }
 
 export function waitWhileExporting(jobs: JobGate, signal: AbortSignal, intervalMs = 25): Promise<void> {

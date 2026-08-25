@@ -1,3 +1,5 @@
+import { sourceInHoleOn, sourceToProgramOn, type ResolvedProgram } from './resolver'
+
 /** How far the playhead may drift before we snap the media element. */
 
 export function frameDuration(fps = 30): number {
@@ -115,4 +117,35 @@ export function shouldHardSeek(opts: {
   if (opts.lastSource == null) return true
   if (opts.clock === 'jump' || opts.looped || opts.cut) return true
   return sourceDiscontinuity(opts.lastSource, opts.nextSource, opts.dt, opts.speed, opts.fps)
+}
+
+/**
+ * Program time is the master clock. Media currentTime may only nudge the playhead
+ * while it stays inside a keep. A decoder walking into a cut does not stall us.
+ */
+export function stepProgramPlayback(input: {
+  lastProgram: number
+  requestedProgram: number
+  dt: number
+  mediaSource: number | null
+  sourceOffset?: number
+  resolved: ResolvedProgram
+  fps?: number
+}): { program: number; clock: PlayheadClock; hard: boolean } {
+  const fps = input.fps
+  const frame = frameDuration(fps)
+  if (Math.abs(input.requestedProgram - input.lastProgram) > frame * 2) {
+    return { program: input.requestedProgram, clock: 'jump', hard: true }
+  }
+  const wallProgram = input.lastProgram + input.dt
+  const source = input.mediaSource
+  const abs = source == null ? null : source + (input.sourceOffset ?? 0)
+  if (abs != null && !sourceInHoleOn(input.resolved, abs)) {
+    const fromMedia = sourceToProgramOn(input.resolved, abs)
+    if (Math.abs(fromMedia - wallProgram) <= seekSlop(true, fps)) {
+      return { program: fromMedia, clock: 'media', hard: false }
+    }
+    return { program: wallProgram, clock: 'wall', hard: true }
+  }
+  return { program: wallProgram, clock: 'wall', hard: true }
 }

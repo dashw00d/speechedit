@@ -58,6 +58,13 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
     setPreviewFailed(false)
   }, [asset?.id, asset?.path, asset?.proxyPath])
   const src = asset?.path ? mediaUrl(playbackPath(asset, { proxyExists: !proxyFailed })) : ''
+  const outgoingAsset =
+    (look.outgoingInput
+      ? Object.values(project.assets).find((row) => row.path === look.outgoingInput)
+      : undefined) ?? asset
+  const underSrc = outgoingAsset?.path
+    ? mediaUrl(playbackPath(outgoingAsset, { proxyExists: !proxyFailed }))
+    : src
   const waitingPreview = previewFailed && !asset?.proxyPath && previewUnsafeCodec(asset?.codec)
   const picture = pictureAt(playbackProject, programTime)
   const { gain: volume, ducked, duckAmount, incomingGain } = look.voice
@@ -135,7 +142,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
               <video
                 ref={underRef}
                 className="dissolve-under"
-                src={src}
+                src={underSrc}
                 muted={look.voice.outgoingGain <= 0.0001}
                 playsInline
                 style={{ opacity: look.outgoingOpacity }}
@@ -170,6 +177,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
             <div className="ring" />
             <div className="ring" />
             <div className="needle" style={{ transform: `translate(-50%, -100%) rotate(${angle}deg)` }} />
+            <span className="voiceprint-label">Audio only</span>
           </div>
           <p className="monitor-hint">
             {project.transcript.words.length

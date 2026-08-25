@@ -11,6 +11,8 @@ import {
 import { sourceToProgramOf } from './resolver'
 import { uid } from './time'
 import { prettySpeakerName, splitVoiceTag } from './diarize'
+import { transcriptIsPlaceholder } from './transcript'
+import { revealStackTrack } from './timelineTracks'
 
 export interface CaptionBuildOptions {
   maxWords?: number
@@ -59,6 +61,7 @@ export function wordsToCaptions(project: Project, opts: CaptionBuildOptions = {}
   const maxWords = opts.maxWords ?? 10
   const gapLimit = opts.gap ?? 0.7
   const live = project.transcript.words.filter((w) => !w.deleted)
+  if (transcriptIsPlaceholder(live)) return []
   const groups: Word[][] = []
   let bucket: Word[] = []
 
@@ -93,13 +96,29 @@ export function wordsToCaptions(project: Project, opts: CaptionBuildOptions = {}
       speed: 1,
       text: captionText(project, group, opts),
       style: { ...DEFAULT_CAPTION_STYLE },
-      ...emptyClipFields()
+      ...emptyClipFields(),
+      auto: true
     }
   })
 }
 
 export function captionClipsOf(project: Project): Clip[] {
   return project.tracks.filter((t) => t.type === 'caption').flatMap((t) => t.clips.filter((c) => c.text))
+}
+
+export function transcriptReadyForCaptions(project: Project): boolean {
+  const live = project.transcript.words.filter((word) => !word.deleted)
+  return live.length > 0 && !transcriptIsPlaceholder(live)
+}
+
+/** Empty track, or every title still marked auto — safe to rebuild from words. */
+export function captionTrackIsAuto(project: Project): boolean {
+  const caps = captionClipsOf(project)
+  return caps.length === 0 || caps.every((clip) => clip.auto)
+}
+
+export function shouldAutoCaption(project: Project): boolean {
+  return transcriptReadyForCaptions(project) && captionTrackIsAuto(project)
 }
 
 export function captionsForExport(project: Project): Clip[] {
@@ -131,12 +150,16 @@ export function withCaptionClips(project: Project, clips: Clip[]): Project {
   return {
     ...project,
     updatedAt: Date.now(),
-    tracks: project.tracks.map((t) => (t.type === 'caption' && t.id === track.id ? { ...t, clips: placed } : t))
+    tracks: project.tracks.map((t) =>
+      t.type === 'caption' && t.id === track.id ? revealStackTrack({ ...t, clips: placed }) : t
+    )
   }
 }
 
 export function withGeneratedCaptions(project: Project, opts: CaptionBuildOptions = {}): Project {
-  return withCaptionClips(project, wordsToCaptions(project, opts))
+  const clips = wordsToCaptions(project, opts)
+  if (!clips.length) return project
+  return withCaptionClips(project, clips)
 }
 
 export function lowerThirdClips(project: Project): Clip[] {

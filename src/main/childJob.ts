@@ -1,11 +1,51 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { constants as osConstants, setPriority, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JobCancelled, throwIfAborted, type MediaJobKind } from '../shared/mediaJob'
+import { JobCancelled, throwIfAborted, type MediaJobKind, type ParkableChild } from '../shared/mediaJob'
+
+/** Freeze a linger child so export can take the CPU. SIGSTOP on Unix; low priority on Windows. */
+export function parkChild(child: ParkableChild): void {
+  if (child.exitCode != null || child.signalCode != null || !child.pid) return
+  if (process.platform === 'win32') {
+    try {
+      setPriority(child.pid, osConstants.priority.PRIORITY_LOW)
+    } catch {
+      /* gone or unsupported */
+    }
+    return
+  }
+  try {
+    child.kill('SIGSTOP')
+  } catch {
+    /* gone */
+  }
+}
+
+export function unparkChild(child: ParkableChild): void {
+  if (child.exitCode != null || child.signalCode != null || !child.pid) return
+  if (process.platform === 'win32') {
+    try {
+      setPriority(child.pid, osConstants.priority.PRIORITY_NORMAL)
+    } catch {
+      /* gone or unsupported */
+    }
+    return
+  }
+  try {
+    child.kill('SIGCONT')
+  } catch {
+    /* gone */
+  }
+}
 
 export function killChild(child: ChildProcess): void {
   if (child.exitCode != null || child.signalCode != null) return
+  try {
+    child.kill('SIGCONT')
+  } catch {
+    /* already running, or Windows */
+  }
   try {
     child.kill('SIGTERM')
   } catch {

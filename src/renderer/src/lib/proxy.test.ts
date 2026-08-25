@@ -1,11 +1,14 @@
 import { existsSync, unlinkSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import {
+  estimateGopFromFlags,
   isVariableFrameRate,
   needsProxy,
   playbackPath,
   previewUnsafeCodec,
-  proxyCacheMatchesSource
+  proxyCacheMatchesSource,
+  proxyGopSeekable,
+  proxyVideoArgs
 } from '../../../shared/proxy'
 import { host } from '../host'
 import { useEditor } from '../store'
@@ -33,6 +36,14 @@ describe('preview proxy vs export original', () => {
     expect(proxyCacheMatchesSource(120, 119.8)).toBe(true)
     expect(proxyCacheMatchesSource(120, 8)).toBe(false)
     expect(proxyCacheMatchesSource(8, 0.3)).toBe(false)
+    expect(proxyVideoArgs(30).join(' ')).toMatch(/-g 15/)
+    expect(proxyVideoArgs(30)).toContain('-keyint_min')
+    expect(proxyVideoArgs(30)).toContain('-sc_threshold')
+    expect(estimateGopFromFlags(['K_', '__', '__', 'K_', '__'])).toBe(3)
+    expect(estimateGopFromFlags(Array.from({ length: 75 }, (_, i) => (i === 0 ? 'K_' : '__')))).toBe(75)
+    expect(proxyGopSeekable(15)).toBe(true)
+    expect(proxyGopSeekable(250)).toBe(false)
+    expect(proxyGopSeekable(0)).toBe(false)
   })
 
   test('importRecording attaches a proxy for SD HEVC so the monitor can play it', async () => {
@@ -222,6 +233,49 @@ describe('preview proxy vs export original', () => {
       )
       await hydrateAssetProxies()
       expect(useEditor.getState().project.assets.src.proxyPath).toBeUndefined()
+    } finally {
+      Object.assign(host, prev)
+    }
+  })
+
+  test('reopen remakes a long-GOP preview proxy so Auto-Edit seeks can land', async () => {
+    const prev = {
+      mediaExists: host.mediaExists,
+      makeProxy: host.makeProxy,
+      probeProxyGop: host.probeProxyGop
+    }
+    let remakes = 0
+    host.mediaExists = async (paths) => paths.map((path) => ({ path, exists: true }))
+    host.probeProxyGop = async () => 250
+    host.makeProxy = async () => {
+      remakes += 1
+      return '/tmp/se-gop-remade.proxy.mp4'
+    }
+    try {
+      const project = {
+        ...createEmptyProject('stale-gop'),
+        sourceDuration: 8,
+        assets: {
+          src: {
+            id: 'src',
+            path: '/data/reel/take.mp4',
+            name: 'take.mp4',
+            kind: 'video' as const,
+            duration: 8,
+            waveform: [],
+            proxyPath: '/tmp/se-long-gop.proxy.mp4'
+          }
+        }
+      }
+      useEditor.getState().loadProject(project, { path: '/tmp/talk.speechedit.json', clean: true })
+      useEditor.getState().setMissingAssets([])
+      await hydrateAssetProxies()
+      const asset = useEditor.getState().project.assets.src
+      expect(remakes).toBe(1)
+      expect(asset.proxyPath).toBe('/tmp/se-gop-remade.proxy.mp4')
+      expect(playbackPath(asset)).toBe('/tmp/se-gop-remade.proxy.mp4')
+      expect(useEditor.getState().dirty).toBe(false)
+      expect(buildExportJob(useEditor.getState().project, '/tmp/out.mp4')?.input).toBe('/data/reel/take.mp4')
     } finally {
       Object.assign(host, prev)
     }
@@ -504,6 +558,18 @@ describe('preview proxy vs export original', () => {
     await expect(done).rejects.toThrow(/cancelled/i)
     expect(existsSync(out)).toBe(false)
     expect(existsSync(partial)).toBe(false)
+  }, 60000)
+
+  test('makeProxy remakes a long-GOP cache instead of trusting it', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for long-GOP proxy smoke')
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=1920x1080:rate=30 -t 3 -pix_fmt yuv420p /tmp/se-proxy-gop-src.mp4`.quiet()
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=320x240:rate=30 -t 3 -c:v libx264 -g 250 -keyint_min 250 -sc_threshold 0 -pix_fmt yuv420p /tmp/se-proxy-gop.proxy.mp4`.quiet()
+    const { makeProxy, probeProxyGop } = await import('../../../main/ffmpeg.ts')
+    expect(await probeProxyGop('/tmp/se-proxy-gop.proxy.mp4')).toBeGreaterThan(32)
+    const proxy = await makeProxy('/tmp/se-proxy-gop-src.mp4', '/tmp/se-proxy-gop.proxy.mp4')
+    expect(await probeProxyGop(proxy)).toBeLessThanOrEqual(32)
   }, 60000)
 
   test('makeProxy remakes a truncated cache instead of trusting it', async () => {

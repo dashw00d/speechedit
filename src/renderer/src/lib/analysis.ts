@@ -1,4 +1,4 @@
-import type { EditSuggestion, Interval, RangeTag, Word } from '../types'
+import type { EditSuggestion, Interval, Project, RangeTag, Word } from '../types'
 import { invertIntervals, mergeIntervals, overlap } from './edl'
 import { isFillerToken } from './transcript'
 import { uid } from './time'
@@ -383,8 +383,9 @@ export function suggestionsFromLoudness(
     type: 'loud' as const,
     start: w.start,
     end: w.end,
-    action: 'review' as const,
-    label: `Hot audio ${w.lufs.toFixed(1)} LUFS`,
+    action: 'volume' as const,
+    volume: volumeTowardLufs(w.lufs),
+    label: `Hot audio ${w.lufs.toFixed(1)} LUFS → Quiet`,
     safe: false,
     applied: false
   }))
@@ -535,6 +536,39 @@ export function buildSuggestions(input: AnalysisInput): EditSuggestion[] {
     ...suggestionsFromStatic(input.sceneHits ?? [], input.words),
     ...suggestionsFromLoudness(input.loudnessWindows ?? [], input.duration),
     ...suggestionsFromPace(input.words, input.duration, input.silence)
+  ]
+}
+
+export type LeftoverKind = 'still' | 'breath' | 'static' | 'low-motion' | 'loud' | 'other'
+
+/** Linear gain that moves `lufs` toward `target` without silencing the range. */
+export function volumeTowardLufs(lufs: number, target = -16): number {
+  const gain = 10 ** ((target - lufs) / 20)
+  return Math.min(0.85, Math.max(0.2, gain))
+}
+
+/** Uncertain leftovers after safe first-edit. Stills are silent demos; breaths are air to keep. */
+export function leftoverKind(suggestion: EditSuggestion): LeftoverKind {
+  if (/silent still/i.test(suggestion.label) || (suggestion.type === 'silence' && suggestion.action === 'review')) {
+    return 'still'
+  }
+  if (/^breath\b/i.test(suggestion.label)) return 'breath'
+  if (suggestion.type === 'static') return 'static'
+  if (suggestion.type === 'low-motion') return 'low-motion'
+  if (suggestion.type === 'loud' && suggestion.action !== 'normalize') return 'loud'
+  return 'other'
+}
+
+export function leftoverItems(project: Project, kind: Exclude<LeftoverKind, 'other'>): EditSuggestion[] {
+  return project.suggestions.filter((suggestion) => !suggestion.applied && !suggestion.blockedBy && leftoverKind(suggestion) === kind)
+}
+
+/** Silent stills, then static screens, then hot audio. Talking-over-static stays out. */
+export function leftoverReviewQueue(project: Project): EditSuggestion[] {
+  return [
+    ...leftoverItems(project, 'still'),
+    ...leftoverItems(project, 'static'),
+    ...leftoverItems(project, 'loud')
   ]
 }
 

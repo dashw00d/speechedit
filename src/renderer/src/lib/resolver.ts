@@ -169,46 +169,139 @@ function projectPictureFallback(media: ResolvedSegment[]): Transform {
   return media[0]?.transform ?? { ...DEFAULT_TRANSFORM }
 }
 
-export function resolveSegments(project: Project): ResolvedSegment[] {
-  return spliceInserts(resolveMediaSegments(project), project.inserts)
+export interface ResolvedProgram {
+  segments: ResolvedSegment[]
+  media: ResolvedSegment[]
+  length: number
 }
 
-export function programLengthOf(project: Project): number {
-  const segs = resolveSegments(project)
-  const kept = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].duration : 0
+const resolvedCache = new WeakMap<Project, ResolvedProgram>()
+
+function chainEnd(segs: ResolvedSegment[]): number {
+  if (!segs.length) return 0
+  const last = segs[segs.length - 1]
+  return last.start + last.duration - last.overlapNext
+}
+
+export function resolveProgram(project: Project): ResolvedProgram {
+  const hit = resolvedCache.get(project)
+  if (hit) return hit
+  const segments = spliceInserts(resolveMediaSegments(project), project.inserts)
+  const kept = segments.length ? segments[segments.length - 1].start + segments[segments.length - 1].duration : 0
   const extras = project.tracks
     .filter((t) => t.id !== 'v1' && t.id !== 'a1')
     .flatMap((t) => t.clips)
     .reduce((max, c) => Math.max(max, c.start + c.duration), 0)
-  return Math.max(kept, extras, 0.01)
+  const resolved: ResolvedProgram = {
+    segments,
+    media: segments.filter((seg) => seg.kind !== 'slug'),
+    length: Math.max(kept, extras, 0.01)
+  }
+  resolvedCache.set(project, resolved)
+  return resolved
+}
+
+export function resolveSegments(project: Project): ResolvedSegment[] {
+  return resolveProgram(project).segments
+}
+
+export function programLengthOf(project: Project): number {
+  return resolveProgram(project).length
+}
+
+/** Rightmost media keep whose in-point is at or before sourceTime. */
+function mediaIndexAtSource(media: ResolvedSegment[], sourceTime: number): number {
+  let lo = 0
+  let hi = media.length - 1
+  let found = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (media[mid].inPoint <= sourceTime) {
+      found = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return found
+}
+
+export function sourceToProgramOn(resolved: ResolvedProgram, sourceTime: number): number {
+  let i = mediaIndexAtSource(resolved.media, sourceTime)
+  if (i < 0) return resolved.media[0]?.start ?? 0
+  if (
+    i > 0 &&
+    sourceTime <= resolved.media[i].inPoint + 1e-9 &&
+    resolved.media[i - 1].outPoint >= sourceTime - 1e-9
+  ) {
+    i -= 1
+  }
+  const seg = resolved.media[i]
+  if (sourceTime <= seg.outPoint) return seg.start + (sourceTime - seg.inPoint) / seg.speed
+  return resolved.media[i + 1]?.start ?? chainEnd(resolved.segments)
 }
 
 export function sourceToProgramOf(project: Project, sourceTime: number): number {
-  let program = 0
-  for (const seg of resolveSegments(project)) {
-    if (seg.kind === 'slug') {
-      program += seg.duration - seg.overlapNext
-      continue
-    }
-    if (sourceTime < seg.inPoint) return program
-    if (sourceTime <= seg.outPoint) return program + (sourceTime - seg.inPoint) / seg.speed
-    program += seg.duration - seg.overlapNext
-  }
-  return program
+  return sourceToProgramOn(resolveProgram(project), sourceTime)
 }
 
-export function programToSourceOf(project: Project, programTime: number): number {
-  const segs = resolveSegments(project)
-  const hits = segs.filter((s) => programTime >= s.start && programTime < s.start + s.duration)
-  const seg = hits[hits.length - 1] ?? segs.find((s) => programTime < s.start) ?? segs[segs.length - 1]
+/** True when source time sits in a deleted hole, not on a keep. */
+export function sourceInHoleOn(resolved: ResolvedProgram, sourceTime: number): boolean {
+  const media = resolved.media
+  if (!media.length) return true
+  let i = mediaIndexAtSource(media, sourceTime)
+  if (i < 0) return true
+  if (
+    i > 0 &&
+    sourceTime <= media[i].inPoint + 1e-9 &&
+    media[i - 1].outPoint >= sourceTime - 1e-9
+  ) {
+    i -= 1
+  }
+  return sourceTime > media[i].outPoint + 1e-9
+}
+
+export function sourceInHole(project: Project, sourceTime: number): boolean {
+  return sourceInHoleOn(resolveProgram(project), sourceTime)
+}
+
+function lastIndexAtProgram(segs: ResolvedSegment[], programTime: number): number {
+  let lo = 0
+  let hi = segs.length - 1
+  let found = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (segs[mid].start <= programTime) {
+      found = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  while (found + 1 < segs.length && segs[found + 1].start <= programTime) found += 1
+  return found
+}
+
+export function programToSourceOn(segs: ResolvedSegment[], programTime: number): number {
+  const i = lastIndexAtProgram(segs, programTime)
+  const seg =
+    i < 0
+      ? segs[0]
+      : programTime < segs[i].start + segs[i].duration
+        ? segs[i]
+        : (segs[i + 1] ?? segs[i])
   if (!seg) return 0
   if (seg.kind === 'slug') return seg.inPoint
   const local = Math.min(seg.duration, Math.max(0, programTime - seg.start))
   return seg.inPoint + local * seg.speed
 }
 
+export function programToSourceOf(project: Project, programTime: number): number {
+  return programToSourceOn(resolveProgram(project).segments, programTime)
+}
+
 export function segmentsAtProgram(project: Project, programTime: number): ResolvedSegment[] {
-  return resolveSegments(project).filter(
+  return resolveProgram(project).segments.filter(
     (s) => programTime >= s.start && programTime < s.start + s.duration
   )
 }
@@ -226,39 +319,22 @@ export function pictureAt(project: Project, programTime: number): Transform {
 }
 
 export function wordSnapTimes(project: Project): number[] {
-  const segs = resolveSegments(project)
+  const resolved = resolveProgram(project)
   return project.transcript.words.flatMap((word) => [
-    sourceToProgramCached(segs, word.start),
-    sourceToProgramCached(segs, word.end)
+    sourceToProgramOn(resolved, word.start),
+    sourceToProgramOn(resolved, word.end)
   ])
 }
 
-function sourceToProgramCached(
-  segs: ResolvedSegment[],
-  sourceTime: number
-): number {
-  let program = 0
-  for (const seg of segs) {
-    if (seg.kind === 'slug') {
-      program += seg.duration - seg.overlapNext
-      continue
-    }
-    if (sourceTime < seg.inPoint) return program
-    if (sourceTime <= seg.outPoint) return program + (sourceTime - seg.inPoint) / seg.speed
-    program += seg.duration - seg.overlapNext
-  }
-  return program
-}
-
 export function snapCandidates(project: Project, extras: number[] = []): number[] {
-  const segs = resolveSegments(project)
+  const resolved = resolveProgram(project)
   return [
     0,
-    programLengthOf(project),
+    resolved.length,
     project.markIn ?? -1,
     project.markOut ?? -1,
     ...extras,
-    ...segs.flatMap((s) => [s.start, s.start + s.duration]),
+    ...resolved.segments.flatMap((s) => [s.start, s.start + s.duration]),
     ...project.tracks.flatMap((t) => t.clips.flatMap((c) => [c.start, c.start + c.duration])),
     ...wordSnapTimes(project)
   ].filter((n) => n >= 0)
@@ -290,7 +366,7 @@ export function snapSourceTime(
 export function asVideoClips(project: Project): Clip[] {
   const video = project.tracks.find((t) => t.type === 'video')
   const assetId = Object.values(project.assets)[0]?.id
-  return resolveSegments(project).map((seg) => ({
+  return resolveProgram(project).segments.map((seg) => ({
     id: seg.id,
     trackId: video?.id ?? 'v1',
     assetId,

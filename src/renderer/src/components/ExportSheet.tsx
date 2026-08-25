@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { isElectron } from '../host'
+import { captionsForExport } from '../lib/captions'
 import { exportContentPackage, exportSidecar, exportVideoAction, SIDECARS, videoExportCopy } from '../lib/exportActions'
 import { cancelExport, ffmpegImportBusy } from '../lib/mediaJobs'
 import { useEditor } from '../store'
@@ -24,9 +25,7 @@ export function ExportSheet({
   const exportOpts = { markedOnly, audioOnly, burnCaptions }
   const video = videoExportCopy(project, exportOpts)
   const hasMarks = project.markIn != null && project.markOut != null
-  const hasCaptions = project.tracks.some(
-    (track) => track.type === 'caption' && !track.hidden && track.clips.some((clip) => !clip.muted && clip.text)
-  )
+  const hasCaptions = captionsForExport(project).length > 0
   const common = SIDECARS.filter((item) => item.group === 'common')
   const advanced = SIDECARS.filter((item) => item.group === 'pipeline')
 

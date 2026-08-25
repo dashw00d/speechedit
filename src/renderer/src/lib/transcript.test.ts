@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { applyCommand } from './commands'
 import { createEmptyProject } from './demo'
-import { parseAnyTranscript, parseTranscriptJson } from './transcript'
+import { parseAnyTranscript, parseTranscriptJson, takeWordsNeedReplace } from './transcript'
 
 const whisperCli = {
   text: 'Hello there um world',
@@ -120,5 +120,22 @@ describe('drop / open transcript JSON', () => {
   test('garbage JSON fails closed with an actionable error', () => {
     expect(() => parseTranscriptJson({ text: 'no times' })).toThrow(/Whisper segments|words array/)
     expect(() => parseAnyTranscript('bad.json', '{')).toThrow(/not valid/)
+  })
+
+  test('takeWordsNeedReplace grows ASR and keeps a dropped transcript', () => {
+    const word = (text: string, start: number, end: number) => ({
+      id: text,
+      text,
+      start,
+      end,
+      speaker: 'ryan',
+      deleted: false
+    })
+    expect(takeWordsNeedReplace([], [word('hello', 0.2, 0.6)])).toBe(true)
+    expect(takeWordsNeedReplace([word('Speech 1', 0, 2)], [word('hello', 0.2, 0.6)])).toBe(true)
+    expect(
+      takeWordsNeedReplace([word('hello', 0.2, 0.6)], [word('hello', 0.2, 0.6), word('world', 9.5, 10.1)])
+    ).toBe(true)
+    expect(takeWordsNeedReplace([word('already here', 0.2, 0.6)], [word('whisper', 0.2, 0.5)])).toBe(false)
   })
 })

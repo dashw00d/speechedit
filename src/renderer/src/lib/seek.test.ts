@@ -3,7 +3,7 @@ import { applyCommand } from './commands'
 import { createEmptyProject } from './demo'
 import { projectToExportJob } from './exportJob'
 import { sampleProgram } from './programLook'
-import { sourceToProgramOf } from './resolver'
+import { programLengthOf, programToSourceOf, resolveProgram, sourceInHole, sourceToProgramOf } from './resolver'
 import {
   advancePlayhead,
   boundPlayhead,
@@ -12,7 +12,8 @@ import {
   seekSlop,
   shouldHardSeek,
   shouldSeek,
-  sourceDiscontinuity
+  sourceDiscontinuity,
+  stepProgramPlayback
 } from './seek'
 
 describe('paused seek vs playback slop', () => {
@@ -238,5 +239,104 @@ describe('program time follows the media clock', () => {
         markOut: null
       })
     ).toEqual({ program: 8, looped: false, stop: true })
+  })
+})
+
+describe('program-master playback across cuts', () => {
+  test('a decoder sitting in a hole does not stall the playhead', () => {
+    const project = videoAssetProject()
+    const resolved = resolveProgram(project)
+    expect(sourceInHole(project, 1.05)).toBe(true)
+    expect(sourceInHole(project, 0.99)).toBe(false)
+    expect(sourceInHole(project, 1.11)).toBe(false)
+    const stepped = stepProgramPlayback({
+      lastProgram: 0.99,
+      requestedProgram: 0.99,
+      dt: 0.016,
+      mediaSource: 1.05,
+      resolved,
+      fps: 30
+    })
+    expect(stepped.clock).toBe('wall')
+    expect(stepped.hard).toBe(true)
+    expect(stepped.program).toBeCloseTo(1.006, 5)
+    expect(sourceInHole(project, programToSourceOf(project, stepped.program))).toBe(false)
+  })
+
+  test('media inside a keep may nudge the playhead but not jump it', () => {
+    const project = videoAssetProject()
+    const resolved = resolveProgram(project)
+    const tracked = stepProgramPlayback({
+      lastProgram: 0.5,
+      requestedProgram: 0.5,
+      dt: 0.016,
+      mediaSource: 0.516,
+      resolved,
+      fps: 30
+    })
+    expect(tracked.clock).toBe('media')
+    expect(tracked.hard).toBe(false)
+    expect(tracked.program).toBeCloseTo(0.516, 5)
+    const drifted = stepProgramPlayback({
+      lastProgram: 0.5,
+      requestedProgram: 0.5,
+      dt: 0.016,
+      mediaSource: 0.9,
+      resolved,
+      fps: 30
+    })
+    expect(drifted.clock).toBe('wall')
+    expect(drifted.hard).toBe(true)
+    expect(drifted.program).toBeCloseTo(0.516, 5)
+  })
+
+  test('200 ripple cuts never ask the decoder for a deleted source time', () => {
+    const cuts = 200
+    const sourceDuration = cuts * 0.4 + 0.2
+    const project = applyCommand(
+      {
+        ...createEmptyProject('dense-play'),
+        sourceDuration,
+        assets: {
+          src: {
+            id: 'src',
+            path: '/tmp/dense.mp4',
+            name: 'dense.mp4',
+            kind: 'video',
+            duration: sourceDuration,
+            waveform: []
+          }
+        },
+        cuts: Array.from({ length: cuts }, (_, i) => {
+          const start = 0.2 + i * 0.4
+          return { id: `c${i}`, start, end: start + 0.2, source: 'silence' as const }
+        })
+      },
+      { type: 'setCutMargin', margin: 0.12 }
+    )
+    const resolved = resolveProgram(project)
+    expect(resolved.media.length).toBeGreaterThan(150)
+    let program = 0
+    let media = resolved.media[0]?.inPoint ?? 0
+    const dt = 1 / 30
+    const end = programLengthOf(project) - dt
+    let holesSeen = 0
+    while (program < end) {
+      if (sourceInHole(project, media)) holesSeen += 1
+      const stepped = stepProgramPlayback({
+        lastProgram: program,
+        requestedProgram: program,
+        dt,
+        mediaSource: media,
+        resolved,
+        fps: 30
+      })
+      program = stepped.program
+      const desired = programToSourceOf(project, program)
+      expect(sourceInHole(project, desired)).toBe(false)
+      if (stepped.hard || sourceInHole(project, media)) media = desired
+      else media += dt
+    }
+    expect(holesSeen).toBeGreaterThan(20)
   })
 })

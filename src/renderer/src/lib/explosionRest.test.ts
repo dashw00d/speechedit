@@ -28,6 +28,8 @@ describe('caption production QoL', () => {
     const caps = next.tracks.find((t) => t.type === 'caption')?.clips ?? []
     expect(caps.length).toBeGreaterThan(3)
     expect(caps.every((c) => (c.text ?? '').split(/\s+/).length <= 8)).toBe(true)
+    expect(caps.every((c) => c.auto)).toBe(true)
+    expect(next.tracks.find((t) => t.type === 'caption')?.hidden).toBe(false)
   })
 
   test('lower thirds land on V2 from scenes', () => {

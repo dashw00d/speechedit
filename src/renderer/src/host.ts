@@ -1,4 +1,5 @@
 import { JobGate } from '../../shared/mediaJob'
+import type { TranscribeProgress } from '../../shared/asr'
 
 export interface SpeechHost {
   openMedia: () => Promise<string | null>
@@ -34,6 +35,7 @@ export interface SpeechHost {
     vfr?: boolean
   }>
   makeProxy: (file: string) => Promise<string>
+  probeProxyGop: (file: string) => Promise<number>
   waveform: (file: string) => Promise<number[]>
   thumbnails: (file: string) => Promise<string[]>
   silence: (file: string) => Promise<{ start: number; end: number }[]>
@@ -65,7 +67,7 @@ export interface SpeechHost {
   exportProgram: (job: unknown) => Promise<string>
   onExportProgress: (fn: (info: { ratio: number; stage: string }) => void) => () => void
   onAnalyzeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
-  onTranscribeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
+  onTranscribeProgress: (fn: (info: TranscribeProgress) => void) => () => void
 }
 
 const missing = async () => null
@@ -212,6 +214,7 @@ export const host: SpeechHost = electronHost ?? {
     throw new Error('Import needs the Electron app.')
   },
   makeProxy: async () => '',
+  probeProxyGop: async () => 15,
   waveform: empty,
   thumbnails: empty,
   silence: empty,

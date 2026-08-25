@@ -1,4 +1,5 @@
 import { DEFAULT_CAPTION_STYLE, type Clip, type Project } from '../types'
+import { captionClipsOf, transcriptReadyForCaptions, withGeneratedCaptions } from './captions'
 import { applyCommand } from './commands'
 import type { GraphJob, GraphLayer } from './exportGraph'
 import { normalizeProject } from './normalize'
@@ -30,6 +31,8 @@ export function projectForExport(project: Project, opts: ExportVideoOpts = {}): 
       ...next,
       tracks: next.tracks.map((track) => (track.type === 'caption' ? { ...track, hidden: true } : track))
     }
+  } else if (!captionClipsOf(next).length && transcriptReadyForCaptions(next)) {
+    next = withGeneratedCaptions(next, { maxWords: 5, emphasize: true })
   }
   return next
 }
@@ -68,7 +71,23 @@ export function overlayDuckWindows(project: Project): { start: number; end: numb
     .map((c) => ({ start: c.start, end: c.start + c.duration }))
 }
 
+const exportJobCache = new WeakMap<Project, ProgramExportJob>()
+
+function defaultExportLook(output: string, opts: ExportVideoOpts): boolean {
+  return !output && !opts.markedOnly && !opts.audioOnly && opts.burnCaptions !== false
+}
+
 export function projectToExportJob(project: Project, output = '', opts: ExportVideoOpts = {}): ProgramExportJob {
+  if (defaultExportLook(output, opts)) {
+    const hit = exportJobCache.get(project)
+    if (hit) return hit
+  }
+  const job = buildProgramExportJob(project, output, opts)
+  if (defaultExportLook(output, opts)) exportJobCache.set(project, job)
+  return job
+}
+
+function buildProgramExportJob(project: Project, output: string, opts: ExportVideoOpts): ProgramExportJob {
   const current = projectForExport(project, opts)
   const takes = primaryTakes(current)
   const asset = takes[0] ?? Object.values(current.assets).find((a) => a.path)

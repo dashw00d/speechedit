@@ -8,11 +8,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   asMediaJobKind,
   beginExportExclusive,
+  endExportExclusive,
   ImportLinger,
   JobBusy,
   JobGate,
   runWhenExportIdle
 } from '../shared/mediaJob'
+import { parkChild, unparkChild } from './childJob'
 import {
   analyzeMedia,
   detectEncoders,
@@ -22,6 +24,7 @@ import {
   exportProgram,
   makeProxy,
   probe,
+  probeProxyGop,
   thumbnails,
   completeChat,
   listAsrPath,
@@ -88,6 +91,7 @@ function createWindow(): BrowserWindow {
 
 const jobs = new JobGate()
 const importLingers = new ImportLinger()
+importLingers.setParker(parkChild, unparkChild)
 
 function beginImportLinger(kind: 'proxy' | 'whisper' = 'proxy'): AbortSignal {
   return importLingers.begin(kind)
@@ -291,6 +295,10 @@ ipcMain.handle('media:probe', async (_e, file: string) => {
   refuseIfExporting()
   return probe(file, jobs.signal)
 })
+ipcMain.handle('media:proxyGop', async (_e, file: string) => {
+  refuseIfExporting()
+  return probeProxyGop(file, jobs.signal)
+})
 ipcMain.handle('media:proxy', async (_e, file: string) => {
   try {
     return await runWhenExportIdle(jobs, importLingers, (signal) =>
@@ -302,7 +310,7 @@ ipcMain.handle('media:proxy', async (_e, file: string) => {
 })
 ipcMain.handle('media:waveform', async (_e, file: string) => {
   refuseIfExporting()
-  return waveform(file, 1800, jobs.signal)
+  return waveform(file, undefined, jobs.signal)
 })
 ipcMain.handle('media:silence', async (_e, file: string) => {
   refuseIfExporting()
@@ -323,12 +331,17 @@ ipcMain.handle(
     file: string,
     opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean; skipInstall?: boolean }
   ) => {
-  refuseIfExporting()
   const signal = beginImportLinger('whisper')
   try {
-    return await transcribeMedia(file, opts, (info) => {
-      e.sender.send('media:transcribe-progress', info)
-    }, signal)
+    return await transcribeMedia(
+      file,
+      opts,
+      (info) => {
+        e.sender.send('media:transcribe-progress', info)
+      },
+      signal,
+      (child) => importLingers.adopt(signal, child)
+    )
   } catch (err) {
     throw ipcError(err)
   } finally {
@@ -389,6 +402,6 @@ ipcMain.handle('media:export', async (e, job) => {
   } catch (err) {
     throw ipcError(err)
   } finally {
-    jobs.finish('export')
+    endExportExclusive(jobs, importLingers)
   }
 })

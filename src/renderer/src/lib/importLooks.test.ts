@@ -4,15 +4,26 @@ import {
   ANALYSIS_CACHE_VERSION,
   LOOK_LANE_LIMIT,
   WorkLane,
+  audioLookArgs,
+  audioLookFilters,
   loudnessDetectArgs,
+  parseLoudnessLog,
+  parseSilenceLog,
   sceneDetectArgs,
   silenceDetectArgs,
+  wantsCheapAudioLooks,
   thumbPassArgs,
   thumbSeekArgs,
   thumbSeekTimes,
   wantsCheapScenes,
+  wantsSeekPeaks,
   wantsSeekThumbs,
-  waveformLookArgs
+  waveformConcatArgs,
+  waveformConcatList,
+  waveformLookArgs,
+  waveformSeekBatchArgs,
+  waveformStrategy,
+  peakSeekTimes
 } from '../../../shared/importLooks'
 
 describe('import look policy', () => {
@@ -77,5 +88,63 @@ describe('import look policy', () => {
     expect(thumbSeekTimes(3600, 20)[0]).toBe(90)
     expect(thumbSeekTimes(3600, 20).at(-1)).toBe(3510)
     expect(ANALYSIS_CACHE_VERSION).toBe(2)
+  })
+
+  test('long recordings seek peak windows instead of decoding the whole soundtrack', () => {
+    expect(wantsSeekPeaks(12)).toBe(false)
+    expect(wantsSeekPeaks(89)).toBe(false)
+    expect(wantsSeekPeaks(90)).toBe(true)
+    expect(wantsSeekPeaks(3600)).toBe(true)
+    expect(waveformStrategy(12)).toBe('decode')
+    expect(waveformStrategy(3600)).toBe('seek')
+    const times = peakSeekTimes(3600, 20)
+    expect(times).toHaveLength(20)
+    expect(times[0]).toBeGreaterThanOrEqual(0)
+    expect(times.at(-1) ?? 0).toBeLessThan(3600)
+    const list = waveformConcatList('/tmp/long.mp4', [10, 20], 0.06)
+    expect(list).toContain('ffconcat version 1.0')
+    expect(list).toContain("file '/tmp/long.mp4'")
+    expect(list).toContain('inpoint 10.000')
+    expect(list).toContain('outpoint 10.060')
+    expect(waveformConcatArgs('/tmp/windows.concat')).toContain('-f')
+    expect(waveformConcatArgs('/tmp/windows.concat').join(' ')).toMatch(/concat/)
+    expect(waveformConcatArgs('/tmp/windows.concat')).toContain('-vn')
+    const batch = waveformSeekBatchArgs('/tmp/long.mp4', [10, 20]).join(' ')
+    expect(batch).toContain('-ss 10')
+    expect(batch).toContain('-ss 20')
+    expect(batch).toContain('-t 0.06')
+    expect(batch).toContain('-vn')
+    expect(waveformLookArgs('/tmp/a.mp4')).not.toContain('-ss')
+  })
+
+  test('long recordings share one cheap audio look for silence and loudness', () => {
+    expect(wantsCheapAudioLooks(12)).toBe(false)
+    expect(wantsCheapAudioLooks(89)).toBe(false)
+    expect(wantsCheapAudioLooks(90)).toBe(true)
+    expect(wantsCheapAudioLooks(3600)).toBe(true)
+    expect(audioLookFilters({ duration: 12 })).toBe('silencedetect=n=-30dB:d=0.35,ebur128=peak=true')
+    expect(audioLookFilters({ duration: 12 })).not.toContain('aresample')
+    expect(audioLookFilters({ duration: 3600 })).toContain('aresample=8000')
+    expect(audioLookFilters({ duration: 3600 })).toContain('silencedetect=')
+    expect(audioLookFilters({ duration: 3600 })).toContain('ebur128=peak=true')
+    const combined = audioLookArgs('/tmp/long.mp4', { duration: 3600 }).join(' ')
+    expect(combined).toMatch(/-i \/tmp\/long\.mp4 -vn/)
+    expect(combined).toContain('aresample=8000')
+    expect(combined).toContain('silencedetect=')
+    expect(combined).toContain('ebur128=peak=true')
+    expect(silenceDetectArgs('/tmp/long.mp4', '-30dB', 0.35, 3600).join(' ')).toContain('aresample=8000')
+    expect(silenceDetectArgs('/tmp/long.mp4', '-30dB', 0.35, 3600).join(' ')).not.toContain('ebur128')
+    expect(loudnessDetectArgs('/tmp/long.mp4', 3600).join(' ')).toContain('aresample=8000')
+    expect(loudnessDetectArgs('/tmp/long.mp4', 3600).join(' ')).not.toContain('silencedetect')
+    expect(silenceDetectArgs('/tmp/a.mp4').join(' ')).not.toContain('aresample')
+    expect(loudnessDetectArgs('/tmp/a.mp4').join(' ')).not.toContain('aresample')
+    expect(
+      parseSilenceLog('[silencedetect @ x] silence_start: 2.00\n[silencedetect @ x] silence_end: 5.50')
+    ).toEqual([{ start: 2, end: 5.5 }])
+    const [loud] = parseLoudnessLog('t: 1.200  TARGET:-23 LUFS    I: -12.0 LUFS')
+    expect(loud?.end).toBe(1.2)
+    expect(loud?.lufs).toBe(-12)
+    expect(loud?.start).toBeCloseTo(0.8, 5)
+    expect(parseLoudnessLog('t: 1.200  TARGET:-23 LUFS    I: -20.0 LUFS')).toEqual([])
   })
 })

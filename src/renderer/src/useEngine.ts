@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef } from 'react'
 import { programLength } from './lib/commands'
 import { projectToExportJob, type ProgramExportJob } from './lib/exportJob'
 import { projectForPlayback } from './lib/playbackProject'
-import { nextProgramAfterCut, sampleProgram, type ProgramLook } from './lib/programLook'
-import { programToSourceOf, segmentAtProgram, sourceToProgramOf } from './lib/resolver'
-import { advancePlayhead, boundPlayhead, readMediaClock, shouldHardSeek, shouldSeek } from './lib/seek'
+import { sampleProgram, type ProgramLook } from './lib/programLook'
+import { programToSourceOf, resolveProgram, segmentAtProgram } from './lib/resolver'
+import { boundPlayhead, readMediaClock, shouldHardSeek, shouldSeek, stepProgramPlayback } from './lib/seek'
 import { primaryAssetAt, sourceOffsetOf } from './lib/takes'
 import { useEditor, usePlayback } from './store'
 
@@ -98,14 +98,17 @@ export function useEngine(
     () => projectForPlayback(project, previewSafeCuts),
     [project, previewSafeCuts]
   )
+  const job = useMemo(() => projectToExportJob(playbackProject), [playbackProject])
   const projectRef = useRef(playbackProject)
+  const jobRef = useRef(job)
   projectRef.current = playbackProject
+  jobRef.current = job
 
   useEffect(() => {
     const prime = () => {
       const video = videoRef.current
       if (video && usePlayback.getState().playing && video.paused) {
-        const look = sampleProgram(projectToExportJob(projectRef.current), usePlayback.getState().programTime)
+        const look = sampleProgram(jobRef.current, usePlayback.getState().programTime)
         applyGain(video, look.voice.incomingGain)
         void video.play().catch(() => undefined)
       }
@@ -122,7 +125,7 @@ export function useEngine(
     const video = videoRef.current
     if (!video) return
     const onLoaded = () => {
-      const look = sampleProgram(projectToExportJob(projectRef.current), usePlayback.getState().programTime)
+      const look = sampleProgram(jobRef.current, usePlayback.getState().programTime)
       syncProgram(
         video,
         underRef?.current ?? null,
@@ -138,7 +141,7 @@ export function useEngine(
 
   useEffect(() => {
     if (playing) return
-    const look = sampleProgram(projectToExportJob(projectRef.current), programTime)
+    const look = sampleProgram(jobRef.current, programTime)
     syncProgram(videoRef.current, underRef?.current ?? null, look, false, projectRef.current.fps || 30)
   }, [playing, programTime, videoRef, underRef, previewSafeCuts, project])
 
@@ -148,7 +151,7 @@ export function useEngine(
       if (video && !video.paused) video.pause()
       const under = underRef?.current
       if (under && !under.paused) under.pause()
-      const look = sampleProgram(projectToExportJob(projectRef.current), usePlayback.getState().programTime)
+      const look = sampleProgram(jobRef.current, usePlayback.getState().programTime)
       syncBeds(look, false, projectRef.current.fps || 30)
       syncOverlays(look, false, projectRef.current.fps || 30)
       return
@@ -171,7 +174,7 @@ export function useEngine(
     let lastProgram = nowPlay.programTime
     const video = videoRef.current
     if (video && video.src && video.paused) {
-      const look = sampleProgram(projectToExportJob(projectRef.current), nowPlay.programTime)
+      const look = sampleProgram(jobRef.current, nowPlay.programTime)
       applyGain(video, look.voice.incomingGain)
       void video.play().catch(() => undefined)
     }
@@ -193,7 +196,7 @@ export function useEngine(
       const wall = Math.min(0.08, (now - last) / 1000)
       last = now
       const proj = projectRef.current
-      const job = projectToExportJob(proj)
+      const job = jobRef.current
       const duration = job.duration && job.duration > 0 ? job.duration : programLength(proj)
       const state = usePlayback.getState()
       const fps = proj.fps || 30
@@ -207,14 +210,14 @@ export function useEngine(
         onSlug || (video?.ended && moreProgram)
           ? { source: null, present: false }
           : readMediaClock(video)
-      const dt = clockRead.source == null ? wall * rate : wall
-      const advanced = advancePlayhead({
+      const dt = wall * rate
+      const advanced = stepProgramPlayback({
         lastProgram,
         requestedProgram: state.programTime,
         dt,
         mediaSource: clockRead.source,
-        mediaPresent: clockRead.present,
-        sourceToProgram: (local) => sourceToProgramOf(proj, local + offset),
+        sourceOffset: offset,
+        resolved: resolveProgram(proj),
         fps
       })
       const bounded = boundPlayhead(advanced.program, {
@@ -229,15 +232,11 @@ export function useEngine(
         stopAt(job, bounded.program, state.playUntil != null)
         return
       }
-      let program = bounded.program
-      const skipped = nextProgramAfterCut(job, program)
-      if (skipped != null) program = skipped
-      else if (advanced.clock === 'media' && !bounded.looped) {
-        program = Math.max(lastProgram, program)
-      }
+      const program = bounded.program
       const look = sampleProgram(job, program)
       const switched = lastInput != null && look.incomingInput != null && lastInput !== look.incomingInput
       const hard =
+        advanced.hard ||
         switched ||
         shouldHardSeek({
           lastSource: switched ? null : lastSource,
@@ -247,7 +246,7 @@ export function useEngine(
           fps,
           clock: advanced.clock,
           looped: bounded.looped,
-          cut: skipped != null
+          cut: advanced.hard && advanced.clock === 'wall'
         })
       lastSource = look.incomingSource
       lastInput = look.incomingInput

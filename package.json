@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
     "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "lint:theme": "bun src/renderer/src/lib/themeGuard.ts",
     "test": "bun test src/renderer/src/lib",
     "mcp": "bun src/mcp/server.ts"
   },

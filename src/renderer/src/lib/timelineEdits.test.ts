@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { suggestionsFromLoudness, suggestionsFromSilence, suggestionsFromStatic } from './analysis'
 import { createDemoProject } from './demo'
 import { buildEditBlocks, editBlockCounts, filterEditBlocks } from './timelineEdits'
 import { autoHideEmptyStackTrack, findRevealableStackTrack, trackLaneName } from './timelineTracks'
@@ -18,6 +19,21 @@ describe('timeline edits filters', () => {
     expect(blocks.some((b) => b.label === 'Demo')).toBe(true)
     expect(blocks.some((b) => b.label === 'Take 1' || b.label === 'Thesis')).toBe(true)
     expect(blocks.some((b) => b.label === 'Retake')).toBe(true)
+    const stillProject = {
+      ...createDemoProject(),
+      suggestions: suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [{ start: 1.8, end: 8.2 }])
+    }
+    expect(buildEditBlocks(stillProject).some((b) => b.label === 'Still')).toBe(true)
+    const staticProject = {
+      ...createDemoProject(),
+      suggestions: suggestionsFromStatic([{ start: 2, end: 6 }])
+    }
+    expect(buildEditBlocks(staticProject).some((b) => b.label === 'Static')).toBe(true)
+    const hotProject = {
+      ...createDemoProject(),
+      suggestions: suggestionsFromLoudness([{ start: 2, end: 4, lufs: -8 }], 10).filter((s) => s.action === 'volume')
+    }
+    expect(buildEditBlocks(hotProject).some((b) => b.label === 'Hot')).toBe(true)
     const withKeep = buildEditBlocks({
       ...createDemoProject(),
       tags: [{ id: 'keep1', start: 0.4, end: 1.2, kind: 'keep' }]

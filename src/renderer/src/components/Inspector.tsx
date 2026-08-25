@@ -16,8 +16,9 @@ import {
   type InspectorAction,
   type InspectorNext
 } from '../lib/contextActions'
-import { neighborScene } from '../lib/sceneChip'
+import { captionDefaults } from '../lib/theme'
 import { takeFamily } from '../lib/sceneAnalysis'
+import { neighborScene } from '../lib/sceneChip'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
   currentDocumentTitle,
@@ -204,7 +205,13 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           <>
             <HelperHead
               headline={exporting ? 'Export in progress' : `Analyzing · ${analyzing}`}
-              detail={exporting ? 'Writing the program you see.' : 'Import is building the transcript and suggestions.'}
+              detail={
+                exporting
+                  ? analyzing && /transcript|whisper/i.test(analyzing)
+                    ? 'Writing the program. Transcription is parked until this finishes.'
+                    : 'Writing the program you see.'
+                  : 'Import is building the transcript and suggestions.'
+              }
             />
             <button
               className="chip"
@@ -1359,8 +1366,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </Field>
                 <Field label="Fill">
                   <ColorField
-                    value={overlayClip.style?.fill ?? '#F4EEE4'}
-                    fallback="#F4EEE4"
+                    value={overlayClip.style?.fill ?? captionDefaults().fill}
+                    fallback={captionDefaults().fill}
                     onChange={(fill) =>
                       dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { fill } })
                     }
@@ -1368,8 +1375,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </Field>
                 <Field label="Stroke">
                   <ColorField
-                    value={overlayClip.style?.stroke ?? '#16140F'}
-                    fallback="#16140F"
+                    value={overlayClip.style?.stroke ?? captionDefaults().stroke}
+                    fallback={captionDefaults().stroke}
                     onChange={(stroke) =>
                       dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { stroke } })
                     }

@@ -8,7 +8,7 @@ import {
   type Project,
   type Word
 } from '../types'
-import { DEFAULT_SPEAKER_COLOR } from './theme'
+import { defaultSpeakerColor } from './theme'
 import { detectRepeats, suggestionsFromSilence } from './analysis'
 import { parseTranscriptJson } from './transcript'
 import { uid } from './time'
@@ -50,7 +50,7 @@ export function createEmptyProject(name = 'Untitled'): Project {
     ],
     transcript: {
       words: [],
-      speakers: [{ id: 'ryan', name: 'Speaker 1', color: DEFAULT_SPEAKER_COLOR }]
+      speakers: [{ id: 'ryan', name: 'Speaker 1', color: defaultSpeakerColor() }]
     },
     cuts: [],
     splits: [],
@@ -165,7 +165,7 @@ export function createDemoProject(): Project {
     },
     transcript: {
       speakers: [
-        { id: 'ryan', name: 'Ryan', color: DEFAULT_SPEAKER_COLOR }
+        { id: 'ryan', name: 'Ryan', color: defaultSpeakerColor() }
       ],
       words
     },

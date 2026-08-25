@@ -10,7 +10,8 @@ import {
   transcriptionsUrl,
   type AsrCue,
   type AsrResult,
-  type TranscriptKind
+  type TranscriptKind,
+  type TranscribeProgress
 } from '../shared/asr'
 import { WhisperUnavailable, isJobCancelled, throwIfAborted } from '../shared/mediaJob'
 import {
@@ -22,7 +23,17 @@ import {
   whisperSpawnEnv
 } from './asrLocal'
 import { runChild, withTempDir } from './childJob'
-import { asrCachePath, readJsonCache, writeJsonCache } from './mediaCache'
+import type { ChildProcess } from 'node:child_process'
+import {
+  asrChunkWindows,
+  asrChunksComplete,
+  mergeAsrChunks,
+  pendingAsrChunks,
+  shiftAsrCues,
+  wantsChunkedAsr,
+  type AsrChunkResult
+} from '../shared/asrChunks'
+import { asrCachePath, asrChunkCachePath, readJsonCache, writeJsonCache } from './mediaCache'
 
 export interface ModelEndpointOpts {
   kind?: string
@@ -33,10 +44,7 @@ export interface ModelEndpointOpts {
   skipInstall?: boolean
 }
 
-export interface TranscribeProgress {
-  stage: 'prepare' | 'install' | 'audio' | 'run' | 'parse' | 'done'
-  ratio: number
-}
+export type { TranscribeProgress }
 
 export interface AsrPathStatus {
   kind: TranscriptKind
@@ -48,10 +56,19 @@ export interface AsrPathStatus {
 
 type ProgressFn = (info: TranscribeProgress) => void
 
+type NoteFn = (
+  stage: TranscribeProgress['stage'],
+  ratio: number,
+  extra?: Pick<TranscribeProgress, 'cues' | 'chunk'>
+) => void
+
+let transcribeChildHook: ((child: ChildProcess) => void) | undefined
+
 function run(cmd: string, args: string[], signal?: AbortSignal): Promise<string> {
   return runChild(cmd, args, {
     signal,
     kind: 'import',
+    onSpawn: transcribeChildHook,
     env: whisperSpawnEnv(cmd),
     missing:
       cmd === 'ffmpeg' || cmd === 'ffprobe'
@@ -168,6 +185,112 @@ async function extractWav(file: string, dir: string, signal?: AbortSignal): Prom
   const wav = join(dir, 'audio.wav')
   await run('ffmpeg', ['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav], signal)
   return wav
+}
+
+async function probeDuration(file: string, signal?: AbortSignal): Promise<number> {
+  const raw = await run(
+    'ffprobe',
+    ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file],
+    signal
+  )
+  const n = Number(String(raw).trim().split(/\s+/)[0])
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+type AsrChunkCacheDoc = { v: number; duration: number; chunks: AsrChunkResult[] }
+
+async function loadAsrChunks(
+  file: string,
+  kind: string,
+  model: string,
+  extra: string
+): Promise<AsrChunkResult[]> {
+  const hit = await readJsonCache<AsrChunkCacheDoc>(asrChunkCachePath(file, kind, model, extra))
+  if (hit?.v === 1 && Array.isArray(hit.chunks)) return hit.chunks
+  return []
+}
+
+async function saveAsrChunks(
+  file: string,
+  kind: string,
+  model: string,
+  extra: string,
+  duration: number,
+  chunks: AsrChunkResult[]
+): Promise<void> {
+  await writeJsonCache(asrChunkCachePath(file, kind, model, extra), { v: 1, duration, chunks }).catch(
+    () => undefined
+  )
+}
+
+async function sliceWav(
+  full: string,
+  dest: string,
+  start: number,
+  duration: number,
+  signal?: AbortSignal
+): Promise<void> {
+  await run(
+    'ffmpeg',
+    ['-y', '-ss', start.toFixed(3), '-t', Math.max(0.05, duration).toFixed(3), '-i', full, dest],
+    signal
+  )
+}
+
+async function transcribeOneWindow(
+  kind: TranscriptKind,
+  file: string,
+  model: string | undefined,
+  opts: ModelEndpointOpts,
+  signal?: AbortSignal
+): Promise<AsrCue[]> {
+  if (kind === 'openai-compatible') return flatten(await transcribeHttp(file, opts, signal)) ?? []
+  return flatten(await transcribeCli(kind, file, model, signal)) ?? []
+}
+
+async function transcribeChunked(
+  file: string,
+  kind: TranscriptKind,
+  model: string,
+  extra: string,
+  opts: ModelEndpointOpts,
+  duration: number,
+  note: NoteFn,
+  signal?: AbortSignal
+): Promise<AsrCue[] | null> {
+  const windows = asrChunkWindows(duration)
+  if (!windows.length) return null
+  const saved = opts.force ? [] : await loadAsrChunks(file, kind, model, extra)
+  const pending = pendingAsrChunks(windows, saved)
+  note('audio', 0.18)
+  return withTempDir('speechedit-asr-chunks-', async (dir) => {
+    const full = pending.length ? join(dir, 'full.wav') : ''
+    if (pending.length) {
+      await run('ffmpeg', ['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', full], signal)
+    }
+    const done: AsrChunkResult[] = [...saved]
+    let finished = windows.length - pending.length
+    const emitPartial = () => {
+      const cues = mergeAsrChunks(done)
+      note('run', 0.2 + 0.7 * (finished / windows.length), {
+        ...(cues.length ? { cues } : {}),
+        chunk: { finished, total: windows.length }
+      })
+    }
+    if (finished > 0) emitPartial()
+    for (const window of pending) {
+      throwIfAborted(signal, 'import')
+      const slice = join(dir, `c${window.start.toFixed(0)}.wav`)
+      await sliceWav(full, slice, window.start, window.end - window.start, signal)
+      const local = await transcribeOneWindow(kind, slice, model || undefined, opts, signal)
+      done.push({ ...window, cues: shiftAsrCues(local, window.start) })
+      await saveAsrChunks(file, kind, model, extra, duration, done)
+      finished += 1
+      emitPartial()
+    }
+    const cues = mergeAsrChunks(done)
+    return cues.length ? cues : null
+  })
 }
 
 async function transcribeWhisperCpp(
@@ -357,14 +480,17 @@ export async function transcribeMedia(
   file: string,
   opts?: ModelEndpointOpts,
   onProgress?: ProgressFn,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onSpawn?: (child: ChildProcess) => void
 ): Promise<AsrCue[] | null> {
   const kind = coerceTranscriptKind(opts?.kind)
   const model = opts?.model ?? ''
   const extra = asrExtra(kind, opts)
   const force = Boolean(opts?.force)
-  const note = (stage: TranscribeProgress['stage'], ratio: number) => onProgress?.({ stage, ratio })
-
+  const note: NoteFn = (stage, ratio, extra) => onProgress?.({ stage, ratio, ...extra })
+  const prevHook = transcribeChildHook
+  transcribeChildHook = onSpawn
+  try {
   if (kind === 'off') {
     note('done', 1)
     return null
@@ -375,8 +501,30 @@ export async function transcribeMedia(
   if (!force) {
     const hit = await readAsrCacheHit(file, kind, model, extra)
     if (hit) {
-      note('done', 1)
+      note('done', 1, { cues: hit })
       return hit
+    }
+  }
+  const duration = await probeDuration(file, signal).catch((err) => {
+    if (isJobCancelled(err)) throw err
+    return 0
+  })
+  if (!force && wantsChunkedAsr(duration)) {
+    const windows = asrChunkWindows(duration)
+    const keys = [model, 'tiny', 'whisper-1', '', ggmlModelPath(model) ?? '']
+    const kinds = kind === 'openai-compatible' ? [kind] : localTranscriptOrder(kind)
+    for (const next of kinds) {
+      for (const key of [...new Set(keys)]) {
+        const saved = await loadAsrChunks(file, next, key, extra)
+        if (!asrChunksComplete(windows, saved)) continue
+        const cues = mergeAsrChunks(saved)
+        if (!cues.length) continue
+        note('parse', 0.9, { cues, chunk: { finished: windows.length, total: windows.length } })
+        note('done', 1, { cues, chunk: { finished: windows.length, total: windows.length } })
+        await saveAsrCache(file, next, key || model, extra, cues)
+        if (kind !== next || key !== model) await saveAsrCache(file, kind, model, extra, cues)
+        return cues
+      }
     }
   }
   if (shouldInstallLocalWhisper(kind) && !(await whisperCppReady())) {
@@ -386,18 +534,20 @@ export async function transcribeMedia(
     }
   }
   try {
+    note('audio', 0.2)
+    const chunked = wantsChunkedAsr(duration)
+
     if (kind === 'openai-compatible') {
-      note('audio', 0.2)
       note('run', 0.45)
-      const result = await transcribeHttp(file, opts ?? {}, signal)
-      note('parse', 0.9)
-      note('done', 1)
-      const cues = flatten(result)
+      const cues = chunked
+        ? await transcribeChunked(file, kind, model, extra, opts ?? {}, duration, note, signal)
+        : flatten(await transcribeHttp(file, opts ?? {}, signal))
+      note('parse', 0.9, cues?.length ? { cues } : undefined)
+      note('done', 1, cues?.length ? { cues } : undefined)
       if (cues) await saveAsrCache(file, kind, model, extra, cues)
       return cues
     }
 
-    note('audio', 0.2)
     const order = localTranscriptOrder(kind)
     let lastUnavailable: Error | null = null
     for (const next of order) {
@@ -407,12 +557,13 @@ export async function transcribeMedia(
       }
       try {
         note('run', 0.35)
-        const result = await transcribeCli(next, file, opts?.model, signal)
-        const cues = flatten(result)
+        const actualModel = next === 'whisper-cpp' ? ggmlModelPath(model) || model : model
+        const cues = chunked
+          ? await transcribeChunked(file, next, actualModel, extra, opts ?? {}, duration, note, signal)
+          : flatten(await transcribeCli(next, file, opts?.model, signal))
         if (cues?.length) {
-          note('parse', 0.9)
-          note('done', 1)
-          const actualModel = next === 'whisper-cpp' ? ggmlModelPath(model) || model : model
+          note('parse', 0.9, { cues })
+          note('done', 1, { cues })
           await saveAsrCache(file, next, actualModel, extra, cues)
           if (kind !== next || actualModel !== model) await saveAsrCache(file, kind, model, extra, cues)
           return cues
@@ -432,5 +583,8 @@ export async function transcribeMedia(
   } catch (err) {
     note('done', 1)
     throw err
+  }
+  } finally {
+    transcribeChildHook = prevHook
   }
 }

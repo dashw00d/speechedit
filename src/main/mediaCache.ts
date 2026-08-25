@@ -30,6 +30,11 @@ export function asrCachePath(file: string, kind: string, model: string, extra = 
   return join(mediaCacheDir(), `${mediaCacheId(file)}.asr.${id}.json`)
 }
 
+export function asrChunkCachePath(file: string, kind: string, model: string, extra = ''): string {
+  const id = createHash('sha1').update(`${kind}\0${model}\0${extra}`).digest('hex').slice(0, 12)
+  return join(mediaCacheDir(), `${mediaCacheId(file)}.asr.${id}.chunks.json`)
+}
+
 export async function readJsonCache<T>(path: string): Promise<T | null> {
   if (!existsSync(path)) return null
   try {

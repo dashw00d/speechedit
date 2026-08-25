@@ -8,9 +8,13 @@ import {
   suggestionsFromEdges,
   suggestionsFromGaps,
   suggestionsFromPace,
+  leftoverKind,
+  leftoverReviewQueue,
+  suggestionsFromLoudness,
   suggestionsFromSilence,
   suggestionsFromStatic,
   suggestionsFromWordGaps,
+  volumeTowardLufs,
   withCutMargin
 } from './analysis'
 import { applyCommand, programLength } from './commands'
@@ -77,6 +81,8 @@ describe('margin-aware silence', () => {
     expect(hit.safe).toBe(false)
     expect(hit.action).toBe('review')
     expect(hit.label).toMatch(/still|demo/i)
+    expect(leftoverKind(hit)).toBe('still')
+    expect(leftoverKind({ ...hit, label: 'Breath 0.4s · 120ms pad', action: 'cut' })).toBe('breath')
   })
 
   test('word-gap breaths come from fixture words, not ffmpeg', () => {
@@ -143,10 +149,27 @@ describe('review-not-blind detectors', () => {
     expect(talking[0].type).toBe('low-motion')
     expect(talking[0].safe).toBe(false)
     expect(talking[0].action).toBe('review')
+    expect(leftoverKind(talking[0])).toBe('low-motion')
     const still = suggestionsFromStatic([{ start: 2, end: 6 }])
     expect(still[0].type).toBe('static')
     expect(still[0].safe).toBe(false)
     expect(still[0].action).toBe('speed')
+    expect(leftoverKind(still[0])).toBe('static')
+  })
+
+  test('hot audio is a volume leftover, not a keep-only review', () => {
+    expect(volumeTowardLufs(-8)).toBeCloseTo(0.398, 2)
+    const hits = suggestionsFromLoudness([{ start: 2, end: 4, lufs: -8 }], 10)
+    const hot = hits.find((s) => s.action === 'volume')
+    expect(hot?.safe).toBe(false)
+    expect(leftoverKind(hot!)).toBe('loud')
+    expect(hot?.volume).toBeCloseTo(volumeTowardLufs(-8), 3)
+    const screens = suggestionsFromStatic([{ start: 6, end: 9 }])
+    const queue = leftoverReviewQueue({
+      ...createEmptyProject('queue'),
+      suggestions: [...screens, hot!]
+    })
+    expect(queue.map((s) => leftoverKind(s))).toEqual(['static', 'loud'])
   })
 
   test('slow pace is review only', () => {

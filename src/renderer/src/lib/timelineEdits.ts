@@ -1,4 +1,5 @@
 import type { EditSuggestion, Project, RangeTag } from '../types'
+import { leftoverKind } from './analysis'
 import { sourceToProgramOf } from './resolver'
 
 export type EditBlockKind =
@@ -35,10 +36,15 @@ function suggestionDetail(s: EditSuggestion): string {
 
 function suggestionLaneLabel(s: EditSuggestion): string {
   if (s.applied) return 'Cut'
+  const leftover = leftoverKind(s)
+  if (leftover === 'still') return 'Still'
+  if (leftover === 'breath') return 'Breath'
+  if (leftover === 'static') return 'Static'
+  if (leftover === 'low-motion') return 'Talking'
+  if (leftover === 'loud') return 'Hot'
   if (s.type === 'silence') return 'Pause'
   if (s.type === 'filler') return 'Filler'
   if (s.type === 'repeat') return 'Retake'
-  if (s.type === 'static' || s.type === 'low-motion') return 'Static'
   if (s.type === 'loud') return 'Loud'
   return s.type
 }
@@ -109,7 +115,7 @@ export function buildEditBlocks(project: Project): EditBlock[] {
   }
 
   for (const s of project.suggestions) {
-    if (s.action === 'normalize' || s.action === 'review') continue
+    if (s.action === 'normalize' || s.type === 'pace') continue
     const start = sourceToProgramOf(project, s.start)
     const end = sourceToProgramOf(project, s.end)
     if (end <= start) continue

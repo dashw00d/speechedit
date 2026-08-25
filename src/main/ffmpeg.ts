@@ -19,18 +19,35 @@ import {
   ANALYSIS_CACHE_VERSION,
   LOOK_LANE_LIMIT,
   WorkLane,
+  audioLookArgs,
   loudnessDetectArgs,
+  parseLoudnessLog,
+  parseSilenceLog,
   sceneDetectArgs,
   silenceDetectArgs,
   thumbPassArgs,
   thumbSeekArgs,
   thumbSeekTimes,
+  wantsSeekPeaks,
   wantsSeekThumbs,
-  waveformLookArgs
+  WAVEFORM_SAMPLES,
+  waveformConcatArgs,
+  waveformConcatList,
+  waveformLookArgs,
+  waveformSeekBatchArgs,
+  chunkTimes,
+  peakSeekTimes,
+  SEEK_PEAK_BATCH
 } from '../shared/importLooks'
 import { JobCancelled, isJobCancelled, throwIfAborted, type MediaJobKind } from '../shared/mediaJob'
 import { parseStreamRotation, transposeFilters, type QuarterTurn } from '../shared/mediaOrient'
-import { isVariableFrameRate, proxyCacheMatchesSource } from '../shared/proxy'
+import {
+  estimateGopFromFlags,
+  isVariableFrameRate,
+  proxyCacheMatchesSource,
+  proxyGopSeekable,
+  proxyVideoArgs
+} from '../shared/proxy'
 import { killChild, runChild, withTempDir } from './childJob'
 import type { ModelEndpointOpts } from './transcribe'
 
@@ -244,6 +261,35 @@ export function proxyPartialPath(output: string): string {
   return `${output}.${process.pid}.partial.mp4`
 }
 
+/** Keyframe interval from the first ~2.5s of packets. Hour-scale files stay a cheap demux. */
+export async function probeProxyGop(file: string, signal?: AbortSignal): Promise<number> {
+  throwIfAborted(signal, 'import')
+  if (!file || !existsSync(file)) return 0
+  const raw = await run(
+    'ffprobe',
+    [
+      '-v',
+      'error',
+      '-select_streams',
+      'v:0',
+      '-read_intervals',
+      '%+2.5',
+      '-show_entries',
+      'packet=flags',
+      '-of',
+      'csv=p=0',
+      file
+    ],
+    signal,
+    'import'
+  )
+  const flags = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return estimateGopFromFlags(flags)
+}
+
 export async function makeProxy(file: string, output: string, signal?: AbortSignal): Promise<string> {
   throwIfAborted(signal, 'import')
   if (!file) throw new Error('Pick a media file to import.')
@@ -254,7 +300,14 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
   const info = await probe(file, signal)
   if (existsSync(output)) {
     const cached = await probe(output, signal).catch(() => null)
-    if (cached?.hasVideo && proxyCacheMatchesSource(info.duration, cached.duration)) return output
+    const gop = cached?.hasVideo ? await probeProxyGop(output, signal).catch(() => 0) : 0
+    if (
+      cached?.hasVideo &&
+      proxyCacheMatchesSource(info.duration, cached.duration) &&
+      proxyGopSeekable(gop)
+    ) {
+      return output
+    }
     await rm(output, { force: true }).catch(() => undefined)
   }
   const tmp = proxyPartialPath(output)
@@ -270,14 +323,7 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
     file,
     '-vf',
     [...orient, "scale='min(960,iw)':-2"].join(','),
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-crf',
-    '23',
-    '-pix_fmt',
-    'yuv420p',
+    ...proxyVideoArgs(info.fps),
     '-movflags',
     '+faststart'
   ]
@@ -295,15 +341,23 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
   }
 }
 
-export async function waveform(file: string, samples = 1800, signal?: AbortSignal): Promise<number[]> {
-  throwIfAborted(signal, 'import')
-  const cache = peaksCachePath(file)
-  const hit = await readJsonCache<{ v: number; samples: number; peaks: number[] }>(cache)
-  if (hit?.v === 1 && hit.samples === samples && Array.isArray(hit.peaks) && hit.peaks.length) {
-    return hit.peaks
+function windowPeaks(floats: Float32Array, windows: number): number[] {
+  const count = Math.max(1, windows)
+  if (!floats.length) return Array.from({ length: count }, () => 0)
+  const size = Math.max(1, Math.floor(floats.length / count))
+  const out: number[] = []
+  for (let i = 0; i < count; i++) {
+    let peak = 0
+    const start = i * size
+    const end = i === count - 1 ? floats.length : Math.min(floats.length, start + size)
+    for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(floats[j] ?? 0))
+    out.push(Math.min(1, peak))
   }
-  const args = waveformLookArgs(file)
-  return importLookLane.run(() => new Promise((resolve, reject) => {
+  return out
+}
+
+function ffmpegPcm(args: string[], signal?: AbortSignal): Promise<Float32Array> {
+  return new Promise((resolve, reject) => {
     const child = spawn('ffmpeg', args)
     const chunks: Buffer[] = []
     const onAbort = () => killChild(child)
@@ -330,23 +384,94 @@ export async function waveform(file: string, samples = 1800, signal?: AbortSigna
           return
         }
         const buf = Buffer.concat(chunks)
-        const floats = new Float32Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 4))
-        const bucket = Math.max(1, Math.floor(floats.length / samples))
-        const out: number[] = []
-        for (let i = 0; i < samples; i++) {
-          let peak = 0
-          const start = i * bucket
-          for (let j = start; j < start + bucket && j < floats.length; j++) {
-            peak = Math.max(peak, Math.abs(floats[j]))
-          }
-          out.push(Math.min(1, peak))
-        }
-        void writeJsonCache(cache, { v: 1, samples, peaks: out })
-          .catch(() => undefined)
-          .then(() => resolve(out))
+        resolve(new Float32Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 4)))
       })
     })
-  }), signal, 'import')
+  })
+}
+
+async function decodeWaveform(file: string, samples: number, signal?: AbortSignal): Promise<number[]> {
+  const floats = await importLookLane.run(() => ffmpegPcm(waveformLookArgs(file), signal), signal, 'import')
+  return windowPeaks(floats, samples)
+}
+
+async function concatSeekWaveform(file: string, times: number[], signal?: AbortSignal): Promise<number[]> {
+  return withTempDir('speechedit-peaks-', async (dir) => {
+    const list = join(dir, 'windows.concat')
+    await writeFile(list, waveformConcatList(file, times))
+    const floats = await importLookLane.run(() => ffmpegPcm(waveformConcatArgs(list), signal), signal, 'import')
+    return windowPeaks(floats, times.length)
+  })
+}
+
+async function batchSeekWaveform(file: string, times: number[], signal?: AbortSignal): Promise<number[]> {
+  const groups = chunkTimes(times, SEEK_PEAK_BATCH)
+  const peaks = new Array<number>(times.length)
+  let offset = 0
+  await Promise.all(
+    groups.map((group) => {
+      const start = offset
+      offset += group.length
+      return importLookLane.run(async () => {
+        const floats = await ffmpegPcm(waveformSeekBatchArgs(file, group), signal)
+        windowPeaks(floats, group.length).forEach((peak, i) => {
+          peaks[start + i] = peak
+        })
+      }, signal, 'import')
+    })
+  )
+  return peaks.map((peak) => peak ?? 0)
+}
+
+async function seekWaveform(
+  file: string,
+  duration: number,
+  samples: number,
+  signal?: AbortSignal
+): Promise<number[]> {
+  const times = peakSeekTimes(duration, samples)
+  try {
+    return await concatSeekWaveform(file, times, signal)
+  } catch (err) {
+    if (isJobCancelled(err)) throw err
+    return batchSeekWaveform(file, times, signal)
+  }
+}
+
+export async function waveform(
+  file: string,
+  samples = WAVEFORM_SAMPLES,
+  signal?: AbortSignal
+): Promise<number[]> {
+  throwIfAborted(signal, 'import')
+  const cache = peaksCachePath(file)
+  const hit = await readJsonCache<{ v: number; samples: number; peaks: number[] }>(cache)
+  if (hit?.v === 1 && hit.samples === samples && Array.isArray(hit.peaks) && hit.peaks.length) {
+    return hit.peaks
+  }
+  let duration = 0
+  try {
+    duration = (await probe(file, signal)).duration
+  } catch (err) {
+    if (isJobCancelled(err)) throw err
+  }
+  const peaks = wantsSeekPeaks(duration)
+    ? await seekWaveform(file, duration, samples, signal).catch((err) => {
+        if (isJobCancelled(err)) throw err
+        return decodeWaveform(file, samples, signal)
+      })
+    : await decodeWaveform(file, samples, signal)
+  await writeJsonCache(cache, { v: 1, samples, peaks }).catch(() => undefined)
+  return peaks
+}
+
+async function lookDuration(file: string, signal?: AbortSignal): Promise<number> {
+  try {
+    return (await probe(file, signal)).duration
+  } catch (err) {
+    if (isJobCancelled(err)) throw err
+    return 0
+  }
 }
 
 export async function detectSilence(
@@ -355,20 +480,13 @@ export async function detectSilence(
   min = 0.35,
   signal?: AbortSignal
 ): Promise<SilenceGap[]> {
+  const duration = await lookDuration(file, signal)
   const text = await importLookLane.run(
-    () => run('ffmpeg', silenceDetectArgs(file, threshold, min), signal, 'import'),
+    () => run('ffmpeg', silenceDetectArgs(file, threshold, min, duration), signal, 'import'),
     signal,
     'import'
   )
-  const starts: number[] = []
-  const gaps: SilenceGap[] = []
-  for (const line of text.split('\n')) {
-    const start = line.match(/silence_start: ([\d.]+)/)
-    const end = line.match(/silence_end: ([\d.]+)/)
-    if (start) starts.push(Number(start[1]))
-    if (end && starts.length) gaps.push({ start: starts.pop()!, end: Number(end[1]) })
-  }
-  return gaps
+  return parseSilenceLog(text)
 }
 
 export async function detectScenes(
@@ -401,20 +519,13 @@ export async function detectLoudness(
   file: string,
   signal?: AbortSignal
 ): Promise<{ start: number; end: number; lufs: number }[]> {
+  const duration = await lookDuration(file, signal)
   const text = await importLookLane.run(
-    () => run('ffmpeg', loudnessDetectArgs(file), signal, 'import'),
+    () => run('ffmpeg', loudnessDetectArgs(file, duration), signal, 'import'),
     signal,
     'import'
   )
-  const windows: { start: number; end: number; lufs: number }[] = []
-  for (const line of text.split('\n')) {
-    const m = line.match(/t:\s*([\d.]+).*I:\s*([-\d.]+)/)
-    if (m) {
-      const t = Number(m[1])
-      windows.push({ start: Math.max(0, t - 0.4), end: t, lufs: Number(m[2]) })
-    }
-  }
-  return windows.filter((w) => w.lufs > -14)
+  return parseLoudnessLog(text)
 }
 
 export interface CachedAnalysis {
@@ -436,18 +547,30 @@ export async function analyzeMedia(
     return { silence: hit.silence, scenes: hit.scenes, loudness: hit.loudness }
   }
   onProgress?.({ stage: 'analyze', ratio: 0.2 })
-  const silence = await detectSilence(file, '-30dB', 0.35, signal)
-  onProgress?.({ stage: 'analyze', ratio: 0.5 })
-  const [scenes, loudness] = await Promise.all([
-    detectScenes(file, signal).catch((err) => {
-      if (isJobCancelled(err)) throw err
-      return { times: [], staticRegions: [] }
-    }),
-    detectLoudness(file, signal).catch((err) => {
-      if (isJobCancelled(err)) throw err
+  const duration = await lookDuration(file, signal)
+  const scenesP = detectScenes(file, signal).catch((err) => {
+    if (isJobCancelled(err)) throw err
+    return { times: [], staticRegions: [] }
+  })
+  let silence: SilenceGap[]
+  let loudness: CachedAnalysis['loudness']
+  try {
+    const audioText = await importLookLane.run(
+      () => run('ffmpeg', audioLookArgs(file, { duration }), signal, 'import'),
+      signal,
+      'import'
+    )
+    silence = parseSilenceLog(audioText)
+    loudness = parseLoudnessLog(audioText)
+  } catch (err) {
+    if (isJobCancelled(err)) throw err
+    silence = await detectSilence(file, '-30dB', 0.35, signal)
+    loudness = await detectLoudness(file, signal).catch((loudErr) => {
+      if (isJobCancelled(loudErr)) throw loudErr
       return []
     })
-  ])
+  }
+  const scenes = await scenesP
   onProgress?.({ stage: 'done', ratio: 1 })
   await writeJsonCache(cache, { v: ANALYSIS_CACHE_VERSION, silence, scenes, loudness }).catch(() => undefined)
   return { silence, scenes, loudness }

@@ -13,6 +13,7 @@ import {
   transcriptChoices,
   wordsInspectorDetail
 } from './contextActions'
+import { suggestionsFromSilence, suggestionsFromStatic } from './analysis'
 import { createDemoProject } from './demo'
 
 describe('transcript context choices', () => {
@@ -95,6 +96,53 @@ describe('suggest task copy', () => {
     expect(task.showWatch).toBe(true)
     expect(task.applyLabel).toBeNull()
     expect(task.reviewCount).toBeGreaterThan(0)
+  })
+
+  test('silent stills get Cut and Keep in the inspector', () => {
+    const [still] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [{ start: 1.8, end: 8.2 }])
+    const project = { ...createDemoProject(), suggestions: [...createDemoProject().suggestions, still] }
+    const detail = suggestionInspectorDetail(project, still.id)
+    expect(detail?.actions.some((a) => a.id === 'cut' && a.command.type === 'applySuggestion')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'dismissSuggestion')).toBe(true)
+    expect(detail?.explanation).toMatch(/silent demo|dead air/i)
+  })
+
+  test('static screens get Speed and Keep in the inspector', () => {
+    const [screen] = suggestionsFromStatic([{ start: 2, end: 6 }])
+    const project = { ...createDemoProject(), suggestions: [screen] }
+    const task = suggestTask({
+      ...project,
+      suggestions: [
+        ...createDemoProject().suggestions.map((s) => ({ ...s, applied: s.safe })),
+        screen
+      ]
+    })
+    expect(task.headline).toMatch(/static screen/)
+    expect(task.reviewLabel).toBe('Review 1 screen')
+    const detail = suggestionInspectorDetail(project, screen.id)
+    expect(detail?.title).toBe('Static screen')
+    expect(detail?.actions.some((a) => a.id === 'apply' && a.label.startsWith('Speed'))).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'dismissSuggestion')).toBe(true)
+    expect(detail?.explanation).toMatch(/loading screen|Speed or Keep/i)
+  })
+
+  test('hot audio gets Quiet and Keep in the inspector', () => {
+    const hot = suggestionsFromLoudness([{ start: 2, end: 4, lufs: -8 }], 10).find((s) => s.action === 'volume')!
+    const project = { ...createDemoProject(), suggestions: [hot] }
+    const task = suggestTask({
+      ...project,
+      suggestions: [
+        ...createDemoProject().suggestions.map((s) => ({ ...s, applied: s.safe })),
+        hot
+      ]
+    })
+    expect(task.headline).toMatch(/hot spike/)
+    expect(task.reviewLabel).toBe('Review 1 spike')
+    const detail = suggestionInspectorDetail(project, hot.id)
+    expect(detail?.title).toBe('Hot audio')
+    expect(detail?.actions.some((a) => a.id === 'apply' && a.label === 'Quiet')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'dismissSuggestion')).toBe(true)
+    expect(detail?.explanation).toMatch(/Quiet or Keep/i)
   })
 })
 

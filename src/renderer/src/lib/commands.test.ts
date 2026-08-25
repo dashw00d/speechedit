@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { runAgent } from './agent'
+import { suggestionsFromLoudness } from './analysis'
 import { applyCommand, findMovableClip, isPrimaryLane, programLength } from './commands'
 import { buildExportJob, duckGainAt } from './exportJob'
 import { createDemoProject, createEmptyProject } from './demo'
@@ -125,6 +126,43 @@ describe('command bus', () => {
     expect(filled.transcript.words.map((w) => w.text)).toEqual(['hello', 'world'])
     expect(filled.transcript.words[1].start).toBeCloseTo(2.2, 5)
     expect(filled.analysis.silence.some((row) => Math.abs(row.start - 3) < 0.01)).toBe(true)
+  })
+
+  test('attachTakeIntel replaces growing ASR words on the same take', () => {
+    const first = {
+      ...createEmptyProject('grow'),
+      sourceDuration: 12,
+      assets: {
+        src: {
+          id: 'src',
+          path: '/tmp/a.mp4',
+          name: 'a.mp4',
+          kind: 'video' as const,
+          duration: 12,
+          waveform: [],
+          sourceOffset: 0
+        }
+      },
+      transcript: {
+        words: [{ id: 'hello', text: 'hello', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      }
+    }
+    const grown = applyCommand(first, {
+      type: 'attachTakeIntel',
+      assetId: 'src',
+      words: [
+        { id: 'hello', text: 'hello', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false },
+        { id: 'world', text: 'world', start: 9.5, end: 10.1, speaker: 'ryan', deleted: false }
+      ]
+    })
+    expect(grown.transcript.words.map((w) => w.text)).toEqual(['hello', 'world'])
+    const stale = applyCommand(grown, {
+      type: 'attachTakeIntel',
+      assetId: 'src',
+      words: [{ id: 'early', text: 'early', start: 0.2, end: 0.4, speaker: 'ryan', deleted: false }]
+    })
+    expect(stale.transcript.words.map((w) => w.text)).toEqual(['hello', 'world'])
   })
 
   test('setAssetLooks and setAnalysis ride the command bus', () => {
@@ -677,6 +715,93 @@ describe('intelligence and MCP', () => {
     const hits = suggestionsFromSilence([{ start: 10, end: 16 }], 0.12, [{ start: 10, end: 16 }])
     expect(hits[0].safe).toBe(false)
     expect(hits[0].action).toBe('review')
+  })
+
+  test('applySuggestion cuts a silent still the user confirmed', () => {
+    const [still] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [{ start: 1.8, end: 8.2 }])
+    const project = {
+      ...createEmptyProject('still'),
+      sourceDuration: 10,
+      suggestions: [still]
+    }
+    const safe = applyCommand(project, { type: 'applySafeSuggestions' })
+    expect(safe.suggestions[0]?.applied).toBe(false)
+    expect(programLength(safe)).toBeCloseTo(10, 1)
+    const cut = applyCommand(project, { type: 'applySuggestion', suggestionId: still.id })
+    expect(cut.suggestions[0]?.applied).toBe(true)
+    expect(programLength(cut)).toBeLessThan(10 - 3)
+  })
+
+  test('applySuggestion speeds a quiet static screen and leaves talking-over-static alone', () => {
+    const [screen] = suggestionsFromStatic([{ start: 2, end: 6 }])
+    const [talking] = suggestionsFromStatic([{ start: 2, end: 6 }], [
+      { id: 'w1', text: 'hello', start: 2.2, end: 2.6, speaker: 'S1', deleted: false }
+    ])
+    const project = {
+      ...createEmptyProject('static'),
+      sourceDuration: 10,
+      suggestions: [screen]
+    }
+    const safe = applyCommand(project, { type: 'applySafeSuggestions' })
+    expect(safe.suggestions[0]?.applied).toBe(false)
+    expect(programLength(safe)).toBeCloseTo(10, 1)
+    const sped = applyCommand(project, { type: 'applySuggestion', suggestionId: screen.id })
+    expect(sped.suggestions[0]?.applied).toBe(true)
+    expect(programLength(sped)).toBeCloseTo(7, 1)
+    const talkingProject = { ...project, suggestions: [talking] }
+    const kept = applyCommand(talkingProject, { type: 'applySuggestion', suggestionId: talking.id })
+    expect(kept.suggestions[0]?.applied).toBe(false)
+    expect(programLength(kept)).toBeCloseTo(10, 1)
+  })
+
+  test('applySuggestion quiets a hot spike and leaves normalize for safe apply', () => {
+    const hits = suggestionsFromLoudness([{ start: 2, end: 4, lufs: -8 }], 10)
+    const hot = hits.find((s) => s.action === 'volume')!
+    const project = {
+      ...createEmptyProject('hot'),
+      sourceDuration: 10,
+      suggestions: hits
+    }
+    const safe = applyCommand(project, { type: 'applySafeSuggestions' })
+    expect(safe.suggestions.find((s) => s.id === hot.id)?.applied).toBe(false)
+    expect(safe.audioMaster.normalize).toBe(true)
+    const quiet = applyCommand(project, { type: 'applySuggestion', suggestionId: hot.id })
+    expect(quiet.suggestions.find((s) => s.id === hot.id)?.applied).toBe(true)
+    const seg = resolveSegments(quiet).find((s) => s.inPoint <= 3 && s.outPoint >= 3)
+    expect(seg?.volume).toBeCloseTo(hot.volume ?? 0.4, 2)
+    const back = applyCommand(quiet, { type: 'revertSuggestion', suggestionId: hot.id })
+    const restored = resolveSegments(back).find((s) => s.inPoint <= 3 && s.outPoint >= 3)
+    expect(restored?.volume).toBeCloseTo(1, 2)
+  })
+
+  test('dismissSuggestions drops leftover breaths in one undoable command', () => {
+    const project = {
+      ...createEmptyProject('air'),
+      suggestions: [
+        {
+          id: 'b1',
+          type: 'silence' as const,
+          start: 1,
+          end: 1.4,
+          action: 'cut' as const,
+          label: 'Breath 0.5s · 120ms pad',
+          safe: false,
+          applied: false
+        },
+        {
+          id: 's1',
+          type: 'silence' as const,
+          start: 2,
+          end: 8,
+          action: 'review' as const,
+          label: 'Silent still 6.0s · maybe a demo — tag before cutting',
+          safe: false,
+          applied: false
+        }
+      ]
+    }
+    const next = applyCommand(project, { type: 'dismissSuggestions', suggestionIds: ['b1'] })
+    expect(next.suggestions.map((s) => s.id)).toEqual(['s1'])
   })
 
   test('apply model suggestions cuts only model-type rows', () => {

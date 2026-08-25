@@ -7,6 +7,7 @@ export {
   JobGate,
   ImportLinger,
   beginExportExclusive,
+  endExportExclusive,
   busyMessage,
   explainImportError,
   isJobBusy,

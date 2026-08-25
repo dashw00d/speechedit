@@ -27,19 +27,51 @@ import {
 } from './mediaJobs'
 import { openDocumentFromRaw } from './projectDocument'
 import { forgetRecent, rememberRecent } from './recents'
-import { applySafeFirstEdit, describeFirstEditResult, looksSafeSpans, type FirstEditPhase } from './firstEdit'
+import {
+  applyAutoCaptions,
+  applySafeFirstEdit,
+  applyStreamingFirstEdit,
+  describeFirstEditResult,
+  dismissLeftoverBreaths,
+  emptyCaptionSession,
+  looksSafeSpans,
+  offeredWordSpans,
+  startLeftoverReview,
+  type CaptionAutoSession,
+  type FirstEditPhase
+} from './firstEdit'
 import { parseAnyTranscript } from './transcript'
 import { useEditor } from '../store'
 import type { Command } from '../types'
+
+function leftoverReviewToast(kind: 'still' | 'static' | 'loud'): string {
+  if (kind === 'still') return 'Silent stills need a listen. Cut or Keep.'
+  if (kind === 'static') return 'Static screens can be sped up. Speed or Keep.'
+  return 'Hot audio can be quieted. Quiet or Keep.'
+}
+
+function offerLeftoverReview(onToast: ToastFn, session: { reviewToast?: boolean }): void {
+  dismissLeftoverBreaths()
+  const kind = startLeftoverReview()
+  if (!kind || session.reviewToast) return
+  session.reviewToast = true
+  onToast(leftoverReviewToast(kind))
+}
 
 function toastAfterIntel(
   onToast: ToastFn,
   fallback: string,
   phase: FirstEditPhase = 'all',
-  skip: { start: number; end: number }[] = []
+  skip: { start: number; end: number }[] = [],
+  session: CaptionAutoSession & { reviewToast?: boolean } = emptyCaptionSession()
 ): void {
   const result = applySafeFirstEdit(phase, skip)
   onToast(result ? describeFirstEditResult(result, phase) : fallback)
+  if (applyAutoCaptions(session) && !session.captionsToast) {
+    session.captionsToast = true
+    onToast('Captions from the transcript.')
+  }
+  offerLeftoverReview(onToast, session)
 }
 
 export type ToastFn = (msg: string) => void
@@ -86,7 +118,17 @@ function inspectMediaCallbacks(
 ) {
   const openedId = { current: '' }
   const released = { current: false }
-  const looksFirstEdit = { done: false, skip: [] as { start: number; end: number }[] }
+  const looksFirstEdit = {
+    done: false,
+    skip: [] as { start: number; end: number }[],
+    wordsUndo: false,
+    wordsToast: false,
+    captionsUndo: false,
+    skipCaptions: false,
+    captionCount: 0,
+    captionsToast: false,
+    reviewToast: false
+  }
   let pendingLooks = true
   let pendingProxy = false
 
@@ -124,7 +166,25 @@ function inspectMediaCallbacks(
         looksFirstEdit.skip = looksSafeSpans(useEditor.getState().project)
         const result = applySafeFirstEdit('looks')
         if (result) onToast(describeFirstEditResult(result, 'looks'))
+        offerLeftoverReview(onToast, looksFirstEdit)
         await releaseFfmpegAfterLooks()
+      },
+      onWords: (partial: InspectedTake) => {
+        if (!openedId.current || !useEditor.getState().project.assets[openedId.current]) return
+        replayCommands(importedWordsCommands(useEditor.getState().project, partial))
+        if (!looksFirstEdit.done) return
+        const captioned = applyAutoCaptions(looksFirstEdit)
+        if (captioned && !looksFirstEdit.captionsToast) {
+          looksFirstEdit.captionsToast = true
+          onToast('Captions from the transcript.')
+        }
+        const offered = offeredWordSpans(useEditor.getState().project, looksFirstEdit.skip)
+        const result = applyStreamingFirstEdit(looksFirstEdit.skip, looksFirstEdit)
+        looksFirstEdit.skip = [...looksFirstEdit.skip, ...offered]
+        if (result && !looksFirstEdit.wordsToast) {
+          looksFirstEdit.wordsToast = true
+          onToast(`${describeFirstEditResult(result, 'fillers')} Still transcribing.`)
+        }
       },
       onStage: inspectStageHandler(onToast, () => Boolean(openedId.current), whisperNote, label)
     }
@@ -156,7 +216,8 @@ export async function importMediaFromPath(file: string, onToast: ToastFn): Promi
         ? `${next.name} · ${next.transcript.words.length} island words. ${whisperNote.current}`
         : `${next.name} · ${next.suggestions.length} suggestions · ${next.transcript.words.length} words`,
       inspect.looksFirstEdit.done ? 'words' : 'all',
-      inspect.looksFirstEdit.skip
+      inspect.looksFirstEdit.skip,
+      inspect.looksFirstEdit
     )
   } catch (err) {
     onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Import failed.')
@@ -224,7 +285,8 @@ export async function appendTakeAction(onToast: ToastFn): Promise<void> {
         ? `Take ${takes} · ${next.transcript.words.length} words. ${whisperNote.current}`
         : `Take ${takes} · ${next.suggestions.length} suggestions · ${next.transcript.words.length} words`,
       inspect.looksFirstEdit.done ? 'words' : 'all',
-      inspect.looksFirstEdit.skip
+      inspect.looksFirstEdit.skip,
+      inspect.looksFirstEdit
     )
   } catch (err) {
     onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Could not add that take.')

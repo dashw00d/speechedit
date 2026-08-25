@@ -2,6 +2,7 @@ import { host } from '../host'
 import { displaySize, quarterTurn } from '../../../shared/mediaOrient'
 import { needsProxy } from '../../../shared/proxy'
 import type { Asset, Command, Project, Word } from '../types'
+import type { AsrCue } from '../../../shared/asr'
 import { buildSuggestions, speechIslands } from './analysis'
 import { wordsFromAsr } from './asr'
 import { applyCommand } from './commands'
@@ -26,6 +27,7 @@ export interface ImportRecordingOpts {
   onReady?: (take: InspectedTake) => void | Promise<void>
   onProxy?: (take: InspectedTake) => void | Promise<void>
   onLooks?: (take: InspectedTake) => void | Promise<void>
+  onWords?: (take: InspectedTake) => void | Promise<void>
 }
 
 export interface InspectedTake {
@@ -57,7 +59,7 @@ export async function inspectRecording(
   file: string,
   onStageOrOpts?: ((stage: string) => void) | ImportRecordingOpts
 ): Promise<InspectedTake> {
-  const { onStage, signal, onReady, onProxy, onLooks } = asOpts(onStageOrOpts)
+  const { onStage, signal, onReady, onProxy, onLooks, onWords } = asOpts(onStageOrOpts)
   throwIfAborted(signal, 'import')
   if (!file) throw new Error('Pick a media file to import.')
 
@@ -96,6 +98,19 @@ export async function inspectRecording(
   let proxyPath = ''
   let looksFinished = false
   let proxyFinished = !wantProxy
+  let latestAsset = baseAsset
+  let latestAnalysis = emptyIntel().analysis
+
+  const emitWords = (cues: AsrCue[]) => {
+    const words = wordsFromAsr(cues)
+    if (!words.length) return
+    void onWords?.({
+      asset: latestAsset,
+      words,
+      whispered: cues,
+      analysis: latestAnalysis
+    })
+  }
 
   const proxyP = (async () => {
     if (!wantProxy) return ''
@@ -149,6 +164,8 @@ export async function inspectRecording(
       whispered: null,
       analysis
     }
+    latestAsset = withLooks.asset
+    latestAnalysis = withLooks.analysis
     await onLooks?.(withLooks)
     return withLooks
   })()
@@ -156,6 +173,7 @@ export async function inspectRecording(
   const asrP = (async () => {
     const stopProgress = host.onTranscribeProgress((info) => {
       if (looksFinished) onStage?.(`transcript:${info.stage}`)
+      if (info.cues?.length) emitWords(info.cues)
     })
     const kind = loadSettings().transcript.kind
     try {

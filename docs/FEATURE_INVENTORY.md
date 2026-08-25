@@ -15,7 +15,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
 | Start empty project (“New reel”) | File → New reel; palette “New reel” | ✅ | **Descript** — blank composition, no wizard (functional). **VS Code** — File → New Window mental model (UI). |
-| Import video/audio (probe, waveform, thumbs, ASR, suggestions) | File → Open media… | ✅ | **Descript** — drop file → instant transcript row (UI). **CapCut** — import → immediate timeline (functional speed). After the reel is playable, silence starts before thumbs. Look ffmpeg is capped at two. Safe pauses apply when looks land (export is allowed). Fillers and retakes apply when words land. Undo after looks is not re-applied when Whisper finishes. |
+| Import video/audio (probe, waveform, thumbs, ASR, suggestions) | File → Open media… | ✅ | **Descript** — drop file → instant transcript row (UI). **CapCut** — import → immediate timeline (functional speed). After the reel is playable, silence starts before thumbs. Look ffmpeg is capped at two. Recordings ≥90s seek thumbs and peak windows, and silence+loudness share one 8 kHz pass. Recordings ≥180s transcribe in overlapping 90s chunks that resume after a cancel. Each finished chunk lands on the transcript and applies new safe fillers while later windows still run. Safe pauses apply when looks land (export is allowed). Retakes wait until the merged cue list is complete. Undo after looks or after streamed fillers is not re-applied when later chunks finish. |
 | Cancel in-flight import | Click status pill while analyzing; palette “Cancel import”; Escape (if not in palette) | ✅ | **Final Cut** — background task cancel in progress HUD (UI). |
 | Import transcript only (SRT/VTT/JSON) onto existing media | File → Open transcript… | ✅ | **Subtitle Edit** — import subs without re-encoding (functional). **Premiere** — import captions track (UI: separate from media). |
 | Drop transcript file onto transcript panel | Drag file onto transcript | ✅ | **Descript** — drag SRT (functional). **Google Docs** — drop-to-import affordance (UI). |
@@ -51,9 +51,14 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Status pill: analyzing → cancel import; unsaved → save. Inspector **Save reel…** when dirty or never saved.
 - Relink all on the banner and inspector. After one pick, same-folder files with matching names reconnect themselves.
 - File → Recent is a labeled list of names, not `Recent ·` spam. Palette has Open media / project / transcript / recents.
-- Hour-scale looks: analyze starts before thumbs so silence is not stuck behind a full-file decode. At most two look ffmpeg at once (proxy / Whisper stay off that lane). Waveform / silence / loudness use `-vn`. Long or HD scene detect is 5 fps / 320px. Recordings ≥90s seek ~20 thumbs instead of decoding every frame. Analysis cache is v2.
-- First edit is staged: safe pauses apply when looks land (export allowed while Whisper runs). Fillers and retake collapse wait for words. Undo after looks is not re-applied when ASR finishes.
+- Hour-scale looks: analyze starts before thumbs so silence is not stuck behind a full-file decode. At most two look ffmpeg at once (proxy / Whisper stay off that lane). Waveform / silence / loudness use `-vn`. Long or HD scene detect is 5 fps / 320px. Recordings ≥90s seek ~20 thumbs and seek ~1800 short peak windows instead of decoding every frame or the whole soundtrack. Silence and loudness share one audio look pass; recordings ≥90s resample that pass to 8 kHz so first-edit does not wait on two native-rate decodes. Analysis cache is v2.
+- Playback and export share one cached resolved program per project snapshot. After first-edit (hundreds of silence cuts) the monitor does not rebuild `normalize` + `resolveSegments` every animation frame; source↔program mapping is log-time so snap and the playhead stay cheap.
+- Program time is the master clock. A decoder walking into a deleted hole no longer stalls the playhead or flashes cut material; the engine hard-seeks to the next keep. Preview proxies use a 15-frame GOP so those seeks can land. A cached proxy with a long GOP (ffmpeg default 250) remakes on import and reopen so those seeks stay possible. Dissolve underlay uses the outgoing take’s file, not the incoming `src`.
+- First edit is staged: safe pauses apply when looks land (export allowed while Whisper runs). Finished ASR chunks stream onto `setTranscript` via `attachTakeIntel` and apply new fillers immediately. Retake collapse waits for the merged cue list. Undo after looks or after streamed fillers is not re-applied when later chunks finish. The first filler batch is one undo; later chunks do not stack history. Real words also build caption clips on V3 (revealed) so the monitor and a burned MP4 match the SRT. Placeholder islands do not. Undo or an edit locks auto refresh. Leftover breaths are dismissed (kept). Silent stills open Review as Cut / Keep. Quiet static screens follow as Speed / Keep on the same command bus. Talking-over-static stays Keep-only so speech is not sped.
+- Export parks lingering Whisper (SIGSTOP / low priority on Windows) instead of aborting it, then resumes. whisper.cpp cannot resume a kill, so a first-cut encode no longer fights ASR or throws away progress.
+- Hour-scale ASR splits recordings ≥180s into overlapping 90s windows and caches each chunk. A cancel, crash, or retry resumes finished windows instead of throwing away the whole transcript. Each saved or newly finished window emits merged-so-far cues on transcribe progress so the reel can show words before the last chunk. Short files stay one pass. The merged cue list is still the v1 ASR cache first-edit already reads.
 - Interchange B-roll / music restore the slipped `inPoint` (OTIO, FCPXML, MLT, Kdenlive, Premiere). `addBroll` / `addAudio` accept `inPoint` on the command bus.
+- Interchange restores lifted holds and insert-gaps (OTIO `Gap.1` + metadata, FCPXML `<gap>`, MLT/Kdenlive `<blank>`, Premiere Hold clipitem). A hold is no longer written as a zero-length media clip.
 
 ---
 
@@ -66,7 +71,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Frame-accurate export cuts | Automatic — trim/atrim on source times, not input-only `-ss` | ✅ | **Premiere** — what you cut is what renders (functional). Long files still preroll ~4s so we do not decode from t=0. |
 | Single-pass program encode | Automatic — every keep, caption, still, and bed in one filter graph | ✅ | **Auto-Editor** — one render for the cut list (functional). Mix no longer re-encodes a temporary body. |
 | Hardware encoder fallback to x264 | Automatic when NVENC/QSV/AMF/VideoToolbox dies | ✅ | **HandBrake** — fall back to CPU when the GPU encoder fails (functional). |
-| Export pauses a lingering preview proxy | Automatic — export preempts proxy ffmpeg, then the proxy remakes | ✅ | **Premiere** — transcode does not fight share (functional). Whisper keeps running. An aborted proxy never leaves a truncated cache. |
+| Export pauses a lingering preview proxy | Automatic — export preempts proxy ffmpeg, then the proxy remakes | ✅ | **Premiere** — transcode does not fight share (functional). Whisper is parked (SIGSTOP), not aborted, then resumes. An aborted proxy never leaves a truncated cache. A long-GOP cache remakes the same way a truncated one does. |
 | Add a second A-roll take | File → Add take…; palette | ✅ | **Descript** — append another recording to the same script (functional). The take lands after probe/proxy; words fill in without replacing take 1. |
 | Cancel export | Export button while exporting; palette “Cancel export”; Escape | ✅ | **Final Cut** — stop share (UI). |
 | Choose export file path | System save dialog (Electron) | ✅ | **Standard OS** — native save panel (UI). |
@@ -80,12 +85,12 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Export transcript Markdown | Export sheet (common); palette | ✅ | **Otter** — export MD notes (functional). **Notion** — clean MD export (UI). |
 | Export transcript plain text | Export sheet (common); palette | ✅ | **Trint** — TXT export for editors (functional). |
 | Export chapters JSON (from scenes) | Export sheet (common); palette | ✅ | **Descript** — YouTube chapter markers copy (functional). **Podcast apps** — JSON chapters (functional). |
-| Export OpenTimelineIO | Export sheet → More; palette | ✅ | **Resolve** — OTIO roundtrip (functional). **OTIO tools** — pipeline interchange (functional). B-roll and music beds emit ExternalReference. Slipped in-points round-trip. |
-| Export Final Cut Pro XML | Export sheet → More; palette | ✅ | **Final Cut** — XML import target (functional). Connected `asset-clip` refs point at B-roll / music files. |
-| Export Adobe Premiere XML | Export sheet → More; palette | ✅ | **Premiere** — XML handoff (functional). Extra video/audio tracks carry overlay and bed files. |
+| Export OpenTimelineIO | Export sheet → More; palette | ✅ | **Resolve** — OTIO roundtrip (functional). **OTIO tools** — pipeline interchange (functional). B-roll and music beds emit ExternalReference. Slipped in-points round-trip. Lifted holds and insert-gaps emit `Gap.1` and restore as `inserts`. |
+| Export Final Cut Pro XML | Export sheet → More; palette | ✅ | **Final Cut** — XML import target (functional). Connected `asset-clip` refs point at B-roll / music files. Spine `<gap>` holds round-trip. |
+| Export Adobe Premiere XML | Export sheet → More; palette | ✅ | **Premiere** — XML handoff (functional). Extra video/audio tracks carry overlay and bed files. Hold clipitems restore as program inserts. |
 | Export Auto-Editor v3 JSON | Export sheet → More; palette | ✅ | **Auto-Editor** — native timeline JSON (functional). |
-| Export Shotcut MLT | Export sheet → More; palette | ✅ | **Shotcut** — MLT project (functional). `broll` / `beds` playlists keep overlay and music producers. |
-| Export Kdenlive project | Export sheet → More; palette | ✅ | **Kdenlive** — native XML (functional). Same MLT overlay/bed playlists. |
+| Export Shotcut MLT | Export sheet → More; palette | ✅ | **Shotcut** — MLT project (functional). `broll` / `beds` playlists keep overlay and music producers. Playlist `<blank>` holds round-trip. |
+| Export Kdenlive project | Export sheet → More; palette | ✅ | **Kdenlive** — native XML (functional). Same MLT overlay/bed playlists and blanks. |
 
 ### Audit notes — §2 (2026-08-25)
 
@@ -98,6 +103,8 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Empty reel disables everything with “Open a recording first.” Demo disables MP4 with “No media file on disk” and still lets captions download.
 - Sidecar export toasts `Downloaded …` / `Saved …`. Palette commands share that path.
 - Web: captions still work; MP4 explains the desktop app. Encode progress and cancel unchanged.
+- Lifted holds and insert-gaps survive OTIO / FCPXML / MLT / Kdenlive / Premiere round-trip. Native `Gap` / `<gap>` / `<blank>` / Hold clipitems restore as `Project.inserts`.
+- Export parks lingering Whisper instead of competing with it. The proxy is still aborted and remade; ASR resumes after the encode.
 
 ---
 
@@ -151,7 +158,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Set mark Out at playhead | Monitor **Out**; O key | ✅ | **Premiere** — O key (functional standard). |
 | Set both marks to selected words | M with word selection | ✅ | **Premiere** — mark clip (functional). |
 | Watch from beginning (suggest bar) | Suggest bar “Watch edited reel” / “Watch full reel” | ✅ | **Descript** — preview full edit (functional). |
-| Drive playhead from picture clock | Automatic while primary video is ready | ✅ | **Premiere** — program time tracks the viewer, not wall-clock (functional). Audio-only / unready picture still uses rAF. |
+| Drive playhead from picture clock | Automatic while primary video is ready | ✅ | **Premiere** — program time is master; picture may nudge inside a keep. A decoder in a cut hole does not stall or flash deleted frames. Audio-only / slugs still use rAF. |
 
 ### Audit notes — §4 (2026-08-25)
 
@@ -446,7 +453,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Set pause margin preset Natural (0.22s) | Suggest bar Natural chip (tooltip: leave more air) | ✅ | **Descript** — pause removal presets (UI: no dB numbers). |
 | Set pause margin preset Balanced (0.12s) | Suggest bar Balanced chip | ✅ | **Descript** — Balanced/Tight tiers (UI). |
 | Set pause margin preset Tight (0.04s) | Suggest bar Tight chip | ✅ | **Descript** — aggressive tighten (UI). |
-| Apply all safe pending suggestions | Automatic after Open media / Add take / transcript; suggest bar (“Clean N pauses”, “Apply N safe”) | ✅ | **Descript** — apply all fillers/silence (functional). **Cleanvoice** — one-shot process (UI). Same `applySafeSuggestions` command; Undo or Put back silence restores. Breaths and stills stay in Review. |
+| Apply all safe pending suggestions | Automatic after Open media / Add take / transcript; suggest bar (“Clean N pauses”, “Apply N safe”) | ✅ | **Descript** — apply all fillers/silence (functional). **Cleanvoice** — one-shot process (UI). Same `applySafeSuggestions` command; Undo or Put back silence restores. Breaths are dismissed (kept in the picture) after first-edit. Silent stills stay in Review as Cut / Keep. |
 | Open review drawer | Suggest bar Review N; primary when no safe | ✅ | **Gmail** — review bulk action (UI). |
 | Close review drawer | Suggest bar Hide review | ✅ | **GitHub** — collapse review panel (UI). |
 | Run local scene/retake detection | Suggest bar Find retakes | ✅ | **Descript** — find retakes (functional). |
@@ -464,7 +471,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Put back dropped retake scene | Scene row → Put back | ✅ | **Descript** — undo take choice (functional). |
 | Keep this take, cut siblings | Scene row → Keep this take | ✅ | **Descript** — compare takes workflow (functional). |
 | Park on pending suggestion | Suggestion row → Park | ✅ | **Descript** — scrub to suggestion (UI). |
-| Apply pending suggestion | Suggestion row → Apply / Speed N× / Normalize | ✅ | **Descript** — accept AI edit (functional). |
+| Apply pending suggestion | Suggestion row → Apply / Cut / Speed N× / Normalize | ✅ | **Descript** — accept AI edit (functional). Silent stills use `applySuggestion` (a review-action cut) so a confirmed still is a normal ripple delete, not a no-op. Quiet static screens use `setSpeed`, which ripples later captions and overlays. |
 | Dismiss / keep pending suggestion | Suggestion row → Keep or Skip (if blocked) | ✅ | **Gmail** — reject suggestion (UI). |
 | Revert one applied suggestion | Applied row → Put back one | ✅ | **Descript** — undo single AI change (functional). |
 | Revert all applied of type (silence, filler, …) | Applied group → Put back silence / fillers / … | ✅ | **Descript** — bulk undo by category (functional). |
@@ -496,6 +503,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Blocked rows say **protected**. Group totals say “N protected.”
 - Pace chip tooltips: leave more air / typical cleanup / cut most silence.
 - Collapse retakes tooltip: you can put them back from Review.
+- Silent stills are no longer Keep-only. Cut applies `applySuggestion` (ripple delete). Keep dismisses. Breaths leave Review via `dismissSuggestions` after first-edit; **Keep all breaths** remains if you undo that. Review opens on the first still so the next decision is a listen. Quiet static screens (loading / holds) get the same walk as **Speed N×** / Keep, plus **Speed all**. Talking-over-static stays Keep-only.
 
 ---
 
@@ -602,7 +610,7 @@ These appear based on selection. Each row is one button label the user may see.
 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
-| Generate captions from live words | Caption tab button; Sequence menu; palette | ✅ | **CapCut** — auto captions one tap (UI leader). **Descript** — from transcript (functional). |
+| Generate captions from live words | Automatic after import/transcript; Caption tab; Sequence menu; palette | ✅ | **CapCut** — auto captions one tap (UI leader). **Descript** — from transcript (functional). Open media and Open transcript build caption clips from live words (program time, one undo). Speech islands do not caption. Editing a title or undoing locks the lane so later ASR chunks do not wipe it. Manual Generate still rebuilds the lane. |
 | Add scene lower thirds | Caption tab; Sequence menu; palette | ✅ | **Descript** — chapter titles (functional). |
 | Edit selected caption text | Caption textarea | ✅ | **Kapwing** — inline caption edit (UI). |
 | Change caption font size | Size slider | ✅ | **CapCut** — style size preset (UI). |
@@ -859,7 +867,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Set/clear proxy path on asset | Auto on import; Advanced shows “lighter preview”; MCP `setAssetProxy` | 🔶 | **Premiere** — proxy toggle (UI). |
 | Patch waveform / thumbs / proxy after import | `setAssetLooks`; Open media replays this | ✅ | **Descript** — looks fill in after the reel is already open (functional). |
 | Attach silence / loudness after the reel is open | `setAnalysis` + rebuild; Open media replays this | ✅ | **Descript** — analysis lands on an already-editable composition (functional). |
-| Fill one take’s words / analysis after it is already on the reel | `attachTakeIntel`; Open media and Add take replay this | ✅ | **Descript** — a second take’s transcript lands without wiping the first (functional). |
+| Fill one take’s words / analysis after it is already on the reel | `attachTakeIntel`; Open media and Add take replay this | ✅ | **Descript** — a second take’s transcript lands without wiping the first (functional). Growing ASR replaces in-span words when the new list is longer; a dropped or edited transcript is not overwritten by a same-span attach. |
 | Relink asset by id+path (command) | Missing banner / inspector Relink…; MCP `relinkAsset` | ✅ | **Premiere** — relink (UI). |
 | Paint Note guard tag | Timeline **Note**; Protect → Note paint; Edit → Note at playhead | ✅ | **Premiere** — marker comments (UI). |
 | Toggle ripple vs insert mode | Timeline **Ripple on** / **Lift** — Delete follows the mode | ✅ | **Premiere** — ripple/insert toggle (UI). |
@@ -942,7 +950,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Export preset picker (YouTube 1080p, etc.) | Export → **YouTube 1080** / **Vertical 9:16** / **Podcast audio** | ✅ | **Descript** — export presets (UI). |
 | Export audio-only (MP3/WAV) | Export → **Audio only · M4A** | ✅ | **Descript** — audio export (functional). |
 | Export selected range only | Export → **Marked range only** | ✅ | **Audacity** — export selection (functional). |
-| Burn-in toggle for captions on export | Export → **Burn captions into the picture** | ✅ | **Premiere** — export captions setting (UI). |
+| Burn-in toggle for captions on export | Export → **Burn captions into the picture** | ✅ | **Premiere** — export captions setting (UI). The checkbox appears when the lane has titles or when live words can synthesize them. A burned MP4 uses the same clips as the monitor; if the lane is still empty, export builds the same word captions SRT already used. |
 | Recent projects list | File → Open recent | ✅ | **VS Code** — recent (UI). |
 | Autosave interval indicator | Status pill / unsaved close warning | ✅ | **Google Docs** — “Saved to Drive” (UI). |
 | Project templates (tutorial, podcast, screencast) | Studio demo only | 📋 | **Descript** — templates (UI). |
@@ -958,7 +966,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 
 **Second pass:** ← → nudge with inspector chips. ⌘C/V paste at the playhead. ⌘⇧V paste look. Shift-click multi-select. Track **All**. Alt-drag slip, Shift-drag slide, Shift-handle roll. **E** extend. **N** hops notes. **Safe** boxes + on-program crop handles. Transport voice meter. Export **YouTube 1080 / Vertical 9:16 / Podcast audio**.
 
-**Third pass (slugs):** Timeline **Ripple on** / **Lift** is a real mode. Lift leaves a black/silence hold; **Gap** inserts 1s; inspector **Close gap** extracts it. Export and OTIO emit the hold. Monitor **Match** finds the script word. Overlay **Replace footage**, **Pan**, and PIP corner chips. Export **Content package**. Protect paint **Hook** / **CTA**. Freeze / reverse / volume envelopes still need media that HTML preview cannot fake.
+**Third pass (slugs):** Timeline **Ripple on** / **Lift** is a real mode. Lift leaves a black/silence hold; **Gap** inserts 1s; inspector **Close gap** extracts it. Export and interchange (OTIO / FCPXML / MLT / Premiere) emit and restore the hold. Monitor **Match** finds the script word. Overlay **Replace footage**, **Pan**, and PIP corner chips. Export **Content package**. Protect paint **Hook** / **CTA**. Freeze / reverse / volume envelopes still need media that HTML preview cannot fake.
 
 ---
 
@@ -1016,7 +1024,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Blur faces automatically | Manual redaction overlay | 🔶 | **Descript** — face blur (UI). |
 | Detect and blur emails/phones (CV) | Manual redaction | 📋 | **YouTube** face blur (partial). |
 | Speed ramp UI (handles) | Speed slider on range | 🔶 | **Final Cut** — speed ramp (UI). |
-| Compress loading screens (detect + UI) | Not in live app | 📋 | **Screen Studio** — auto compress (functional). |
+| Compress loading screens (detect + UI) | Review **Static screens** · Speed N× / Keep / Speed all | ✅ | **Screen Studio** — auto compress (functional). We detect quiet static holds and leave talking-over-static alone. Speed is a review decision, not a blind apply. |
 | “Make 8 minutes” duration compiler | Not in live app | 📋 | **feature_explosion #7**. |
 | Failure/success attempt picker | Keep this take / Use later take | 🔶 | **feature_explosion #11**. |
 | Cross-modal search UI | Find is words/scenes/edits | 📋 | **Rewind.ai** (functional). |

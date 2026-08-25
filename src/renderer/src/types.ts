@@ -1,3 +1,5 @@
+import { captionDefaults } from './lib/theme'
+
 export type TrackType = 'video' | 'audio' | 'overlay' | 'caption'
 export type SuggestionType =
   | 'silence'
@@ -8,7 +10,7 @@ export type SuggestionType =
   | 'loud'
   | 'pace'
   | 'model'
-export type SuggestionAction = 'cut' | 'speed' | 'review' | 'normalize'
+export type SuggestionAction = 'cut' | 'speed' | 'review' | 'normalize' | 'volume'
 export type TagKind = 'keep' | 'demo' | 'note' | 'hook' | 'cta'
 export type Easing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out'
 
@@ -116,6 +118,8 @@ export interface Clip {
   effect?: 'none' | 'blur'
   /** Derived primary holds use `slug`. Overlay clips omit this. */
   kind?: 'media' | 'slug'
+  /** Built from the transcript. Import may refresh these until the user edits or undoes. */
+  auto?: boolean
 }
 
 export interface Track {
@@ -175,6 +179,7 @@ export interface EditSuggestion {
   safe: boolean
   applied: boolean
   speed?: number
+  volume?: number
   blockedBy?: string
 }
 
@@ -265,8 +270,12 @@ export const DEFAULT_TRANSFORM: Transform = {
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   fontSize: 42,
   align: 'center',
-  fill: '#F4EEE4',
-  stroke: '#16140F',
+  get fill() {
+    return captionDefaults().fill
+  },
+  get stroke() {
+    return captionDefaults().stroke
+  },
   position: 'lower'
 }
 
@@ -307,6 +316,7 @@ export type Command =
   | { type: 'setVolume'; clipId: string; volume: number }
   | { type: 'setMuted'; clipId: string; muted: boolean }
   | { type: 'setSpeed'; start: number; end: number; speed: number }
+  | { type: 'setRangeVolume'; start: number; end: number; volume: number }
   | { type: 'setText'; clipId: string; text: string }
   | { type: 'setCaptionStyle'; clipId: string; style: Partial<CaptionStyle> }
   | { type: 'addCaption'; start: number; duration: number; text: string }
@@ -337,6 +347,7 @@ export type Command =
   | { type: 'applySuggestions'; suggestionIds: string[] }
   | { type: 'applySafeSuggestions' }
   | { type: 'dismissSuggestion'; suggestionId: string }
+  | { type: 'dismissSuggestions'; suggestionIds: string[] }
   | { type: 'dismissPendingSuggestions' }
   | { type: 'applySuggestionsByType'; suggestionType: SuggestionType }
   | { type: 'revertSuggestion'; suggestionId: string }

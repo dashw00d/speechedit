@@ -8,7 +8,7 @@ import {
   type Transform
 } from '../types'
 import { annotateProtected } from './analysis'
-import { DEFAULT_SPEAKER_COLOR } from './theme'
+import { defaultSpeakerColor } from './theme'
 import { normalizeScenes } from './sceneAnalysis'
 import { ensurePrimaryOffsets } from './takes'
 
@@ -48,7 +48,7 @@ export function normalizeProject(project: Project): Project {
       })),
       speakers: project.transcript?.speakers?.length
         ? project.transcript.speakers
-        : [{ id: 'ryan', name: 'Speaker 1', color: DEFAULT_SPEAKER_COLOR }]
+        : [{ id: 'ryan', name: 'Speaker 1', color: defaultSpeakerColor() }]
     },
     markIn: project.markIn ?? null,
     markOut: project.markOut ?? null,

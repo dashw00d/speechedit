@@ -122,6 +122,11 @@ export function commandToTool(command: Command): PlannedCall {
       return { name: 'apply_model_suggestions', args: {} }
     case 'setSpeed':
       return { name: 'set_speed', args: { start: command.start, end: command.end, speed: command.speed } }
+    case 'setRangeVolume':
+      return {
+        name: 'set_range_volume',
+        args: { start: command.start, end: command.end, volume: command.volume }
+      }
     case 'addCaption':
       return { name: 'add_caption', args: { start: command.start, duration: command.duration, text: command.text } }
     case 'addZoom':

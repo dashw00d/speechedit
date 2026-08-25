@@ -53,6 +53,7 @@ export const COMMAND_BUS: Command['type'][] = [
   'addTitle',
   'importCaptions',
   'setSpeed',
+  'setRangeVolume',
   'setSpeaker',
   'addSpeaker',
   'renameSpeaker',
@@ -419,6 +420,15 @@ export const MCP_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: { start: { type: 'number' }, end: { type: 'number' }, speed: { type: 'number' } },
       required: ['start', 'end', 'speed']
+    }
+  },
+  {
+    name: 'set_range_volume',
+    description: 'Set voice volume on a source-time range (hot spikes).',
+    inputSchema: {
+      type: 'object',
+      properties: { start: { type: 'number' }, end: { type: 'number' }, volume: { type: 'number' } },
+      required: ['start', 'end', 'volume']
     }
   },
   {
@@ -825,6 +835,16 @@ export async function runTool(
       return apply(
         { type: 'setSpeed', start: num(args.start), end: num(args.end), speed: num(args.speed, 4) },
         'Set speed.'
+      )
+    case 'set_range_volume':
+      return apply(
+        {
+          type: 'setRangeVolume',
+          start: num(args.start),
+          end: num(args.end),
+          volume: num(args.volume, 0.5)
+        },
+        'Set range volume.'
       )
     case 'add_caption':
       return apply(

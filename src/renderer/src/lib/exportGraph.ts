@@ -139,14 +139,20 @@ export function segmentProgramDuration(seg: GraphSegment): number {
   return (seg.end - seg.start) / Math.max(0.1, seg.speed)
 }
 
+const programmedCache = new WeakMap<GraphJob, ProgrammedSegment[]>()
+
 export function programmedSegments(job: GraphJob): ProgrammedSegment[] {
+  const hit = programmedCache.get(job)
+  if (hit) return hit
   let cursor = 0
-  return job.segments.map((seg) => {
+  const segs = job.segments.map((seg) => {
     const programDuration = segmentProgramDuration(seg)
     const programStart = seg.programStart ?? cursor
     cursor = programStart + programDuration - (seg.overlapNext ?? 0)
     return { ...seg, programStart, programDuration }
   })
+  programmedCache.set(job, segs)
+  return segs
 }
 
 export function jobDuration(job: GraphJob): number {

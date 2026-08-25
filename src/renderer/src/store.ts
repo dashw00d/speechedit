@@ -90,6 +90,8 @@ export interface EditorState {
   missingAssets: MediaRef[]
   dispatch: (command: Command) => void
   replay: (command: Command) => void
+  /** Apply a command to the current project only — no undo entry, history snapshots unchanged. */
+  patch: (command: Command) => void
   undo: () => void
   redo: () => void
   selectWords: (ids: string[], additive?: boolean) => void
@@ -406,6 +408,13 @@ export const useEditor = create<EditorState>((set, get) => ({
       future: future.map((snapshot) => applyCommand(snapshot, command)),
       dirty: true
     })
+  },
+  patch: (command) => {
+    const { project } = get()
+    const next = applyCommand(project, command)
+    if (next === project) return
+    persist(next, { dirty: true })
+    set({ project: next, dirty: true })
   },
   undo: () => {
     const { past, project, future } = get()

@@ -1,5 +1,5 @@
 import { host, isElectron } from '../host'
-import { assetNeedsProxy } from '../../../shared/proxy'
+import { assetNeedsProxy, proxyGopSeekable } from '../../../shared/proxy'
 import { flushWorkspace, useEditor } from '../store'
 import { requestLoseWork } from './loseWork'
 import { rememberRecent } from './recents'
@@ -68,7 +68,7 @@ export async function hydrateAssetLooks(): Promise<void> {
   if (changed) useEditor.getState().hydrateLooks(assets)
 }
 
-/** Remake or drop a saved preview proxy that is no longer on disk. Does not mark dirty. */
+/** Remake or drop a saved preview proxy that is missing or too long-GOP to seek. Does not mark dirty. */
 export async function hydrateAssetProxies(): Promise<void> {
   if (useEditor.getState().exporting) return
   const project = useEditor.getState().project
@@ -88,7 +88,10 @@ export async function hydrateAssetProxies(): Promise<void> {
   for (const row of checks) present[row.path] = row.exists
   let changed = false
   for (const asset of candidates) {
-    if (asset.proxyPath && present[asset.proxyPath]) continue
+    if (asset.proxyPath && present[asset.proxyPath]) {
+      const gop = await host.probeProxyGop(asset.proxyPath).catch(() => null)
+      if (gop == null || proxyGopSeekable(gop)) continue
+    }
     let next = asset
     let want = Boolean(asset.proxyPath) || assetNeedsProxy(asset)
     if (!want && !asset.codec) {

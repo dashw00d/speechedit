@@ -34,6 +34,21 @@ describe('waveform and thumbnail disk cache', () => {
     })
   }, 30000)
 
+  test('recordings ≥90s seek peak windows instead of decoding the whole soundtrack', async () => {
+    await withCacheHome(async () => {
+      const ffmpeg = Bun.which('ffmpeg')
+      if (!ffmpeg) throw new Error('ffmpeg required for seek-peak smoke')
+      await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=440:sample_rate=8000 -t 90 -c:a aac /tmp/se-long-peaks.m4a`.quiet()
+      const { waveform } = await import('../../../main/ffmpeg.ts')
+      const { wantsSeekPeaks, waveformStrategy } = await import('../../../shared/importLooks.ts')
+      expect(wantsSeekPeaks(90)).toBe(true)
+      expect(waveformStrategy(90)).toBe('seek')
+      const peaks = await waveform('/tmp/se-long-peaks.m4a', 40)
+      expect(peaks.length).toBe(40)
+      expect(peaks.some((n) => n > 0.05)).toBe(true)
+    })
+  }, 60000)
+
   test('thumbnail cache hit returns the stored frames', async () => {
     await withCacheHome(async () => {
       const ffmpeg = Bun.which('ffmpeg')
@@ -88,7 +103,11 @@ describe('waveform and thumbnail disk cache', () => {
         asrCachePath('/tmp/se-asr.m4a', 'whisper-cpp', 'tiny'),
         JSON.stringify({ v: 1, kind: 'whisper-cpp', model: 'tiny', cues })
       )
-      expect(await transcribeMedia('/tmp/se-asr.m4a', { kind: 'whisper-cpp', model: 'tiny' })).toEqual(cues)
+      const progress: { stage: string; cues?: { text: string }[] }[] = []
+      expect(
+        await transcribeMedia('/tmp/se-asr.m4a', { kind: 'whisper-cpp', model: 'tiny' }, (info) => progress.push(info))
+      ).toEqual(cues)
+      expect(progress.some((row) => row.stage === 'done' && row.cues?.[0]?.text === 'cached')).toBe(true)
     })
   }, 30000)
 
@@ -158,6 +177,40 @@ describe('waveform and thumbnail disk cache', () => {
         forced = err
       }
       expect(forced).not.toEqual(cues)
+    })
+  }, 60000)
+
+  test('hour-scale ASR resumes from saved chunks without re-running Whisper', async () => {
+    await withCacheHome(async () => {
+      const ffmpeg = Bun.which('ffmpeg')
+      const ffprobe = Bun.which('ffprobe')
+      if (!ffmpeg || !ffprobe) throw new Error('ffmpeg required for chunked ASR smoke')
+      await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=440:sample_rate=8000 -t 200 -c:a aac /tmp/se-long-asr.m4a`.quiet()
+      const probed = Number(
+        (await Bun.$`${ffprobe} -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/se-long-asr.m4a`.text()).trim()
+      )
+      const { transcribeMedia } = await import('../../../main/transcribe.ts')
+      const { asrChunkCachePath } = await import('../../../main/mediaCache.ts')
+      const { asrChunkWindows, wantsChunkedAsr } = await import('../../../shared/asrChunks.ts')
+      expect(wantsChunkedAsr(probed)).toBe(true)
+      const windows = asrChunkWindows(probed)
+      expect(windows.length).toBeGreaterThan(1)
+      const chunks = windows.map((window, i) => {
+        const mid = (window.start + window.end) / 2
+        return {
+          ...window,
+          cues: [{ text: `part${i}`, start: mid, end: mid + 0.2 }]
+        }
+      })
+      const cache = asrChunkCachePath('/tmp/se-long-asr.m4a', 'whisper-cpp', '')
+      mkdirSync(cache.replace(/[^/]+$/, ''), { recursive: true })
+      writeFileSync(cache, JSON.stringify({ v: 1, duration: probed, chunks }))
+      const cues = await transcribeMedia('/tmp/se-long-asr.m4a', {
+        kind: 'whisper-cpp',
+        model: '',
+        skipInstall: true
+      })
+      expect(cues?.map((c) => c.text)).toEqual(chunks.map((c) => c.cues[0].text))
     })
   }, 60000)
 
@@ -266,4 +319,19 @@ describe('waveform and thumbnail disk cache', () => {
       expect(analysis.silence.some((gap) => gap.end - gap.start >= 0.3)).toBe(true)
     })
   }, 30000)
+
+  test('recordings ≥90s find silence in one cheap audio look pass', async () => {
+    await withCacheHome(async () => {
+      const ffmpeg = Bun.which('ffmpeg')
+      if (!ffmpeg) throw new Error('ffmpeg required for cheap audio-look smoke')
+      await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=440:sample_rate=8000 -t 90 -af ${"volume=0:enable='between(t,2,6)'"} -c:a aac /tmp/se-long-silence.m4a`.quiet()
+      const { analyzeMedia } = await import('../../../main/ffmpeg.ts')
+      const { audioLookArgs, wantsCheapAudioLooks } = await import('../../../shared/importLooks.ts')
+      expect(wantsCheapAudioLooks(90)).toBe(true)
+      expect(audioLookArgs('/tmp/se-long-silence.m4a', { duration: 90 }).join(' ')).toContain('aresample=8000')
+      expect(audioLookArgs('/tmp/se-long-silence.m4a', { duration: 90 }).join(' ')).toContain('ebur128')
+      const analysis = await analyzeMedia('/tmp/se-long-silence.m4a')
+      expect(analysis.silence.some((gap) => gap.start <= 2.4 && gap.end >= 5.6)).toBe(true)
+    })
+  }, 60000)
 })

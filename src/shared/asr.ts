@@ -17,6 +17,14 @@ export interface AsrCue {
   speaker?: string
 }
 
+export interface TranscribeProgress {
+  stage: 'prepare' | 'install' | 'audio' | 'run' | 'parse' | 'done'
+  ratio: number
+  /** Merged cues so far. Present when a chunked window finishes or a cache hits. */
+  cues?: AsrCue[]
+  chunk?: { finished: number; total: number }
+}
+
 export interface AsrResult {
   cues: AsrCue[]
   /** True when the provider returned word (or token) timestamps. Do not lerp. */

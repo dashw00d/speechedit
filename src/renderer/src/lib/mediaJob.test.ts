@@ -6,6 +6,7 @@ import {
   JobGate,
   ImportLinger,
   beginExportExclusive,
+  endExportExclusive,
   busyMessage,
   explainImportError,
   ffmpegImportBusy,
@@ -101,8 +102,63 @@ describe('job gate + errors', () => {
     expect(whisper.aborted).toBe(false)
     expect(linger.sizeOf('whisper')).toBe(1)
     expect(linger.sizeOf('proxy')).toBe(0)
+    expect(linger.isParked('whisper')).toBe(true)
     linger.finish(whisper)
-    jobs.finish('export')
+    endExportExclusive(jobs, linger)
+    expect(linger.isParked('whisper')).toBe(false)
+  })
+
+  test('export parks adopted Whisper children and resumes them', () => {
+    const jobs = new JobGate()
+    const linger = new ImportLinger()
+    const signals: string[] = []
+    const child = {
+      pid: 42,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill(signal?: string) {
+        if (signal) signals.push(signal)
+        return true
+      },
+      once() {
+        return this
+      }
+    }
+    const whisper = linger.begin('whisper')
+    linger.adopt(whisper, child)
+    beginExportExclusive(jobs, linger)
+    expect(whisper.aborted).toBe(false)
+    expect(signals).toEqual(['SIGSTOP'])
+    expect(linger.isParked('whisper')).toBe(true)
+    endExportExclusive(jobs, linger)
+    expect(signals).toEqual(['SIGSTOP', 'SIGCONT'])
+    expect(linger.isParked('whisper')).toBe(false)
+    linger.finish(whisper)
+  })
+
+  test('a Whisper child that starts during export is parked immediately', () => {
+    const jobs = new JobGate()
+    const linger = new ImportLinger()
+    const signals: string[] = []
+    const child = {
+      pid: 7,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill(signal?: string) {
+        if (signal) signals.push(signal)
+        return true
+      },
+      once() {
+        return this
+      }
+    }
+    beginExportExclusive(jobs, linger)
+    const whisper = linger.begin('whisper')
+    linger.adopt(whisper, child)
+    expect(signals).toEqual(['SIGSTOP'])
+    endExportExclusive(jobs, linger)
+    expect(signals).toEqual(['SIGSTOP', 'SIGCONT'])
+    linger.finish(whisper)
   })
 
   test('runWhenExportIdle waits until export finishes', async () => {
@@ -116,7 +172,7 @@ describe('job gate + errors', () => {
     })
     await Bun.sleep(40)
     expect(ran).toBe(false)
-    jobs.finish('export')
+    endExportExclusive(jobs, linger)
     expect(await done).toBe('ok')
     expect(ran).toBe(true)
     expect(linger.size).toBe(0)
@@ -135,7 +191,7 @@ describe('job gate + errors', () => {
       return 'proxy-ready'
     })
     await Bun.sleep(20)
-    jobs.finish('export')
+    endExportExclusive(jobs, linger)
     expect(await done).toBe('proxy-ready')
     expect(attempts).toBe(2)
     expect(linger.size).toBe(0)
@@ -158,6 +214,54 @@ describe('child abort + temp cleanup', () => {
     expect(pid).toBeGreaterThan(0)
     ac.abort()
     await expect(done).rejects.toBeInstanceOf(JobCancelled)
+    expect(() => process.kill(pid, 0)).toThrow()
+  })
+
+  test('parked linger child freezes, then continues after export', async () => {
+    if (process.platform === 'win32') return
+    const { parkChild, unparkChild, killChild } = await import('../../../main/childJob.ts')
+    const { spawn } = await import('node:child_process')
+    const { mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'se-park-'))
+    const tick = join(dir, 'n')
+    await writeFile(tick, '0')
+    const child = spawn(
+      'bash',
+      ['-c', `n=0; while true; do n=$((n+1)); echo $n > "$1"; sleep 0.05; done`, 'tick', tick],
+      { stdio: 'ignore' }
+    )
+    const readN = async () => Number((await readFile(tick, 'utf8').catch(() => '0')).trim()) || 0
+    try {
+      await Bun.sleep(180)
+      const before = await readN()
+      expect(before).toBeGreaterThan(0)
+      parkChild(child)
+      await Bun.sleep(200)
+      const frozen = await readN()
+      expect(frozen).toBe(before)
+      unparkChild(child)
+      await Bun.sleep(180)
+      expect(await readN()).toBeGreaterThan(frozen)
+    } finally {
+      killChild(child)
+      await new Promise<void>((resolve) => child.once('close', () => resolve()))
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('killChild still reaps a SIGSTOP-parked process', async () => {
+    if (process.platform === 'win32') return
+    const { parkChild, killChild } = await import('../../../main/childJob.ts')
+    const { spawn } = await import('node:child_process')
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' })
+    const pid = child.pid ?? 0
+    expect(pid).toBeGreaterThan(0)
+    await Bun.sleep(40)
+    parkChild(child)
+    killChild(child)
+    await new Promise<void>((resolve) => child.once('close', () => resolve()))
     expect(() => process.kill(pid, 0)).toThrow()
   })
 

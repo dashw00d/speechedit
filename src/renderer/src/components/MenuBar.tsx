@@ -26,6 +26,7 @@ import {
 } from '../lib/mediaJobs'
 import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
 import { hopNote } from '../lib/clipEdit'
+import { openPreferences } from '../lib/theme'
 import { useEditor, usePlayback } from '../store'
 
 interface Props {
@@ -155,6 +156,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           <Item disabled={ffmpegImportBusy(analyzing)} onClick={onExport}>
             Export…
           </Item>
+          <Item onClick={() => openPreferences()}>Preferences…</Item>
           <Item
             onClick={() => {
               void confirmLoseWork().then((ok) => {

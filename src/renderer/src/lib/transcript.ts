@@ -151,6 +151,18 @@ export function transcriptIsPlaceholder(words: Word[]): boolean {
   return words.every((word) => /^Speech\s+\d+$/i.test(word.text.trim()))
 }
 
+/**
+ * Growing ASR may replace in-span words. A dropped or edited transcript stays
+ * unless the incoming list is strictly longer or covers later.
+ */
+export function takeWordsNeedReplace(current: Word[], incoming: Word[]): boolean {
+  if (!incoming.length) return false
+  if (transcriptIsPlaceholder(current)) return true
+  const curEnd = Math.max(...current.map((word) => word.end))
+  const inEnd = Math.max(...incoming.map((word) => word.end))
+  return inEnd > curEnd + 0.05 || incoming.length > current.length
+}
+
 export function wordsFromIslands(islands: { start: number; end: number }[]): Word[] {
   return islands.flatMap((span, i) => {
     const label = `Speech ${i + 1}`
