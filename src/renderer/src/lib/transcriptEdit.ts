@@ -60,6 +60,16 @@ export function extendSelection(words: Word[], ids: string[], dir: -1 | 1): stri
   return words.slice(lo, hi + 1).map((w) => w.id)
 }
 
+/** Drop one word from the end. `[` shrinks; `]` grows. */
+export function shrinkSelection(words: Word[], ids: string[]): string[] {
+  if (ids.length <= 1) return sortWordIds(words, ids)
+  const indexes = ids
+    .map((id) => words.findIndex((w) => w.id === id))
+    .filter((i) => i >= 0)
+    .sort((a, b) => a - b)
+  return words.slice(indexes[0], indexes[indexes.length - 1]).map((w) => w.id)
+}
+
 export function tagAt(tags: RangeTag[], time: number): RangeTag | undefined {
   return tags.find((t) => time >= t.start && time < t.end)
 }

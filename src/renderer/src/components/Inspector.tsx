@@ -16,13 +16,31 @@ import {
   type InspectorAction,
   type InspectorNext
 } from '../lib/contextActions'
+import { neighborScene } from '../lib/sceneChip'
 import { takeFamily } from '../lib/sceneAnalysis'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
-import { currentDocumentTitle, relinkAssetInteractive } from '../lib/documentIo'
+import {
+  currentDocumentTitle,
+  relinkAllMissing,
+  relinkAssetInteractive,
+  relinkToast,
+  saveCurrentDocument
+} from '../lib/documentIo'
 import { cancelExport, cancelImport } from '../lib/mediaJobs'
+import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
+import { slugInsertId } from '../lib/inserts'
+import { pickAudio, pickBroll } from '../lib/pickFile'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
-import type { Command, EncoderOption } from '../types'
+import type { Command, Crop, EncoderOption } from '../types'
+
+function cropRightOf(crop: Crop) {
+  return 1 - crop.x - crop.w
+}
+
+function cropBottomOf(crop: Crop) {
+  return 1 - crop.y - crop.h
+}
 import { AgentPanel } from './AgentPanel'
 import { ModelsPanel } from './ModelsPanel'
 import { StartGuide } from './StartGuide'
@@ -32,6 +50,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const tab = useEditor((s) => s.inspectorTab)
   const setTab = useEditor((s) => s.setInspectorTab)
   const selectedClipId = useEditor((s) => s.selectedClipId)
+  const selectedClipIds = useEditor((s) => s.selectedClipIds)
   const selectedWordIds = useEditor((s) => s.selectedWordIds)
   const selectedSceneId = useEditor((s) => s.selectedSceneId)
   const selectedSuggestionId = useEditor((s) => s.selectedSuggestionId)
@@ -44,6 +63,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const analyzing = useEditor((s) => s.analyzing)
   const dispatch = useEditor((s) => s.dispatch)
   const documentPath = useEditor((s) => s.documentPath)
+  const dirty = useEditor((s) => s.dirty)
   const missingAssets = useEditor((s) => s.missingAssets)
   const programTime = usePlayback((s) => s.programTime)
   const seekProgram = usePlayback((s) => s.seekProgram)
@@ -83,6 +103,9 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const pane = tab === 'agent' ? 'agent' : focus
   const wordsDetail = wordsInspectorDetail(project, selectedWordIds)
   const sceneDetail = selectedSceneId ? sceneInspectorDetail(project, selectedSceneId) : null
+  const scenePrev = selectedSceneId ? neighborScene(project.scenes ?? [], selectedSceneId, -1) : undefined
+  const sceneNext = selectedSceneId ? neighborScene(project.scenes ?? [], selectedSceneId, 1) : undefined
+  const selectedScene = selectedSceneId ? project.scenes.find((s) => s.id === selectedSceneId) : undefined
   const suggestionDetail = selectedSuggestionId
     ? suggestionInspectorDetail(project, selectedSuggestionId)
     : null
@@ -91,21 +114,25 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const task = suggestTask(project)
   const pace = paceFromMargin(project.cutMargin)
 
+  function hearSource(start: number, end: number) {
+    playLoop(sourceToProgramOf(project, start), sourceToProgramOf(project, end))
+  }
+
   function goToNext(next: InspectorNext) {
     if (next.suggestionId) {
       const sug = project.suggestions.find((s) => s.id === next.suggestionId)
       selectSuggestion(next.suggestionId)
-      if (sug) seekProgram(sourceToProgramOf(project, sug.start))
+      if (sug) hearSource(sug.start, sug.end)
       return
     }
     if (next.gap) {
       const sug = pendingSuggestionForGap(project, next.gap.start, next.gap.end)
       if (sug) {
         selectSuggestion(sug.id)
-        seekProgram(sourceToProgramOf(project, sug.start))
+        hearSource(sug.start, sug.end)
       } else {
         selectGap(next.gap)
-        seekProgram(sourceToProgramOf(project, next.gap.start))
+        hearSource(next.gap.start, next.gap.end)
       }
     }
   }
@@ -193,7 +220,15 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         )}
         {pane === 'words' && wordsDetail && (
           <>
-            <HelperHead headline={wordsDetail.headline} detail={wordsDetail.clock} />
+            <HelperHead
+              headline={wordsDetail.headline}
+              detail={wordsDetail.clock}
+              onHear={() => {
+                const words = project.transcript.words.filter((w) => selectedWordIds.includes(w.id))
+                if (!words.length) return
+                hearSource(Math.min(...words.map((w) => w.start)), Math.max(...words.map((w) => w.end)))
+              }}
+            />
             <p className="helper-excerpt">"{wordsDetail.excerpt}"</p>
             <HelperActions dispatch={dispatch} actions={wordsDetail.actions} onNavigate={compareTakes} />
             <HelperSection title="Adjust">
@@ -285,7 +320,11 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     key={s.id}
                     className="helper-row"
                     type="button"
-                    onClick={() => selectSuggestion(s.id)}
+                    onClick={() => {
+                      selectSuggestion(s.id)
+                      const sug = project.suggestions.find((item) => item.id === s.id)
+                      if (sug) hearSource(sug.start, sug.end)
+                    }}
                   >
                     <span>{s.label}</span>
                     <span className="helper-row-meta">{s.applied ? 'applied' : s.safe ? 'safe' : 'review'}</span>
@@ -296,18 +335,127 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             {wordsDetail.nextHint && <HelperNext hint={wordsDetail.nextHint} />}
           </>
         )}
-        {pane === 'scene' && sceneDetail && (
+        {pane === 'scene' && sceneDetail && selectedSceneId && (
           <>
-            <HelperHead headline={sceneDetail.headline} detail={sceneDetail.clock} />
+            <HelperHead
+              headline={sceneDetail.headline}
+              detail={sceneDetail.clock}
+              onHear={() => selectedScene && hearSource(selectedScene.start, selectedScene.end)}
+            />
             <p className="help">{sceneDetail.explanation}</p>
             {sceneDetail.excerpt && <p className="helper-excerpt">"{sceneDetail.excerpt}"</p>}
             <HelperActions dispatch={dispatch} actions={sceneDetail.actions} onNavigate={compareTakes} />
+            <HelperSection title="Chapter">
+              <Field label="Name">
+                <input
+                  key={`${selectedSceneId}-title`}
+                  type="text"
+                  defaultValue={selectedScene?.title ?? ''}
+                  onBlur={(e) => {
+                    const title = e.target.value.trim()
+                    if (title) dispatch({ type: 'renameScene', sceneId: selectedSceneId, title })
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  }}
+                />
+              </Field>
+              <Field label="Summary">
+                <input
+                  key={`${selectedSceneId}-summary`}
+                  type="text"
+                  defaultValue={selectedScene?.summary ?? ''}
+                  onBlur={(e) =>
+                    dispatch({ type: 'renameScene', sceneId: selectedSceneId, summary: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  }}
+                />
+              </Field>
+              <div className="chips">
+                {selectedScene &&
+                  programToSourceOf(project, programTime) > selectedScene.start + 0.2 &&
+                  programToSourceOf(project, programTime) < selectedScene.end - 0.2 && (
+                    <button
+                      className="chip"
+                      type="button"
+                      title="Split this chapter at the playhead"
+                      onClick={() =>
+                        dispatch({
+                          type: 'splitScene',
+                          sceneId: selectedSceneId,
+                          time: programToSourceOf(project, programTime)
+                        })
+                      }
+                    >
+                      Split chapter here
+                    </button>
+                  )}
+                {scenePrev && (
+                  <button
+                    className="chip"
+                    type="button"
+                    title={`Join with ${scenePrev.title}`}
+                    onClick={() =>
+                      dispatch({ type: 'mergeScenes', sceneId: selectedSceneId, otherId: scenePrev.id })
+                    }
+                  >
+                    Merge with previous
+                  </button>
+                )}
+                {sceneNext && (
+                  <button
+                    className="chip"
+                    type="button"
+                    title={`Join with ${sceneNext.title}`}
+                    onClick={() =>
+                      dispatch({ type: 'mergeScenes', sceneId: selectedSceneId, otherId: sceneNext.id })
+                    }
+                  >
+                    Merge with next
+                  </button>
+                )}
+              </div>
+              <div className="helper-inline">
+                {scenePrev && (
+                  <button
+                    className="chip"
+                    type="button"
+                    onClick={() => {
+                      selectScene(scenePrev.id)
+                      seekProgram(sourceToProgramOf(project, scenePrev.start))
+                      playLoop(sourceToProgramOf(project, scenePrev.start), sourceToProgramOf(project, scenePrev.end))
+                    }}
+                  >
+                    ‹ {scenePrev.title}
+                  </button>
+                )}
+                {sceneNext && (
+                  <button
+                    className="chip"
+                    type="button"
+                    onClick={() => {
+                      selectScene(sceneNext.id)
+                      seekProgram(sourceToProgramOf(project, sceneNext.start))
+                      playLoop(sourceToProgramOf(project, sceneNext.start), sourceToProgramOf(project, sceneNext.end))
+                    }}
+                  >
+                    {sceneNext.title} ›
+                  </button>
+                )}
+              </div>
+            </HelperSection>
             {sceneDetail.nextHint && <HelperNext hint={sceneDetail.nextHint} />}
           </>
         )}
         {pane === 'gap' && gapDetail && (
           <>
-            <HelperHead headline={gapDetail.headline} detail={gapDetail.clock} />
+            <HelperHead
+              headline={gapDetail.headline}
+              detail={gapDetail.clock}
+              onHear={() => selectedGap && hearSource(selectedGap.start, selectedGap.end)}
+            />
             <p className="help">{gapDetail.explanation}</p>
             {gapDetail.tag && (
               <p className="help" data-tag={gapDetail.tag.kind}>
@@ -324,7 +472,14 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         )}
         {pane === 'suggestion' && suggestionDetail && (
           <>
-            <HelperHead headline={suggestionDetail.headline} detail={suggestionDetail.clock} />
+            <HelperHead
+              headline={suggestionDetail.headline}
+              detail={suggestionDetail.clock}
+              onHear={() => {
+                const sug = project.suggestions.find((s) => s.id === selectedSuggestionId)
+                if (sug) hearSource(sug.start, sug.end)
+              }}
+            />
             <p className="help">{suggestionDetail.explanation}</p>
             {suggestionDetail.excerpt && <p className="helper-excerpt">"{suggestionDetail.excerpt}"</p>}
             <HelperActions dispatch={dispatch} actions={suggestionDetail.actions} onNavigate={compareTakes} />
@@ -342,7 +497,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         )}
         {(pane === 'project' || pane === 'job') && (
           <>
-            {projectDetail.isEmpty && pane === 'project' && <StartGuide compact />}
+            {projectDetail.isEmpty && pane === 'project' && <StartGuide compact onToast={onToast} />}
             <HelperHead headline={projectDetail.headline} />
             {projectDetail.pendingByType.length > 0 && (
               <HelperSection title="Waiting">
@@ -384,8 +539,21 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               cuts · {project.suggestions.filter((s) => !s.applied).length} open edits
             </p>
             <Field label="Document">
-              <input type="text" readOnly value={documentPath || 'Unsaved — use File → Save'} />
+              <input type="text" readOnly value={documentPath || 'Unsaved — click Save'} />
             </Field>
+            {(dirty || !documentPath) && (
+              <button
+                className="chip"
+                type="button"
+                onClick={() => {
+                  void saveCurrentDocument().then((path) => {
+                    if (path) onToast?.(`Saved ${currentDocumentTitle()}.`)
+                  })
+                }}
+              >
+                Save reel…
+              </button>
+            )}
             {missingAssets.map((asset) => (
               <p key={asset.id} className="help">
                 Missing {asset.name}{' '}
@@ -393,8 +561,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   className="chip"
                   type="button"
                   onClick={() => {
-                    void relinkAssetInteractive(asset.id).then((path) => {
-                      if (path) onToast?.(`Relinked ${asset.name}.`)
+                    void relinkAssetInteractive(asset.id).then((result) => {
+                      if (result) onToast?.(relinkToast(asset.name, result.nearby))
                     })
                   }}
                 >
@@ -402,6 +570,19 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </button>
               </p>
             ))}
+            {missingAssets.length > 1 && (
+              <button
+                className="chip"
+                type="button"
+                onClick={() => {
+                  void relinkAllMissing((name) => onToast?.(`Relinked ${name}.`)).then((n) => {
+                    if (n) onToast?.(`Relinked ${n} file${n === 1 ? '' : 's'}.`)
+                  })
+                }}
+              >
+                Relink all missing…
+              </button>
+            )}
             <button className="chip" type="button" onClick={() => setAdvanced((on) => !on)}>
               {advanced ? 'Hide advanced' : 'Advanced'}
             </button>
@@ -445,7 +626,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                             type="button"
                             className="chip"
                             data-active={pace === preset.id}
-                            title={`Leave about ${preset.margin}s between cuts`}
+                            title={preset.hint}
                             onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
                           >
                             {preset.label}
@@ -465,7 +646,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 )}
                 {task.showPace && (
                   <Slider
-                    label="Cut pad"
+                    label="Pause padding"
                     value={project.cutMargin}
                     min={0}
                     max={0.4}
@@ -474,6 +655,46 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   />
                 )}
                 <ModelsPanel onToast={onToast ?? (() => undefined)} />
+                <HelperSection title="Master picture">
+                  <p className="help">Applies to the whole reel. Clip transform still wins on overlays.</p>
+                  <Slider
+                    label="Scale"
+                    value={project.picture.scale}
+                    min={0.4}
+                    max={3}
+                    step={0.01}
+                    onChange={(scale) => dispatch({ type: 'setPicture', transform: { scale } })}
+                  />
+                  <Slider
+                    label="X"
+                    value={project.picture.x}
+                    min={-800}
+                    max={800}
+                    onChange={(x) => dispatch({ type: 'setPicture', transform: { x } })}
+                  />
+                  <Slider
+                    label="Y"
+                    value={project.picture.y}
+                    min={-800}
+                    max={800}
+                    onChange={(y) => dispatch({ type: 'setPicture', transform: { y } })}
+                  />
+                  <Slider
+                    label="Rotation"
+                    value={project.picture.rotation}
+                    min={-180}
+                    max={180}
+                    onChange={(rotation) => dispatch({ type: 'setPicture', transform: { rotation } })}
+                  />
+                  <Slider
+                    label="Opacity"
+                    value={project.picture.opacity}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    onChange={(opacity) => dispatch({ type: 'setPicture', transform: { opacity } })}
+                  />
+                </HelperSection>
                 <HelperSection title="Monitor">
                   <label className="field inline">
                     <input
@@ -484,6 +705,11 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     <span>Show current word under video</span>
                   </label>
                 </HelperSection>
+                {Object.values(project.assets).some((asset) => asset.proxyPath) && (
+                  <p className="help">
+                    Editing with a lighter preview. Export still uses the original camera file.
+                  </p>
+                )}
               </>
             )}
             </>
@@ -496,11 +722,51 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           </>
         )}
 
-        {pane === 'clip' && clip && (
+        {pane === 'clip' && clip && clip.kind === 'slug' && (
+          <>
+            <HelperHead
+              headline="Hold"
+              detail={`${formatClock(clip.duration)} of black / silence · later clips stay put`}
+              onHear={() => playLoop(clip.start, clip.start + clip.duration)}
+            />
+            <HelperActions
+              dispatch={dispatch}
+              actions={[
+                {
+                  id: 'close-gap',
+                  label: 'Close gap',
+                  consequence: 'Removes the hold and slides later clips left.',
+                  command: { type: 'removeInsert', insertId: slugInsertId(clip.id) ?? '' },
+                  primary: true
+                }
+              ]}
+            />
+            <div className="chips">
+              {([0.5, 1, 2] as const).map((seconds) => (
+                <button
+                  key={seconds}
+                  className="chip"
+                  type="button"
+                  title={`Replace this hold with ${seconds}s`}
+                  onClick={() => {
+                    const id = slugInsertId(clip.id)
+                    if (!id) return
+                    dispatch({ type: 'removeInsert', insertId: id })
+                    dispatch({ type: 'insertGap', time: clip.start, duration: seconds })
+                  }}
+                >
+                  {seconds}s
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {pane === 'clip' && clip && clip.kind !== 'slug' && (
           <>
             <HelperHead
               headline={clip.text || 'Picture segment'}
               detail={`${formatClock(clip.inPoint)}–${formatClock(clip.outPoint)} · program ${formatClock(clip.start)}–${formatClock(clip.start + clip.duration)}`}
+              onHear={() => playLoop(clip.start, clip.start + clip.duration)}
             />
             <HelperActions
               dispatch={dispatch}
@@ -531,7 +797,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     : []),
                 {
                   id: 'trim-in',
-                  label: 'Trim to playhead (in)',
+                  label: 'Trim start to here',
                   consequence: isPrimary
                     ? 'Cuts everything before the playhead in this segment.'
                     : 'Moves the clip in-point to the playhead.',
@@ -552,7 +818,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 },
                 {
                   id: 'trim-out',
-                  label: 'Trim to playhead (out)',
+                  label: 'Trim end to here',
                   consequence: isPrimary
                     ? 'Cuts everything after the playhead in this segment.'
                     : 'Moves the clip out-point to the playhead.',
@@ -575,9 +841,179 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   label: 'Split at playhead',
                   consequence: 'Blades the clip at the current playhead position.',
                   command: { type: 'splitAt', time: programToSourceOf(project, programTime) }
-                }
+                },
+                ...(!isPrimary
+                  ? [
+                      {
+                        id: 'duplicate',
+                        label: 'Duplicate clip',
+                        consequence: 'Places a copy right after this clip.',
+                        command: { type: 'duplicateClip', clipId: clip.id }
+                      } as InspectorAction,
+                      {
+                        id: 'extend',
+                        label: 'Extend to playhead',
+                        consequence: 'Grows the clip so it meets the playhead (E).',
+                        command: { type: 'extendClip', clipId: clip.id, time: programTime }
+                      } as InspectorAction
+                    ]
+                  : [])
               ]}
             />
+            {selectedClipIds.length > 1 && (
+              <p className="help">{selectedClipIds.length} clips selected · Delete removes all · ← → nudge together</p>
+            )}
+            {!isPrimary && (
+              <>
+                <p className="help">
+                  ← → nudge one frame · Shift 1s · Alt 10 frames. Alt-drag slips media. Shift-drag slides. Shift-drag a
+                  handle rolls the cut.
+                </p>
+                <div className="chips">
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Nudge one frame earlier"
+                    onClick={() =>
+                      dispatch({
+                        type: 'nudgeClips',
+                        clipIds: selectedClipIds.length ? selectedClipIds : [clip.id],
+                        delta: -1 / Math.max(1, project.fps)
+                      })
+                    }
+                  >
+                    ← Frame
+                  </button>
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Nudge one frame later"
+                    onClick={() =>
+                      dispatch({
+                        type: 'nudgeClips',
+                        clipIds: selectedClipIds.length ? selectedClipIds : [clip.id],
+                        delta: 1 / Math.max(1, project.fps)
+                      })
+                    }
+                  >
+                    Frame →
+                  </button>
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Slip media one frame earlier (keep the clip where it sits)"
+                    onClick={() => dispatch({ type: 'slipClip', clipId: clip.id, delta: -1 / Math.max(1, project.fps) })}
+                  >
+                    Slip ←
+                  </button>
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Slip media one frame later"
+                    onClick={() => dispatch({ type: 'slipClip', clipId: clip.id, delta: 1 / Math.max(1, project.fps) })}
+                  >
+                    Slip →
+                  </button>
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Copy this clip (⌘C). Paste lands at the playhead."
+                    onClick={() => {
+                      if (copySelectedClip('clip')) onToast?.('Copied. ⌘V pastes at the playhead.')
+                    }}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Paste the copied clip at the playhead (⌘V)"
+                    onClick={() => {
+                      if (pasteClipboard('clip')) onToast?.('Pasted at the playhead.')
+                    }}
+                  >
+                    Paste here
+                  </button>
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Copy transform, volume, and fades onto the selected clip (⌘⇧V)"
+                    onClick={() => {
+                      if (pasteClipboard('look')) onToast?.('Pasted look.')
+                    }}
+                  >
+                    Paste look
+                  </button>
+                </div>
+              </>
+            )}
+            <Slider
+              label="Clip volume"
+              value={clip.volume}
+              min={0}
+              max={2}
+              step={0.01}
+              onChange={(volume) => dispatch({ type: 'setVolume', clipId: clip.id, volume })}
+            />
+            <Slider
+              label="Pan"
+              value={clip.pan ?? 0}
+              min={-1}
+              max={1}
+              step={0.01}
+              onChange={(pan) => dispatch({ type: 'setPan', clipId: clip.id, pan })}
+            />
+            {!isPrimary && (
+              <>
+                <p className="help">Picture-in-picture corners. Same look you can paste with ⌘⇧V.</p>
+                <div className="chips">
+                  {(
+                    [
+                      ['Top right', { x: 420, y: -280, scale: 0.32 }],
+                      ['Bottom right', { x: 420, y: 280, scale: 0.32 }],
+                      ['Top left', { x: -420, y: -280, scale: 0.32 }],
+                      ['Bottom left', { x: -420, y: 280, scale: 0.32 }],
+                      ['Center', { x: 0, y: 0, scale: 0.45 }],
+                      ['Full', { x: 0, y: 0, scale: 1 }]
+                    ] as const
+                  ).map(([label, transform]) => (
+                    <button
+                      key={label}
+                      className="chip"
+                      type="button"
+                      title={`Place this overlay ${label.toLowerCase()}`}
+                      onClick={() => dispatch({ type: 'setTransform', clipId: clip.id, transform })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Swap the file on this clip. The edit stays put."
+                    onClick={() => {
+                      void (ownerTrack?.type === 'audio' ? pickAudio() : pickBroll()).then((asset) => {
+                        if (!asset) return
+                        dispatch({ type: 'replaceClipMedia', clipId: clip.id, asset })
+                        onToast?.(`Replaced with ${asset.name}`)
+                      })
+                    }}
+                  >
+                    Replace footage
+                  </button>
+                </div>
+              </>
+            )}
+            {!isPrimary && (
+              <label className="field check">
+                <span>Mute clip</span>
+                <input
+                  type="checkbox"
+                  checked={clip.muted}
+                  onChange={(e) => dispatch({ type: 'setMuted', clipId: clip.id, muted: e.target.checked })}
+                />
+              </label>
+            )}
             <button className="chip" type="button" onClick={() => setAdvanced((value) => !value)}>
               {advanced ? 'Hide transform' : 'Transform & fades'}
             </button>
@@ -660,6 +1096,72 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 })
               }
             />
+            <Slider
+              label="Crop left"
+              value={clip.transform.crop?.x ?? 0}
+              min={0}
+              max={0.45}
+              step={0.01}
+              onChange={(x) => {
+                const crop = clip.transform.crop
+                const right = 1 - crop.x - crop.w
+                const width = Math.max(0.2, 1 - x - right)
+                dispatch({
+                  type: 'setTransform',
+                  clipId: clip.id,
+                  transform: { crop: { ...crop, x, w: width } }
+                })
+              }}
+            />
+            <Slider
+              label="Crop right"
+              value={cropRightOf(clip.transform.crop)}
+              min={0}
+              max={0.45}
+              step={0.01}
+              onChange={(right) => {
+                const crop = clip.transform.crop
+                const width = Math.max(0.2, 1 - crop.x - right)
+                dispatch({
+                  type: 'setTransform',
+                  clipId: clip.id,
+                  transform: { crop: { ...crop, w: width } }
+                })
+              }}
+            />
+            <Slider
+              label="Crop top"
+              value={clip.transform.crop?.y ?? 0}
+              min={0}
+              max={0.45}
+              step={0.01}
+              onChange={(y) => {
+                const crop = clip.transform.crop
+                const bottom = 1 - crop.y - crop.h
+                const height = Math.max(0.2, 1 - y - bottom)
+                dispatch({
+                  type: 'setTransform',
+                  clipId: clip.id,
+                  transform: { crop: { ...crop, y, h: height } }
+                })
+              }}
+            />
+            <Slider
+              label="Crop bottom"
+              value={cropBottomOf(clip.transform.crop)}
+              min={0}
+              max={0.45}
+              step={0.01}
+              onChange={(bottom) => {
+                const crop = clip.transform.crop
+                const height = Math.max(0.2, 1 - crop.y - bottom)
+                dispatch({
+                  type: 'setTransform',
+                  clipId: clip.id,
+                  transform: { crop: { ...crop, h: height } }
+                })
+              }}
+            />
             {isPrimary && (
               <>
                 <Slider
@@ -690,14 +1192,6 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </button>
               </>
             )}
-            <Slider
-              label="Clip volume"
-              value={clip.volume}
-              min={0}
-              max={2}
-              step={0.01}
-              onChange={(volume) => dispatch({ type: 'setVolume', clipId: clip.id, volume })}
-            />
               </>
             )}
           </>
@@ -786,7 +1280,15 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
 
         {pane === 'caption' && (
           <>
-            <HelperHead headline="Caption" detail="Burned on V3 · lower thirds on V2" />
+            <HelperHead
+              headline="Caption"
+              detail="Burned on V3 · lower thirds on V2"
+              onHear={
+                overlayClip
+                  ? () => playLoop(overlayClip.start, overlayClip.start + overlayClip.duration)
+                  : undefined
+              }
+            />
             <button
               className="chip"
               onClick={() =>
@@ -856,24 +1358,20 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   </select>
                 </Field>
                 <Field label="Fill">
-                  <input
-                    type="text"
+                  <ColorField
                     value={overlayClip.style?.fill ?? '#F4EEE4'}
-                    onChange={(e) =>
-                      dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { fill: e.target.value } })
+                    fallback="#F4EEE4"
+                    onChange={(fill) =>
+                      dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { fill } })
                     }
                   />
                 </Field>
                 <Field label="Stroke">
-                  <input
-                    type="text"
+                  <ColorField
                     value={overlayClip.style?.stroke ?? '#16140F'}
-                    onChange={(e) =>
-                      dispatch({
-                        type: 'setCaptionStyle',
-                        clipId: overlayClip.id,
-                        style: { stroke: e.target.value }
-                      })
+                    fallback="#16140F"
+                    onChange={(stroke) =>
+                      dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { stroke } })
                     }
                   />
                 </Field>
@@ -899,11 +1397,61 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   )
 }
 
-function HelperHead({ headline, detail }: { headline: string; detail?: string }) {
+function HelperHead({
+  headline,
+  detail,
+  onHear
+}: {
+  headline: string
+  detail?: string
+  onHear?: () => void
+}) {
   return (
     <div className="helper-head">
-      <p className="helper-headline">{headline}</p>
+      <div className="helper-head-row">
+        <p className="helper-headline">{headline}</p>
+        {onHear && (
+          <button className="chip" type="button" title="Hear this" onClick={onHear}>
+            Hear
+          </button>
+        )}
+      </div>
       {detail && <p className="help">{detail}</p>}
+    </div>
+  )
+}
+
+function colorSwatch(value: string, fallback: string): string {
+  const raw = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw
+  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+    return `#${raw
+      .slice(1)
+      .split('')
+      .map((c) => c + c)
+      .join('')}`
+  }
+  return fallback
+}
+
+function ColorField({
+  value,
+  fallback,
+  onChange
+}: {
+  value: string
+  fallback: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="color-field">
+      <input
+        type="color"
+        aria-label="Pick color"
+        value={colorSwatch(value, fallback)}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <input type="text" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} />
     </div>
   )
 }

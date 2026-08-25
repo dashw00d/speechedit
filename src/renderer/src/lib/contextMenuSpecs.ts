@@ -11,6 +11,8 @@ import { programLength, primarySegments } from './commands'
 import { takeFamily } from './sceneAnalysis'
 import { programToSourceOf, sourceToProgramOf } from './resolver'
 import { paragraphIds, sentenceIds } from './transcriptEdit'
+import { ffmpegImportBusy } from './mediaJobs'
+import { copySelectedClip, pasteClipboard } from './clipClipboard'
 import { useEditor, usePlayback } from '../store'
 import type { EditBlock } from './timelineEdits'
 
@@ -110,7 +112,7 @@ function wordMenu(wordId: string): ContextMenuSpec {
   items.push({ id: 'sep-play', label: '', separator: true })
   items.push({
     id: 'park',
-    label: 'Park playhead here',
+    label: 'Go here',
     run: () => usePlayback.getState().seekSource(word.start)
   })
 
@@ -178,7 +180,7 @@ function clipMenu(clipId: string): ContextMenuSpec {
   const items: ContextMenuItem[] = [
     {
       id: 'trim-in',
-      label: 'Trim to playhead (in)',
+      label: 'Trim start to here',
       run: () => {
         if (isPrimary) {
           editor.dispatch({ type: 'trimPrimary', segmentId: clip.id, edge: 'in', sourceTime })
@@ -189,7 +191,7 @@ function clipMenu(clipId: string): ContextMenuSpec {
     },
     {
       id: 'trim-out',
-      label: 'Trim to playhead (out)',
+      label: 'Trim end to here',
       run: () => {
         if (isPrimary) {
           editor.dispatch({ type: 'trimPrimary', segmentId: clip.id, edge: 'out', sourceTime })
@@ -207,10 +209,36 @@ function clipMenu(clipId: string): ContextMenuSpec {
     { id: 'sep', label: '', separator: true },
     {
       id: 'park',
-      label: 'Park playhead at clip start',
+      label: 'Go to clip start',
       run: () => playback.seekProgram(clip.start)
     }
   ]
+
+  if (!isPrimary) {
+    items.push({
+      id: 'copy',
+      label: 'Copy clip',
+      run: () => {
+        editor.selectClip(clip.id)
+        copySelectedClip('clip')
+      }
+    })
+    items.push({
+      id: 'paste',
+      label: 'Paste at playhead',
+      run: () => pasteClipboard('clip')
+    })
+    items.push({
+      id: 'duplicate',
+      label: 'Duplicate clip',
+      run: () => editor.dispatch({ type: 'duplicateClip', clipId: clip.id })
+    })
+    items.push({
+      id: 'mute',
+      label: clip.muted ? 'Unmute clip' : 'Mute clip',
+      run: () => editor.dispatch({ type: 'setMuted', clipId: clip.id, muted: !clip.muted })
+    })
+  }
 
   if (clip.text) {
     items.unshift({
@@ -231,8 +259,13 @@ function editBlockMenu(block: EditBlock): ContextMenuSpec {
   const items: ContextMenuItem[] = [
     {
       id: 'park',
-      label: 'Park playhead',
+      label: 'Go here',
       run: () => playback.seekProgram(block.start)
+    },
+    {
+      id: 'hear',
+      label: 'Hear',
+      run: () => playback.playLoop(block.start, block.end)
     }
   ]
 
@@ -245,7 +278,7 @@ function editBlockMenu(block: EditBlock): ContextMenuSpec {
   } else if (block.tagId) {
     items.push({
       id: 'remove-tag',
-      label: 'Remove guard',
+      label: 'Remove protection',
       run: () => editor.dispatch({ type: 'removeTag', tagId: block.tagId! })
     })
   } else if (block.sceneId) {
@@ -323,6 +356,12 @@ function timelinePaneMenu(): ContextMenuSpec {
   const sourceTime = programToSourceOf(editor.project, playback.programTime)
   const items: ContextMenuItem[] = [
     {
+      id: 'fit',
+      label: 'Fit timeline',
+      shortcut: '\\',
+      run: () => playback.fitTimeline()
+    },
+    {
       id: 'split',
       label: 'Split at playhead',
       shortcut: '⌘\\',
@@ -335,7 +374,7 @@ function timelinePaneMenu(): ContextMenuSpec {
     },
     {
       id: 'guard',
-      label: editor.tool === 'guard' ? 'Guard tool off' : 'Guard tool on',
+      label: editor.tool === 'guard' ? 'Done protecting' : 'Protect words',
       run: () => editor.setTool(editor.tool === 'guard' ? 'select' : 'guard')
     },
     { id: 'sep', label: '', separator: true },
@@ -379,7 +418,7 @@ function appMenu(): ContextMenuSpec {
     items.push({
       id: 'export',
       label: editor.exporting ? 'Cancel export' : 'Export…',
-      disabled: Boolean(editor.analyzing),
+      disabled: ffmpegImportBusy(editor.analyzing),
       run: () => window.dispatchEvent(new CustomEvent('speechedit:export'))
     })
   }

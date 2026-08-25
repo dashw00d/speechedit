@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
+import { ANALYSIS_CACHE_VERSION } from '../../../shared/importLooks'
 import { host } from '../host'
 import { useEditor } from '../store'
 import { createEmptyProject } from './demo'
@@ -58,7 +59,7 @@ describe('waveform and thumbnail disk cache', () => {
       const { analysisCachePath } = await import('../../../main/mediaCache.ts')
       mkdirSync(analysisCachePath('/tmp/se-analysis.m4a').replace(/[^/]+$/, ''), { recursive: true })
       const sentinel = {
-        v: 1,
+        v: ANALYSIS_CACHE_VERSION,
         silence: [{ start: 0.2, end: 0.8 }],
         scenes: { times: [0.4], staticRegions: [] },
         loudness: [{ start: 0, end: 0.4, lufs: -10 }]
@@ -236,6 +237,33 @@ describe('waveform and thumbnail disk cache', () => {
       } finally {
         Object.assign(host, prev)
       }
+    })
+  }, 30000)
+
+  test('silence still works on muxed video when looks skip the picture', async () => {
+    await withCacheHome(async () => {
+      const ffmpeg = Bun.which('ffmpeg')
+      if (!ffmpeg) throw new Error('ffmpeg required for muxed silence smoke')
+      await Bun.$`${ffmpeg} -y -f lavfi -i color=c=black:s=320x180:r=10 -f lavfi -i anullsrc=r=8000:cl=mono -t 1 -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/se-looks-silent.mp4`.quiet()
+      await Bun.$`${ffmpeg} -y -f lavfi -i anullsrc=r=8000:cl=mono -t 1 -c:a aac /tmp/se-looks-audio.m4a`.quiet()
+      const { detectSilence, detectScenes, analyzeMedia } = await import('../../../main/ffmpeg.ts')
+      const { analysisCachePath } = await import('../../../main/mediaCache.ts')
+      const gaps = await detectSilence('/tmp/se-looks-silent.mp4')
+      expect(gaps.some((gap) => gap.end - gap.start >= 0.3)).toBe(true)
+      expect(await detectScenes('/tmp/se-looks-audio.m4a')).toEqual({ times: [], staticRegions: [] })
+      mkdirSync(analysisCachePath('/tmp/se-looks-silent.mp4').replace(/[^/]+$/, ''), { recursive: true })
+      writeFileSync(
+        analysisCachePath('/tmp/se-looks-silent.mp4'),
+        JSON.stringify({
+          v: 1,
+          silence: [{ start: 9, end: 9.5 }],
+          scenes: { times: [1], staticRegions: [] },
+          loudness: []
+        })
+      )
+      const analysis = await analyzeMedia('/tmp/se-looks-silent.mp4')
+      expect(analysis.silence).not.toEqual([{ start: 9, end: 9.5 }])
+      expect(analysis.silence.some((gap) => gap.end - gap.start >= 0.3)).toBe(true)
     })
   }, 30000)
 })

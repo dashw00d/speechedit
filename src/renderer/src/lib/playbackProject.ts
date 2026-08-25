@@ -1,14 +1,17 @@
 import { applyCommand } from './commands'
+import { safeEditCandidates } from './firstEdit'
 import type { Project } from '../types'
+import { withSoloApplied } from './timelineTracks'
 
 export function hasPendingSafeCuts(project: Project): boolean {
-  return project.suggestions.some(
-    (s) => s.safe && !s.applied && !s.blockedBy && (s.action === 'cut' || s.action === 'normalize')
-  )
+  return safeEditCandidates(project).length > 0
 }
 
 /** Virtual apply of safe cuts for monitor playback — does not mutate the reel. */
 export function projectForPlayback(project: Project, previewSafeCuts: boolean): Project {
-  if (!previewSafeCuts || !hasPendingSafeCuts(project)) return project
-  return applyCommand(project, { type: 'applySafeSuggestions' })
+  const next =
+    previewSafeCuts && hasPendingSafeCuts(project)
+      ? applyCommand(project, { type: 'applySafeSuggestions' })
+      : project
+  return withSoloApplied(next)
 }

@@ -1,13 +1,16 @@
 import {
   DEFAULT_CAPTION_STYLE,
   DEFAULT_TRANSFORM,
+  type Asset,
   type CaptionStyle,
   type Clip,
   type Cut,
   type Interval,
   type Project,
-  type SegmentStyle
+  type SegmentStyle,
+  type Track
 } from '../types'
+import { applyCommand } from './commands'
 import {
   captionsForExport,
   clipsFromCaptionCues,
@@ -23,7 +26,170 @@ import {
 import { invertIntervals, mergeIntervals, overlap } from './edl'
 import { normalizeProject } from './normalize'
 import { programLengthOf, resolveSegments, sourcePieces, sourceToProgramOf } from './resolver'
+import { localSourceTime, primaryAssetAt, primaryTakes, sourceOffsetOf } from './takes'
 import { uid } from './time'
+
+function mediaPathKey(path: string): string {
+  return decodeURIComponent(path.replace(/^file:\/\//i, '').replace(/\\/g, '/')).replace(/\/+$/, '').toLowerCase()
+}
+
+function takeByPath(project: Project, path?: string) {
+  const takes = primaryTakes(project)
+  if (!path) return takes[0]
+  const key = mediaPathKey(path)
+  const name = key.split('/').pop() ?? key
+  return (
+    Object.values(project.assets).find((asset) => asset.path && mediaPathKey(asset.path) === key) ??
+    Object.values(project.assets).find((asset) => asset.path && mediaPathKey(asset.path).endsWith(`/${name}`)) ??
+    takes[0]
+  )
+}
+
+function unifyLocalSpan(project: Project, localStart: number, localEnd: number, path?: string): Interval {
+  const offset = sourceOffsetOf(takeByPath(project, path))
+  return { start: localStart + offset, end: localEnd + offset }
+}
+
+function xmlAttrs(tag: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  const re = /([A-Za-z_:][\w:.-]*)="([^"]*)"/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(tag))) out[match[1]] = match[2]
+  return out
+}
+
+interface TakeResource {
+  take: ReturnType<typeof primaryTakes>[number]
+  id: string
+  producerId: string
+  fileId: string
+}
+
+function timelineTakes(project: Project) {
+  const takes = primaryTakes(project)
+  if (takes.length) return takes
+  return Object.values(project.assets).filter((asset) => asset.kind !== 'image').slice(0, 1)
+}
+
+function takeResources(project: Project): TakeResource[] {
+  return timelineTakes(project).map((take, index) => ({
+    take,
+    id: `r${index + 1}`,
+    producerId: index === 0 ? 'src' : `src_${take.id}`,
+    fileId: `file${index + 1}`
+  }))
+}
+
+interface MediaClipRow {
+  track: Track
+  clip: Clip
+  asset: Asset
+}
+
+interface OverlayResource {
+  asset: Asset
+  id: string
+  producerId: string
+  fileId: string
+}
+
+function mediaClipRows(project: Project): MediaClipRow[] {
+  return project.tracks.flatMap((track) => {
+    if (track.type !== 'overlay' && track.type !== 'audio') return []
+    return track.clips.flatMap((clip) => {
+      const asset = clip.assetId ? project.assets[clip.assetId] : undefined
+      if (!asset?.path) return []
+      return [{ track, clip, asset }]
+    })
+  })
+}
+
+function overlayResources(project: Project): OverlayResource[] {
+  const seen = new Map<string, OverlayResource>()
+  let index = 0
+  for (const row of mediaClipRows(project)) {
+    if (seen.has(row.asset.id)) continue
+    index += 1
+    const audio = row.track.type === 'audio' || row.asset.kind === 'audio'
+    seen.set(row.asset.id, {
+      asset: row.asset,
+      id: `ov${index}`,
+      producerId: audio ? `bed_${row.asset.id}` : `ov_${row.asset.id}`,
+      fileId: `ovfile${index}`
+    })
+  }
+  return [...seen.values()]
+}
+
+function resourceForAsset(resources: OverlayResource[], assetId?: string): OverlayResource | undefined {
+  return resources.find((row) => row.asset.id === assetId)
+}
+
+interface RestoredMediaClip {
+  path: string
+  name?: string
+  start: number
+  duration: number
+  inPoint?: number
+  kind: 'overlay' | 'audio'
+}
+
+function restoreMediaClips(project: Project, clips: RestoredMediaClip[]): Project {
+  let next = project
+  for (const row of clips) {
+    if (!row.path || row.duration <= 0.03) continue
+    const inPoint = Math.max(0, row.inPoint ?? 0)
+    const existing = Object.values(next.assets).find(
+      (asset) => asset.path && mediaPathKey(asset.path) === mediaPathKey(row.path)
+    )
+    const span = inPoint + row.duration
+    const asset: Asset = existing
+      ? { ...existing, duration: Math.max(existing.duration, span, 0.2) }
+      : {
+          id: uid('asset'),
+          path: row.path,
+          name: row.name ?? row.path.split(/[\\/]/).pop() ?? 'clip',
+          kind: row.kind === 'audio' ? 'audio' : 'video',
+          duration: Math.max(span, 0.2),
+          waveform: []
+        }
+    const already = next.tracks.some((track) =>
+      track.clips.some(
+        (clip) =>
+          clip.assetId === asset.id &&
+          Math.abs(clip.start - row.start) < 0.05 &&
+          Math.abs(clip.duration - row.duration) < 0.05 &&
+          Math.abs(clip.inPoint - inPoint) < 0.05
+      )
+    )
+    if (already) continue
+    next = applyCommand(
+      next,
+      row.kind === 'audio'
+        ? { type: 'addAudio', asset, start: row.start, duration: row.duration, inPoint }
+        : { type: 'addBroll', asset, start: row.start, duration: row.duration, inPoint }
+    )
+  }
+  return next
+}
+
+function resourceForTime(project: Project, resources: TakeResource[], sourceTime: number): TakeResource | undefined {
+  const take = primaryAssetAt(project, sourceTime)
+  return resources.find((row) => row.take.id === take?.id) ?? resources[0]
+}
+
+function localClip(project: Project, resources: TakeResource[], seg: { inPoint: number; outPoint: number; start: number; duration: number }) {
+  const resource = resourceForTime(project, resources, seg.inPoint)
+  const take = resource?.take
+  return {
+    resource,
+    take,
+    localIn: localSourceTime(seg.inPoint, take),
+    localOut: localSourceTime(seg.outPoint, take),
+    programStart: seg.start,
+    programDuration: seg.duration
+  }
+}
 
 export {
   projectToChapters,
@@ -41,7 +207,7 @@ export function projectToVtt(project: Project): string {
 
 export function projectToOtio(project: Project): string {
   const current = normalizeProject(project)
-  const asset = Object.values(current.assets).find((a) => a.path)
+  const resources = takeResources(current)
   const segs = resolveSegments(current)
   const rate = current.fps
   const rational = (seconds: number) => ({
@@ -49,53 +215,95 @@ export function projectToOtio(project: Project): string {
     value: Math.round(seconds * rate),
     rate
   })
-  const clips = segs.map((seg) => ({
-    OTIO_SCHEMA: 'Clip.1',
-    name: `${seg.inPoint.toFixed(2)}-${seg.outPoint.toFixed(2)}`,
-    source_range: {
-      OTIO_SCHEMA: 'TimeRange.1',
-      start_time: rational(seg.inPoint),
-      duration: rational(seg.outPoint - seg.inPoint)
-    },
-    metadata: {
-      speechedit: { speed: seg.speed, fadeIn: seg.fadeIn, fadeOut: seg.fadeOut }
-    },
-    media_reference: asset
-      ? {
-          OTIO_SCHEMA: 'ExternalReference.1',
-          target_url: asset.path,
-          available_range: {
-            OTIO_SCHEMA: 'TimeRange.1',
-            start_time: rational(0),
-            duration: rational(current.sourceDuration)
-          }
-        }
-      : { OTIO_SCHEMA: 'MissingReference.1' }
-  }))
-  const overlays = current.tracks
-    .filter((t) => t.type === 'overlay' || t.type === 'caption')
-    .map((track) => ({
-      OTIO_SCHEMA: 'Track.1',
-      name: track.name,
-      kind: track.type === 'caption' ? 'Subtitle' : 'Video',
-      children: track.clips.map((clip) => ({
-        OTIO_SCHEMA: 'Clip.1',
-        name: clip.text ?? clip.id,
+  const clips = segs.map((seg) => {
+    if (seg.kind === 'slug') {
+      return {
+        OTIO_SCHEMA: 'Gap.1',
+        name: 'Hold',
         source_range: {
           OTIO_SCHEMA: 'TimeRange.1',
           start_time: rational(0),
-          duration: rational(clip.duration)
+          duration: rational(seg.duration)
         },
-        metadata: {
-          speechedit: {
-            start: clip.start,
-            assetId: clip.assetId,
-            text: clip.text,
-            style: clip.style,
-            kind: track.type
-          }
+        metadata: { speechedit: { kind: 'slug', programStart: seg.start } }
+      }
+    }
+    const clip = localClip(current, resources, seg)
+    const take = clip.take
+    return {
+      OTIO_SCHEMA: 'Clip.1',
+      name: `${seg.inPoint.toFixed(2)}-${seg.outPoint.toFixed(2)}`,
+      source_range: {
+        OTIO_SCHEMA: 'TimeRange.1',
+        start_time: rational(clip.localIn),
+        duration: rational(clip.localOut - clip.localIn)
+      },
+      metadata: {
+        speechedit: {
+          speed: seg.speed,
+          fadeIn: seg.fadeIn,
+          fadeOut: seg.fadeOut,
+          sourceOffset: sourceOffsetOf(take),
+          assetId: take?.id,
+          path: take?.path
         }
-      }))
+      },
+      media_reference: take?.path
+        ? {
+            OTIO_SCHEMA: 'ExternalReference.1',
+            target_url: take.path,
+            available_range: {
+              OTIO_SCHEMA: 'TimeRange.1',
+              start_time: rational(0),
+              duration: rational(take.duration)
+            }
+          }
+        : { OTIO_SCHEMA: 'MissingReference.1' }
+    }
+  })
+  const overlays = current.tracks
+    .filter((t) => t.type === 'overlay' || t.type === 'caption' || t.type === 'audio')
+    .filter((t) => t.id !== 'a1')
+    .map((track) => ({
+      OTIO_SCHEMA: 'Track.1',
+      name: track.name,
+      kind: track.type === 'caption' ? 'Subtitle' : track.type === 'audio' ? 'Audio' : 'Video',
+      children: track.clips.map((clip) => {
+        const asset = clip.assetId ? current.assets[clip.assetId] : undefined
+        return {
+          OTIO_SCHEMA: 'Clip.1',
+          name: clip.text ?? asset?.name ?? clip.id,
+          source_range: {
+            OTIO_SCHEMA: 'TimeRange.1',
+            start_time: rational(asset?.path ? clip.inPoint : 0),
+            duration: rational(clip.duration)
+          },
+          metadata: {
+            speechedit: {
+              start: clip.start,
+              assetId: clip.assetId,
+              path: asset?.path,
+              text: clip.text,
+              style: clip.style,
+              kind: track.type,
+              inPoint: clip.inPoint
+            }
+          },
+          ...(asset?.path
+            ? {
+                media_reference: {
+                  OTIO_SCHEMA: 'ExternalReference.1',
+                  target_url: asset.path,
+                  available_range: {
+                    OTIO_SCHEMA: 'TimeRange.1',
+                    start_time: rational(0),
+                    duration: rational(asset.duration)
+                  }
+                }
+              }
+            : {})
+        }
+      })
     }))
   const markers = (current.scenes ?? []).map((scene) => ({
     OTIO_SCHEMA: 'Marker.1',
@@ -128,7 +336,21 @@ export function projectToOtio(project: Project): string {
           cuts: current.cuts,
           words: current.transcript.words.length,
           captions: serialCaptions(captionClips(current)),
-          styles: current.styles
+          styles: current.styles,
+          takes: resources.map((row) => ({
+            id: row.take.id,
+            path: row.take.path,
+            sourceOffset: sourceOffsetOf(row.take),
+            duration: row.take.duration
+          })),
+          overlays: mediaClipRows(current).map(({ track, clip, asset }) => ({
+            start: clip.start,
+            duration: clip.duration,
+            inPoint: clip.inPoint,
+            path: asset.path,
+            name: asset.name,
+            kind: track.type === 'audio' ? 'audio' : 'overlay'
+          }))
         }
       }
     },
@@ -143,25 +365,42 @@ function captionClips(project: Project): Clip[] {
 
 export function projectToFcpxml(project: Project): string {
   const current = normalizeProject(project)
-  const asset = Object.values(current.assets).find((a) => a.path)
+  const resources = takeResources(current)
+  const overlays = overlayResources(current)
   const segs = resolveSegments(current)
   const fps = current.fps
   const tick = (seconds: number) => `${Math.round(seconds * fps)}/${fps}s`
-  const src = asset?.path ?? ''
-  const assetXml = asset
-    ? `<asset id="r1" name="${escapeXml(asset.name)}" src="${escapeXml(src)}" start="0s" duration="${tick(current.sourceDuration)}" hasVideo="1" hasAudio="1" />`
-    : ''
+  const assetXml = [
+    ...resources.map(
+      (row) =>
+        `<asset id="${row.id}" name="${escapeXml(row.take.name)}" src="${escapeXml(row.take.path)}" start="0s" duration="${tick(row.take.duration)}" hasVideo="1" hasAudio="1" />`
+    ),
+    ...overlays.map(
+      (row) =>
+        `<asset id="${row.id}" name="${escapeXml(row.asset.name)}" src="${escapeXml(row.asset.path)}" start="0s" duration="${tick(row.asset.duration)}" hasVideo="${row.asset.kind === 'audio' ? '0' : '1'}" hasAudio="1" />`
+    )
+  ].join('\n    ')
   const titles = current.tracks
     .filter((t) => t.type === 'caption' || t.type === 'overlay')
     .flatMap((t) => t.clips.filter((c) => c.text && !c.assetId))
   const titleXml = (clip: Clip) =>
     `<title name="${escapeXml(clip.text ?? 'Title')}" lane="1" offset="${tick(clip.start)}" duration="${tick(clip.duration)}"><text>${escapeXml(clip.text ?? '')}</text></title>`
+  const connectedXml = mediaClipRows(current)
+    .map((row) => {
+      const resource = resourceForAsset(overlays, row.asset.id)
+      if (!resource) return ''
+      return `<asset-clip name="${escapeXml(row.asset.name)}" ref="${resource.id}" lane="2" offset="${tick(row.clip.start)}" start="${tick(row.clip.inPoint)}" duration="${tick(row.clip.duration)}" />`
+    })
+    .filter(Boolean)
+    .join('\n            ')
   const clipXml = segs
     .map((seg, i) => {
+      const clip = localClip(current, resources, seg)
       const children = i === 0 ? titles.map(titleXml).join('\n              ') : ''
       const inner = children ? `\n              ${children}\n            ` : ''
-      return `<asset-clip name="seg${i + 1}" ref="r1" offset="${tick(seg.start)}" start="${tick(seg.inPoint)}" duration="${tick(seg.outPoint - seg.inPoint)}">${inner}</asset-clip>`
+      return `<asset-clip name="seg${i + 1}" ref="${clip.resource?.id ?? 'r1'}" offset="${tick(clip.programStart)}" start="${tick(clip.localIn)}" duration="${tick(clip.localOut - clip.localIn)}">${inner}</asset-clip>`
     })
+    .concat(connectedXml ? [connectedXml] : [])
     .join('\n            ')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
@@ -288,6 +527,45 @@ function mltClock(t: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
 }
 
+function mediaPlaylist(
+  project: Project,
+  resources: OverlayResource[],
+  kind: 'overlay' | 'audio'
+): { producers: string; playlist: string } {
+  const rows = mediaClipRows(project).filter((row) =>
+    kind === 'audio' ? row.track.type === 'audio' : row.track.type === 'overlay'
+  )
+  if (!rows.length) {
+    return { producers: '', playlist: '    <blank />\n' }
+  }
+  const producers = rows
+    .map((row) => {
+      const resource = resourceForAsset(resources, row.asset.id)
+      if (!resource) return ''
+      return `  <producer id="${resource.producerId}" in="${mltClock(0)}" out="${mltClock(row.asset.duration)}">
+    <property name="resource">${escapeXml(row.asset.path)}</property>
+    <property name="speechedit.start">${row.clip.start}</property>
+  </producer>`
+    })
+    .filter(Boolean)
+    .join('\n')
+  const ordered = [...rows].sort((a, b) => a.clip.start - b.clip.start)
+  let cursor = 0
+  const entries: string[] = []
+  ordered.forEach((row) => {
+    const resource = resourceForAsset(resources, row.asset.id)
+    if (!resource) return
+    if (row.clip.start > cursor + 0.01) {
+      entries.push(`    <blank length="${mltClock(row.clip.start - cursor)}" />`)
+    }
+    entries.push(
+      `    <entry producer="${resource.producerId}" in="${mltClock(row.clip.inPoint)}" out="${mltClock(Math.max(row.clip.inPoint, row.clip.inPoint + row.clip.duration - 1 / project.fps))}" />`
+    )
+    cursor = row.clip.start + row.clip.duration
+  })
+  return { producers, playlist: `${entries.join('\n')}\n` }
+}
+
 function titlePlaylist(project: Project): { producers: string; playlist: string } {
   const titles = project.tracks
     .filter((t) => t.type === 'caption' || t.type === 'overlay')
@@ -321,21 +599,33 @@ function titlePlaylist(project: Project): { producers: string; playlist: string 
 
 export function projectToMlt(project: Project): string {
   const current = normalizeProject(project)
-  const asset = Object.values(current.assets).find((a) => a.path)
+  const resources = takeResources(current)
+  const overlays = overlayResources(current)
   const segs = resolveSegments(current)
   const entries = segs
+    .map((seg) => {
+      const clip = localClip(current, resources, seg)
+      const producer = clip.resource?.producerId ?? 'src'
+      return `    <entry producer="${producer}" in="${mltClock(clip.localIn)}" out="${mltClock(Math.max(clip.localIn, clip.localOut - 1 / current.fps))}" />`
+    })
+    .join('\n')
+  const producers = resources
     .map(
-      (seg) =>
-        `    <entry producer="src" in="${mltClock(seg.inPoint)}" out="${mltClock(Math.max(seg.inPoint, seg.outPoint - 1 / current.fps))}" />`
+      (row) => `  <producer id="${row.producerId}" in="${mltClock(0)}" out="${mltClock(row.take.duration)}">
+    <property name="resource">${escapeXml(row.take.path)}</property>
+  </producer>`
     )
     .join('\n')
   const titles = titlePlaylist(current)
+  const broll = mediaPlaylist(current, overlays, 'overlay')
+  const beds = mediaPlaylist(current, overlays, 'audio')
   return `<?xml version="1.0" encoding="utf-8"?>
 <mlt LC_NUMERIC="C" version="7.24.0" title="${escapeXml(current.name)}">
   <profile width="${current.width}" height="${current.height}" frame_rate_num="${current.fps}" frame_rate_den="1" />
-  <producer id="src" in="${mltClock(0)}" out="${mltClock(current.sourceDuration)}">
-    <property name="resource">${escapeXml(asset?.path ?? '')}</property>
-  </producer>
+${producers}
+${overlays.length ? overlays.map((row) => `  <producer id="${row.producerId}" in="${mltClock(0)}" out="${mltClock(row.asset.duration)}">
+    <property name="resource">${escapeXml(row.asset.path)}</property>
+  </producer>`).join('\n') : ''}
 ${titles.producers}
   <playlist id="video">
 ${entries}
@@ -345,10 +635,16 @@ ${entries}
   </playlist>
   <playlist id="titles">
 ${titles.playlist}  </playlist>
+  <playlist id="broll">
+${broll.playlist}  </playlist>
+  <playlist id="beds">
+${beds.playlist}  </playlist>
   <tractor id="tractor0" title="${escapeXml(current.name)}" in="${mltClock(0)}" out="${mltClock(programLengthOf(current))}">
     <track producer="video" />
     <track producer="audio" />
     <track producer="titles" />
+    <track producer="broll" />
+    <track producer="beds" />
   </tractor>
 </mlt>
 `
@@ -369,17 +665,19 @@ export function projectToKdenlive(project: Project): string {
 /** Premiere / Resolve FCP7 XML (Auto-Editor `--export premiere`). */
 export function projectToPremiere(project: Project): string {
   const current = normalizeProject(project)
-  const asset = Object.values(current.assets).find((a) => a.path)
+  const resources = takeResources(current)
   const segs = resolveSegments(current)
   const fps = current.fps
   const frames = (seconds: number) => Math.round(seconds * fps)
-  const pathurl = asset?.path ? `file://${asset.path.replace(/\\/g, '/')}` : ''
   const clipItems = segs
     .map((seg, i) => {
-      const start = frames(seg.start)
-      const end = frames(seg.start + seg.duration)
-      const inn = frames(seg.inPoint)
-      const out = frames(seg.outPoint)
+      const clip = localClip(current, resources, seg)
+      const take = clip.take
+      const start = frames(clip.programStart)
+      const end = frames(clip.programStart + clip.programDuration)
+      const inn = frames(clip.localIn)
+      const out = frames(clip.localOut)
+      const pathurl = take?.path ? `file://${take.path.replace(/\\/g, '/')}` : ''
       return `          <clipitem id="clip${i + 1}">
             <name>seg${i + 1}</name>
             <duration>${out - inn}</duration>
@@ -388,11 +686,11 @@ export function projectToPremiere(project: Project): string {
             <end>${end}</end>
             <in>${inn}</in>
             <out>${out}</out>
-            <file id="file1">
-              <name>${escapeXml(asset?.name ?? current.name)}</name>
+            <file id="${clip.resource?.fileId ?? 'file1'}">
+              <name>${escapeXml(take?.name ?? current.name)}</name>
               <pathurl>${escapeXml(pathurl)}</pathurl>
               <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
-              <duration>${frames(current.sourceDuration)}</duration>
+              <duration>${frames(take?.duration ?? current.sourceDuration)}</duration>
             </file>
           </clipitem>`
     })
@@ -423,6 +721,59 @@ export function projectToPremiere(project: Project): string {
           </generatoritem>`
     })
     .join('\n')
+  const overlays = overlayResources(current)
+  const overlayItems = mediaClipRows(current)
+    .filter((row) => row.track.type === 'overlay')
+    .map((row, i) => {
+      const resource = resourceForAsset(overlays, row.asset.id)
+      const start = frames(row.clip.start)
+      const end = frames(row.clip.start + row.clip.duration)
+      const inn = frames(row.clip.inPoint)
+      const out = frames(row.clip.inPoint + row.clip.duration)
+      const pathurl = `file://${row.asset.path.replace(/\\/g, '/')}`
+      return `          <clipitem id="ovclip${i + 1}">
+            <name>${escapeXml(row.asset.name)}</name>
+            <duration>${out - inn}</duration>
+            <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+            <start>${start}</start>
+            <end>${end}</end>
+            <in>${inn}</in>
+            <out>${out}</out>
+            <file id="${resource?.fileId ?? `ovfile${i + 1}`}">
+              <name>${escapeXml(row.asset.name)}</name>
+              <pathurl>${escapeXml(pathurl)}</pathurl>
+              <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+              <duration>${frames(row.asset.duration)}</duration>
+            </file>
+          </clipitem>`
+    })
+    .join('\n')
+  const bedItems = mediaClipRows(current)
+    .filter((row) => row.track.type === 'audio')
+    .map((row, i) => {
+      const resource = resourceForAsset(overlays, row.asset.id)
+      const start = frames(row.clip.start)
+      const end = frames(row.clip.start + row.clip.duration)
+      const inn = frames(row.clip.inPoint)
+      const out = frames(row.clip.inPoint + row.clip.duration)
+      const pathurl = `file://${row.asset.path.replace(/\\/g, '/')}`
+      return `          <clipitem id="bedclip${i + 1}">
+            <name>${escapeXml(row.asset.name)}</name>
+            <duration>${out - inn}</duration>
+            <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+            <start>${start}</start>
+            <end>${end}</end>
+            <in>${inn}</in>
+            <out>${out}</out>
+            <file id="${resource?.fileId ?? `ovfile${i + 1}`}">
+              <name>${escapeXml(row.asset.name)}</name>
+              <pathurl>${escapeXml(pathurl)}</pathurl>
+              <rate><timebase>${fps}</timebase><ntsc>FALSE</ntsc></rate>
+              <duration>${frames(row.asset.duration)}</duration>
+            </file>
+          </clipitem>`
+    })
+    .join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE xmeml>
 <xmeml version="5">
@@ -445,10 +796,16 @@ ${clipItems}
         <track>
 ${titles}
         </track>
+        <track>
+${overlayItems}
+        </track>
       </video>
       <audio>
         <track>
 ${clipItems}
+        </track>
+        <track>
+${bedItems}
         </track>
       </audio>
     </media>
@@ -480,6 +837,7 @@ function importOtio(project: Project, raw: unknown): Project {
         cuts?: Cut[]
         captions?: Array<{ start: number; duration: number; text: string; style?: CaptionStyle }>
         styles?: SegmentStyle[]
+        overlays?: RestoredMediaClip[]
       }
     }
     tracks?: { children?: Array<{ kind?: string; name?: string; children?: unknown[] }> }
@@ -503,45 +861,107 @@ function importOtio(project: Project, raw: unknown): Project {
     const kept: Interval[] = []
     for (const clip of (video?.children ?? []) as Array<{
       source_range?: { start_time?: unknown; duration?: unknown }
+      media_reference?: { target_url?: string }
+      metadata?: { speechedit?: { path?: string } }
     }>) {
       const start = secondsFromRational(clip.source_range?.start_time)
       const duration = secondsFromRational(clip.source_range?.duration)
-      if (duration > 0.03) kept.push({ start, end: start + duration })
+      const path = clip.metadata?.speechedit?.path ?? clip.media_reference?.target_url
+      if (duration > 0.03) kept.push(unifyLocalSpan(project, start, start + duration, path))
     }
     if (kept.length) {
       next = applyTimeline(project, cutsFromKept(kept, project.sourceDuration || kept[kept.length - 1].end))
     }
   }
   const metaCaps = data.metadata?.speechedit?.captions ?? []
-  if (metaCaps.length) return restoreCaptions(next, metaCaps)
-  const graphics: Array<{ start: number; duration: number; text: string }> = []
+  if (metaCaps.length) next = restoreCaptions(next, metaCaps)
+  else {
+    const graphics: Array<{ start: number; duration: number; text: string }> = []
+    for (const track of data.tracks?.children ?? []) {
+      const kind = (track.kind ?? '').toLowerCase()
+      const name = (track.name ?? '').toLowerCase()
+      if (kind !== 'subtitle' && !name.includes('caption') && !name.includes('title')) continue
+      for (const clip of (track.children ?? []) as Array<{
+        name?: string
+        metadata?: { speechedit?: { start?: number; text?: string } }
+        source_range?: { duration?: unknown }
+      }>) {
+        const text = clip.metadata?.speechedit?.text ?? clip.name
+        const start = clip.metadata?.speechedit?.start ?? 0
+        const duration = secondsFromRational(clip.source_range?.duration)
+        if (text && duration > 0.03) graphics.push({ start, duration, text })
+      }
+    }
+    if (graphics.length) next = restoreCaptions(next, graphics)
+  }
+  const metaOverlays = data.metadata?.speechedit?.overlays ?? []
+  if (metaOverlays.length) return restoreMediaClips(next, metaOverlays)
+  const parsed: RestoredMediaClip[] = []
   for (const track of data.tracks?.children ?? []) {
-    const kind = (track.kind ?? '').toLowerCase()
     const name = (track.name ?? '').toLowerCase()
-    if (kind !== 'subtitle' && !name.includes('caption') && !name.includes('title')) continue
+    if (name.includes('picture') || name.includes('voice') || name.includes('caption') || name.includes('title')) {
+      continue
+    }
+    const kind = (track.kind ?? '').toLowerCase() === 'audio' || name.includes('music') || name.includes('bed')
+      ? 'audio'
+      : 'overlay'
     for (const clip of (track.children ?? []) as Array<{
-      name?: string
-      metadata?: { speechedit?: { start?: number; text?: string } }
-      source_range?: { duration?: unknown }
+      media_reference?: { target_url?: string }
+      metadata?: { speechedit?: { start?: number; path?: string; kind?: string; inPoint?: number } }
+      source_range?: { start_time?: unknown; duration?: unknown }
     }>) {
-      const text = clip.metadata?.speechedit?.text ?? clip.name
+      const path = clip.metadata?.speechedit?.path ?? clip.media_reference?.target_url
       const start = clip.metadata?.speechedit?.start ?? 0
       const duration = secondsFromRational(clip.source_range?.duration)
-      if (text && duration > 0.03) graphics.push({ start, duration, text })
+      const inPoint = clip.metadata?.speechedit?.inPoint ?? secondsFromRational(clip.source_range?.start_time)
+      if (path && duration > 0.03) {
+        parsed.push({
+          path,
+          start,
+          duration,
+          inPoint,
+          kind: clip.metadata?.speechedit?.kind === 'audio' ? 'audio' : kind
+        })
+      }
     }
   }
-  return graphics.length ? restoreCaptions(next, graphics) : next
+  return restoreMediaClips(next, parsed)
 }
 
 function importFcpxml(project: Project, xml: string): Project {
+  const assets = new Map<string, string>()
+  const audioAssets = new Set<string>()
+  const assetRe = /<asset\b([^>]*)\/?>/g
+  let assetMatch: RegExpExecArray | null
+  while ((assetMatch = assetRe.exec(xml))) {
+    const attrs = xmlAttrs(assetMatch[1])
+    if (attrs.id && attrs.src) assets.set(attrs.id, attrs.src)
+    if (attrs.id && attrs.hasVideo === '0') audioAssets.add(attrs.id)
+  }
   const kept: Interval[] = []
-  const clipRe =
-    /<asset-clip[^>]*\bstart="([^"]+)"[^>]*\bduration="([^"]+)"|<asset-clip[^>]*\bduration="([^"]+)"[^>]*\bstart="([^"]+)"/g
+  const overlays: RestoredMediaClip[] = []
+  const clipRe = /<asset-clip\b([^>]*)\/?>/g
   let match: RegExpExecArray | null
   while ((match = clipRe.exec(xml))) {
-    const start = secondsFromStamp(match[1] ?? match[4] ?? '0')
-    const duration = secondsFromStamp(match[2] ?? match[3] ?? '0')
-    if (duration > 0.03) kept.push({ start, end: start + duration })
+    const attrs = xmlAttrs(match[1])
+    const start = secondsFromStamp(attrs.start ?? '0')
+    const duration = secondsFromStamp(attrs.duration ?? '0')
+    const path = assets.get(attrs.ref ?? '')
+    const overlay = Number(attrs.lane ?? 0) > 1 || /^ov/i.test(attrs.ref ?? '')
+    if (overlay) {
+      if (path && duration > 0.03) {
+        overlays.push({
+          path,
+          name: attrs.name,
+          start: secondsFromStamp(attrs.offset ?? '0'),
+          duration,
+          inPoint: start,
+          kind: audioAssets.has(attrs.ref ?? '') ? 'audio' : 'overlay'
+        })
+      }
+      continue
+    }
+    if (duration > 0.03) kept.push(unifyLocalSpan(project, start, start + duration, path))
   }
   const next = kept.length
     ? applyTimeline(project, cutsFromKept(kept, project.sourceDuration || kept[kept.length - 1].end))
@@ -556,18 +976,31 @@ function importFcpxml(project: Project, xml: string): Project {
     const text = (title[3] ?? title[4] ?? '').trim()
     if (text && duration > 0.03) titles.push({ start, duration, text })
   }
-  return titles.length ? restoreCaptions(next, titles) : next
+  const withTitles = titles.length ? restoreCaptions(next, titles) : next
+  return restoreMediaClips(withTitles, overlays)
 }
 
 function importMlt(project: Project, xml: string): Project {
   const kept: Interval[] = []
   const frame = 1 / (project.fps || 30)
-  const entryRe = /<entry[^>]*producer="src"[^>]*\bin="([^"]+)"[^>]*\bout="([^"]+)"|<entry[^>]*\bin="([^"]+)"[^>]*\bout="([^"]+)"[^>]*producer="src"/g
+  const producers = new Map<string, string>()
+  const producerRe = /<producer id="([^"]+)"[^>]*>([\s\S]*?)<\/producer>/g
+  let producer: RegExpExecArray | null
+  while ((producer = producerRe.exec(xml))) {
+    if (/^title/i.test(producer[1])) continue
+    const resource = producer[2].match(/<property name="resource">([^<]*)<\/property>/)
+    if (resource) producers.set(producer[1], resource[1])
+  }
+  const entryRe = /<entry\b([^>]*)\/?>/g
   let match: RegExpExecArray | null
   while ((match = entryRe.exec(xml))) {
-    const start = secondsFromStamp(match[1] ?? match[3] ?? '0')
-    const end = secondsFromStamp(match[2] ?? match[4] ?? '0') + frame
-    if (end > start) kept.push({ start, end })
+    const attrs = xmlAttrs(match[1])
+    const producerId = attrs.producer ?? ''
+    if (!producerId || /^title|^ov_|^bed_/i.test(producerId)) continue
+    if (!producers.has(producerId) && producerId !== 'src') continue
+    const start = secondsFromStamp(attrs.in ?? '0')
+    const end = secondsFromStamp(attrs.out ?? '0') + frame
+    if (end > start) kept.push(unifyLocalSpan(project, start, end, producers.get(producerId)))
   }
   if (!kept.length) {
     const loose = /<entry[^>]*\bin="([^"]+)"[^>]*\bout="([^"]+)"/g
@@ -575,7 +1008,7 @@ function importMlt(project: Project, xml: string): Project {
       if (xml.slice(Math.max(0, match.index - 80), match.index).includes('title')) continue
       const start = secondsFromStamp(match[1])
       const end = secondsFromStamp(match[2]) + frame
-      if (end > start) kept.push({ start, end })
+      if (end > start) kept.push(unifyLocalSpan(project, start, end))
     }
   }
   const next = kept.length
@@ -592,19 +1025,74 @@ function importMlt(project: Project, xml: string): Project {
     const duration = entry ? secondsFromStamp(entry[1]) : 2
     if (text) titles.push({ start, duration: Math.max(0.4, duration), text })
   }
-  return titles.length ? restoreCaptions(next, titles) : next
+  const withTitles = titles.length ? restoreCaptions(next, titles) : next
+  return restoreMediaClips(withTitles, [
+    ...mediaFromPlaylist(xml, 'broll', producers, 'overlay', frame),
+    ...mediaFromPlaylist(xml, 'beds', producers, 'audio', frame)
+  ])
+}
+
+function mediaFromPlaylist(
+  xml: string,
+  playlistId: string,
+  producers: Map<string, string>,
+  kind: 'overlay' | 'audio',
+  frame: number
+): RestoredMediaClip[] {
+  const block = xml.match(new RegExp(`<playlist id="${playlistId}">([\\s\\S]*?)</playlist>`))?.[1]
+  if (!block) return []
+  let cursor = 0
+  const rows: RestoredMediaClip[] = []
+  const tokenRe = /<(blank|entry)\b([^>]*)\/?>/g
+  let token: RegExpExecArray | null
+  while ((token = tokenRe.exec(block))) {
+    const attrs = xmlAttrs(token[2] ?? '')
+    if (token[1] === 'blank') {
+      cursor += secondsFromStamp(attrs.length ?? '0')
+      continue
+    }
+    const path = producers.get(attrs.producer ?? '')
+    const inn = secondsFromStamp(attrs.in ?? '0')
+    const out = secondsFromStamp(attrs.out ?? '0') + frame
+    const duration = Math.max(0.04, out - inn)
+    if (path) rows.push({ path, start: cursor, duration, inPoint: inn, kind })
+    cursor += duration
+  }
+  return rows
 }
 
 function importPremiere(project: Project, xml: string): Project {
   const rateMatch = xml.match(/<timebase>(\d+)<\/timebase>/)
   const rate = Number(rateMatch?.[1] ?? project.fps ?? 30)
   const kept: Interval[] = []
-  const clipRe = /<clipitem[\s\S]*?<in>([^<]+)<\/in>[\s\S]*?<out>([^<]+)<\/out>/g
+  const overlays: RestoredMediaClip[] = []
+  const clipRe = /<clipitem[\s\S]*?<\/clipitem>/g
   let match: RegExpExecArray | null
   while ((match = clipRe.exec(xml))) {
-    const start = Number(match[1]) / rate
-    const end = Number(match[2]) / rate
-    if (end > start) kept.push({ start, end })
+    const block = match[0]
+    const inn = block.match(/<in>([^<]+)<\/in>/)
+    const out = block.match(/<out>([^<]+)<\/out>/)
+    const path = block.match(/<pathurl>([^<]*)<\/pathurl>/)?.[1]?.replace(/^file:\/\//i, '')
+    const clipId = block.match(/<clipitem id="([^"]+)"/)?.[1] ?? ''
+    const fileId = block.match(/<file id="([^"]+)"/)?.[1] ?? ''
+    if (!inn || !out) continue
+    if (/^ovfile/i.test(fileId) || /^ovclip|^bedclip/i.test(clipId)) {
+      const programStart = Number(block.match(/<start>([^<]+)<\/start>/)?.[1] ?? 0) / rate
+      const programEnd = Number(block.match(/<end>([^<]+)<\/end>/)?.[1] ?? 0) / rate
+      if (path && programEnd > programStart) {
+        overlays.push({
+          path,
+          start: programStart,
+          duration: programEnd - programStart,
+          inPoint: Number(inn[1]) / rate,
+          kind: /^bedclip/i.test(clipId) ? 'audio' : 'overlay'
+        })
+      }
+      continue
+    }
+    const start = Number(inn[1]) / rate
+    const end = Number(out[1]) / rate
+    if (end > start) kept.push(unifyLocalSpan(project, start, end, path))
   }
   const next = kept.length
     ? applyTimeline(project, cutsFromKept(kept, project.sourceDuration || kept[kept.length - 1].end))
@@ -618,7 +1106,8 @@ function importPremiere(project: Project, xml: string): Project {
     const text = gen[3] ?? ''
     if (text && end > start) titles.push({ start, duration: end - start, text })
   }
-  return titles.length ? restoreCaptions(next, titles) : next
+  const withTitles = titles.length ? restoreCaptions(next, titles) : next
+  return restoreMediaClips(withTitles, overlays)
 }
 
 function asChunk(item: unknown): { start: number; end: number; speed: number } | null {

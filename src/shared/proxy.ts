@@ -59,6 +59,12 @@ export function assetNeedsProxy(asset: {
   })
 }
 
+/** Accept a cached proxy only when its duration matches the camera original. */
+export function proxyCacheMatchesSource(sourceDuration: number, proxyDuration: number): boolean {
+  if (!(sourceDuration > 0) || !(proxyDuration > 0.2)) return false
+  return Math.abs(proxyDuration - sourceDuration) <= Math.max(0.5, sourceDuration * 0.05)
+}
+
 export function playbackPath(
   asset: { path: string; proxyPath?: string },
   opts?: { proxyExists?: boolean }

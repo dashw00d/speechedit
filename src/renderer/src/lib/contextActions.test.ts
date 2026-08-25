@@ -129,6 +129,19 @@ describe('inspector helper detail', () => {
     expect(detail?.actions.some((a) => a.id === 'compare')).toBe(true)
   })
 
+  test('talk scene inspector offers remove on the chapter itself', () => {
+    const project = createDemoProject()
+    const detail = sceneInspectorDetail(project, 'sc_intro')
+    expect(detail?.actions[0]?.id).toBe('cut-scene')
+    expect(detail?.actions[0]?.label).toBe('Remove scene')
+  })
+
+  test('silent demo inspector offers remove walkthrough', () => {
+    const project = createDemoProject()
+    const detail = sceneInspectorDetail(project, 'sc_demo')
+    expect(detail?.actions.some((a) => a.id === 'cut-scene' && a.label === 'Remove walkthrough')).toBe(true)
+  })
+
   test('demo offers collapse retakes when a false take is still live', () => {
     const project = createDemoProject()
     expect(hasUncollapsedRetakes(project)).toBe(true)
@@ -246,6 +259,22 @@ describe('palette ranking', () => {
     expect(ranked[0]?.name).toBe('Cut selection')
     expect(ranked.map((i) => i.name)).toContain('Export OTIO')
     expect(ranked.map((i) => i.name)).not.toContain('Cancel export')
+  })
+
+  test('an empty reel puts file commands above cut and interchange', () => {
+    const ranked = rankPalette(
+      [...items, { name: 'Open media…', group: 'file' as const, run: () => undefined }],
+      '',
+      {
+        exporting: false,
+        analyzing: null,
+        hasWordSelection: false,
+        hasClip: false,
+        empty: true
+      }
+    )
+    expect(ranked[0]?.name).toBe('Open media…')
+    expect(ranked.map((i) => i.name).indexOf('Save')).toBeLessThan(ranked.map((i) => i.name).indexOf('Export OTIO'))
   })
 
   test('otio query finds interchange in the palette, not a menu', () => {

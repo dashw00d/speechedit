@@ -148,7 +148,7 @@
   --layout-timeline-max-height: 236px;
   --layout-app-rows: var(--layout-menubar-height) minmax(0, 1fr) minmax(var(--layout-timeline-min-height), var(--layout-timeline-max-height)) auto;
   --layout-workspace-columns: minmax(280px, 1.05fr) minmax(420px, 1.4fr) minmax(250px, 0.85fr);
-  --layout-track-label-width: 112px;
+  --layout-track-label-width: 132px;
   --timeline-edits-height: 30px;
   --timeline-ruler-height: 26px;
   --timeline-lane-video: 44px;

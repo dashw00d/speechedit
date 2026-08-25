@@ -106,7 +106,7 @@ describe('camera display rotation', () => {
         fadeIn: 0,
         fadeOut: 0
       }).vf
-      expect(vf.startsWith('transpose=1,')).toBe(true)
+      expect(vf.startsWith('trim=start=0.000:end=1.000,setpts=PTS-STARTPTS,transpose=1,')).toBe(true)
       expect(vf).toContain('scale=1080:1920')
     } finally {
       Object.assign(host, prev)
@@ -171,6 +171,7 @@ describe('camera display rotation', () => {
     project = applyCommand(project, { type: 'deleteRange', start: 0.5, end: 0.6, source: 'manual' })
     const job = buildExportJob(project, '/tmp/out.mp4')!
     expect(job.inputRotation).toBeUndefined()
-    expect(buildSegmentFilters(job, job.segments[0]).vf.startsWith('scale=')).toBe(true)
+    expect(buildSegmentFilters(job, job.segments[0]).vf).toContain('trim=start=0.000:end=0.500')
+    expect(buildSegmentFilters(job, job.segments[0]).vf).toContain('scale=')
   })
 })

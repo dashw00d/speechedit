@@ -15,7 +15,7 @@
    A feature should not be tied to a single button. The same underlying action may appear contextually, in the inspector, command palette, keyboard shortcut, automation system, or AI interface. The implementation belongs in one place; the interface can surface it wherever useful.
 
 6. **Centralized Visual Language**
-   Styling should come from a centralized design system: typography, spacing, color, elevation, motion, icons, control states, component behavior, and accessibility rules. Individual features should not invent their own visual language. Changing the design system should propagate predictably throughout the application.
+   Styling should come from a centralized design system: typography, spacing, color, elevation, motion, icons, control states, component behavior, and accessibility rules. Individual features should not invent their own visual language. Changing the design system should propagate predictably throughout the application. Reusable components should be used where possible.
 
 7. **Flexible Workspace, Stable Product**
    The interface should adapt to the user rather than forcing one permanent layout. Panels, inspectors, transcript, timeline, preview, media browser, and analysis tools should be movable, collapsible, resizable, hideable, and eventually saveable as workspaces. Customization should not compromise consistency or make the app impossible to understand.
@@ -37,4 +37,4 @@
 12. **Customization Without Fragmentation**
     Users can customize layout, defaults, workflows, shortcuts, styles, and automation, but customization should operate through shared systems rather than forks and special cases. The application should remain coherent even when heavily personalized.
 
-
+No use-case-specific feature may be added until we can explain why it cannot be represented as a composition of existing generic signals, semantic objects, rules, and editing operations.

@@ -1,38 +1,41 @@
 import type { ReactNode } from 'react'
 import { useEffect } from 'react'
 import { host, isElectron } from '../host'
-import { importRecording } from '../lib/importMedia'
-import { applyInterchange, pickInterchange } from '../lib/interchange'
 import { askEditor } from '../lib/askModel'
 import { programLength } from '../lib/commands'
 import { pickAudio, pickBroll } from '../lib/pickFile'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
+import { confirmLoseWork, currentDocumentTitle, saveCurrentDocument } from '../lib/documentIo'
 import {
-  confirmLoseWork,
-  currentDocumentTitle,
-  openCurrentDocument,
-  saveCurrentDocument
-} from '../lib/documentIo'
-import { parseAnyTranscript } from '../lib/transcript'
+  appendTakeAction,
+  importMediaAction,
+  importTimelineAction,
+  openProjectAction,
+  openRecentAction,
+  openTranscriptAction,
+  wireFileEvents
+} from '../lib/fileActions'
+import { listRecents } from '../lib/recents'
 import {
   cancelExport,
   cancelImport,
-  createImportSignal,
   explainImportError,
-  isJobCancelled,
-  mediaBusyToast,
-  whisperMissingMessage
+  ffmpegImportBusy,
+  mediaBusyToast
 } from '../lib/mediaJobs'
+import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
+import { hopNote } from '../lib/clipEdit'
 import { useEditor, usePlayback } from '../store'
 
 interface Props {
   onToast: (msg: string) => void
   onExport: () => void
   exporting: boolean
+  onShortcuts?: () => void
 }
 
-export function MenuBar({ onToast, onExport, exporting }: Props) {
+export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
   const project = useEditor((s) => s.project)
   const dirty = useEditor((s) => s.dirty)
   const analyzing = useEditor((s) => s.analyzing)
@@ -40,60 +43,14 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
   const redo = useEditor((s) => s.redo)
   const past = useEditor((s) => s.past.length)
   const future = useEditor((s) => s.future.length)
-  const loadProject = useEditor((s) => s.loadProject)
   const newProject = useEditor((s) => s.newProject)
   const loadDemo = useEditor((s) => s.loadDemo)
   const dispatch = useEditor((s) => s.dispatch)
+  const ripple = useEditor((s) => s.ripple)
   const documentPath = useEditor((s) => s.documentPath)
   const setAnalyzing = useEditor((s) => s.setAnalyzing)
   const setPalette = useEditor((s) => s.setPalette)
-
-  async function importMedia() {
-    const busy = mediaBusyToast(exporting, analyzing)
-    if (busy) {
-      onToast(busy)
-      return
-    }
-    if (!confirmLoseWork()) return
-    const file = await host.openMedia()
-    if (!file) {
-      onToast(isElectron ? 'No file selected.' : 'Open this in Electron to import media.')
-      return
-    }
-    const signal = createImportSignal()
-    let whisperNote: string | null = null
-    try {
-      await host.beginJob('import')
-      const next = await importRecording(file, {
-        signal,
-        onStage: (stage) => {
-          if (stage === 'transcript:missing') {
-            whisperNote = whisperMissingMessage()
-            setAnalyzing('transcript')
-            return
-          }
-          if (stage === 'transcript:install') {
-            setAnalyzing('whisper')
-            onToast('Installing local Whisper… Cancel import to skip.')
-            return
-          }
-          setAnalyzing(stage)
-          onToast(`Analyzing · ${stage}`)
-        }
-      })
-      loadProject(next, { path: null, clean: false })
-      onToast(
-        whisperNote
-          ? `${next.name} · ${next.transcript.words.length} island words. ${whisperNote}`
-          : `${next.name} · ${next.suggestions.length} suggestions · ${next.transcript.words.length} words`
-      )
-    } catch (err) {
-      onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Import failed.')
-    } finally {
-      await host.endJob('import').catch(() => undefined)
-      setAnalyzing(null)
-    }
-  }
+  const recents = listRecents()
 
   async function addPickedOverlay(role: 'broll' | 'audio') {
     const busy = mediaBusyToast(exporting, analyzing)
@@ -130,18 +87,6 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
     }
   }
 
-  async function openTranscript() {
-    try {
-      const result = await host.openTranscript()
-      if (!result) return
-      const words = parseAnyTranscript(result.name, result.text)
-      useEditor.getState().loadTranscript(words)
-      onToast(`Transcript · ${words.length} words`)
-    } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Transcript import failed.')
-    }
-  }
-
   function ioSource() {
     if (project.markIn == null || project.markOut == null) {
       onToast('Mark I and O first, or select words and press M.')
@@ -153,25 +98,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
     }
   }
 
-  async function importTimeline() {
-    const result = isElectron ? await host.openInterchange() : await pickInterchange()
-    if (!result) return
-    try {
-      const next = applyInterchange(project, result.name, result.text)
-      dispatch({ type: 'replaceProject', project: next })
-      onToast(`Imported ${result.name}`)
-    } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Import failed.')
-    }
-  }
-
-  useEffect(() => {
-    const onOpenMedia = () => {
-      void importMedia()
-    }
-    window.addEventListener('speechedit:open-media', onOpenMedia)
-    return () => window.removeEventListener('speechedit:open-media', onOpenMedia)
-  }, [])
+  useEffect(() => wireFileEvents(onToast), [onToast])
 
   return (
     <header className="menubar">
@@ -185,30 +112,22 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
         <Menu label="File">
           <Item
             onClick={() => {
-              if (!confirmLoseWork()) return
-              newProject()
+              void confirmLoseWork().then((ok) => {
+                if (ok) newProject()
+              })
             }}
           >
             New reel
           </Item>
-          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void importMedia()}>
+          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void importMediaAction(onToast)}>
             Open media…
           </Item>
-          <Item onClick={() => void openTranscript()}>Open transcript…</Item>
-          <Item onClick={() => void importTimeline()}>Import timeline…</Item>
-          <Item
-            onClick={async () => {
-              if (!confirmLoseWork()) return
-              try {
-                const path = await openCurrentDocument()
-                if (path) onToast(`Opened ${currentDocumentTitle()}.`)
-              } catch (err) {
-                onToast(err instanceof Error ? err.message : 'Open failed.')
-              }
-            }}
-          >
-            Open project…
+          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void appendTakeAction(onToast)}>
+            Add take…
           </Item>
+          <Item onClick={() => void openTranscriptAction(onToast)}>Open transcript…</Item>
+          <Item onClick={() => void importTimelineAction(onToast)}>Import timeline…</Item>
+          <Item onClick={() => void openProjectAction(onToast)}>Open project…</Item>
           <Item
             onClick={async () => {
               try {
@@ -233,14 +152,28 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           >
             Save As…
           </Item>
+          <Item disabled={ffmpegImportBusy(analyzing)} onClick={onExport}>
+            Export…
+          </Item>
           <Item
             onClick={() => {
-              if (!confirmLoseWork()) return
-              loadDemo()
+              void confirmLoseWork().then((ok) => {
+                if (ok) loadDemo()
+              })
             }}
           >
             Studio demo
           </Item>
+          {recents.length > 0 && (
+            <>
+              <span className="menu-label">Recent</span>
+              {recents.map((recent) => (
+                <Item key={recent.path} onClick={() => void openRecentAction(recent.path, onToast)}>
+                  {recent.name}
+                </Item>
+              ))}
+            </>
+          )}
         </Menu>
         <Menu label="Edit">
           <Item disabled={!past} onClick={undo}>
@@ -258,9 +191,68 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             Razor at playhead
           </Item>
           <Item onClick={() => bladeAtWord()}>Blade at word</Item>
-          <Item onClick={() => playInOutOrSelection()}>Play I/O or selection</Item>
+          <Item onClick={() => playInOutOrSelection()}>Play marked range or selection</Item>
           <Item onClick={() => selectParagraphAtCaret()}>Select paragraph</Item>
-          <Item onClick={() => dispatch({ type: 'rippleDeleteMarks' })}>Ripple delete I/O</Item>
+          <Item onClick={() => dispatch({ type: ripple ? 'rippleDeleteMarks' : 'liftMarks' })}>
+            {ripple ? 'Cut marked range' : 'Lift marked range'}
+          </Item>
+          <Item
+            onClick={() =>
+              dispatch({ type: 'insertGap', time: usePlayback.getState().programTime, duration: 1 })
+            }
+          >
+            Insert 1s hold
+          </Item>
+          <Item onClick={() => dispatch({ type: 'setMarks', markIn: null, markOut: null })}>
+            Clear In and Out
+          </Item>
+          <Item
+            onClick={() => {
+              const source = programToSourceOf(project, usePlayback.getState().programTime)
+              const word = project.transcript.words.find((w) => source >= w.start && source <= w.end)
+              dispatch({
+                type: 'addTag',
+                start: word?.start ?? source,
+                end: word?.end ?? source + 1,
+                kind: 'note',
+                label: 'Note'
+              })
+              onToast('Note at the playhead.')
+            }}
+          >
+            Note at playhead
+          </Item>
+          <Item
+            onClick={() => {
+              const note = hopNote(project, programToSourceOf(project, usePlayback.getState().programTime), 1)
+              if (note) usePlayback.getState().seekSource(note.start)
+            }}
+          >
+            Next note
+          </Item>
+          <Item
+            onClick={() => {
+              const note = hopNote(project, programToSourceOf(project, usePlayback.getState().programTime), -1)
+              if (note) usePlayback.getState().seekSource(note.start)
+            }}
+          >
+            Previous note
+          </Item>
+          <Item
+            onClick={() => {
+              if (copySelectedClip('clip')) onToast('Copied clip. Paste at the playhead.')
+            }}
+          >
+            Copy clip
+          </Item>
+          <Item
+            onClick={() => {
+              if (pasteClipboard('clip')) onToast('Pasted at the playhead.')
+            }}
+          >
+            Paste clip at playhead
+          </Item>
+          {onShortcuts && <Item onClick={onShortcuts}>Keyboard shortcuts ?</Item>}
           <Item
             onClick={() =>
               dispatch({
@@ -270,7 +262,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
               })
             }
           >
-            Q · ripple trim in
+            Trim start to playhead (Q)
           </Item>
           <Item
             onClick={() =>
@@ -281,36 +273,38 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
               })
             }
           >
-            W · ripple trim out
+            Trim end to playhead (W)
           </Item>
         </Menu>
         <Menu label="Sequence">
           <Item
-            onClick={() =>
+            onClick={() => {
               dispatch({
                 type: 'addCaption',
                 start: usePlayback.getState().programTime,
                 duration: 3,
                 text: 'Title'
               })
-            }
+              onToast('Title on the tape — 3 seconds from here. Type in the inspector.')
+            }}
           >
-            Add title
+            Add title (3s at playhead)
           </Item>
           <Item
-            onClick={() =>
+            onClick={() => {
               dispatch({
                 type: 'addZoom',
                 start: usePlayback.getState().programTime,
                 duration: 3,
                 scale: 1.45
               })
-            }
+              onToast('Zoom on the picture — 3 seconds from here. Scale is in Transform.')
+            }}
           >
-            Add zoom
+            Add zoom (3s at playhead)
           </Item>
           <Item
-            onClick={() =>
+            onClick={() => {
               dispatch({
                 type: 'addTitle',
                 start: usePlayback.getState().programTime,
@@ -318,48 +312,59 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
                 text: 'Lower third',
                 preset: 'lower-third'
               })
-            }
+              onToast('Lower third on the tape — 3 seconds from here. Type in the inspector.')
+            }}
           >
-            Add lower third
+            Add lower third (3s at playhead)
           </Item>
           <Item
-            onClick={() =>
+            onClick={() => {
               dispatch({
                 type: 'generateCaptions',
                 maxWords: 5,
                 speakerPrefix: project.transcript.speakers.length > 1,
                 emphasize: true
               })
-            }
+              onToast('Captions from the live words. Edit any block on the tape.')
+            }}
           >
             Caption remaining words
           </Item>
-          <Item onClick={() => dispatch({ type: 'addLowerThirds' })}>Scene lower thirds</Item>
-          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void addPickedOverlay('broll')}>
+          <Item
+            onClick={() => {
+              dispatch({ type: 'addLowerThirds' })
+              onToast('Chapter titles on the tape. Edit text in the inspector.')
+            }}
+          >
+            Scene lower thirds
+          </Item>
+          <Item disabled={ffmpegImportBusy(analyzing) || exporting} onClick={() => void addPickedOverlay('broll')}>
             Add B-roll…
           </Item>
-          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void addPickedOverlay('audio')}>
+          <Item disabled={ffmpegImportBusy(analyzing) || exporting} onClick={() => void addPickedOverlay('audio')}>
             Add music bed…
           </Item>
           <Item
-            onClick={() =>
+            onClick={() => {
               dispatch({
                 type: 'addRedaction',
                 start: usePlayback.getState().programTime,
                 duration: 4
               })
-            }
+              onToast('Blur on the picture — 4 seconds from here. Drag to cover a face.')
+            }}
           >
-            Add redaction
+            Add redaction (4s at playhead)
           </Item>
           <Item
-            onClick={() =>
+            onClick={() => {
               dispatch({
                 type: 'dissolveAtPlayhead',
                 time: usePlayback.getState().programTime,
                 duration: 0.4
               })
-            }
+              onToast('Cross-dissolve at the playhead.')
+            }}
           >
             Dissolve at playhead
           </Item>
@@ -371,10 +376,10 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           <Item
             onClick={() => {
               useEditor.getState().setTool(useEditor.getState().tool === 'guard' ? 'select' : 'guard')
-              onToast('Guard brush — drag the tape or words, then apply safe cuts.')
+              onToast('Protecting — drag words in the transcript so Auto Edit skips them.')
             }}
           >
-            Paint guards
+            Protect words
           </Item>
           <Item
             onClick={() => {
@@ -410,7 +415,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
               if (span) dispatch({ type: 'addTag', ...span, kind: 'keep' })
             }}
           >
-            Tag I/O as keep
+            Protect marked range
           </Item>
           <Item
             onClick={() => {
@@ -418,7 +423,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
               if (span) dispatch({ type: 'addTag', ...span, kind: 'demo' })
             }}
           >
-            Tag I/O as silent demo
+            Mark range as silent demo
           </Item>
           <Item onClick={() => dispatch({ type: 'revertSuggestionType', suggestionType: 'silence' })}>
             Put back silence cuts
@@ -435,7 +440,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
               if (span) dispatch({ type: 'tightenRange', ...span })
             }}
           >
-            Tighten I/O gaps
+            Tighten pauses in marked range
           </Item>
           <Item onClick={() => dispatch({ type: 'setAudioMaster', patch: { normalize: true } })}>
             Normalize to -16 LUFS
@@ -445,13 +450,32 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
       <div className="menubar-right">
         <span
           className="status-pill"
-          data-dirty={dirty || undefined}
-          title={analyzing ? 'Cancel import' : undefined}
-          onClick={analyzing ? () => void cancelImport() : undefined}
+          data-dirty={dirty || !documentPath || undefined}
+          data-clickable={Boolean(analyzing || dirty || !documentPath) || undefined}
+          title={
+            analyzing
+              ? 'Cancel import'
+              : dirty || !documentPath
+                ? 'Save this reel'
+                : documentPath
+          }
+          onClick={() => {
+            if (analyzing) {
+              void cancelImport()
+              return
+            }
+            if (!dirty && documentPath) return
+            void saveCurrentDocument().then(
+              (path) => {
+                if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
+              },
+              (err: unknown) => onToast(err instanceof Error ? err.message : 'Save failed.')
+            )
+          }}
         >
           {analyzing
             ? `Analyze · ${analyzing}`
-            : dirty
+            : dirty || !documentPath
               ? 'Unsaved'
               : 'Saved'}{' '}
           · {documentPath ? currentDocumentTitle() : project.name} · {project.fps} fps · {project.width}×
@@ -460,7 +484,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
         <button
           className="export-btn"
           onClick={exporting ? () => void cancelExport() : onExport}
-          disabled={Boolean(analyzing) && !exporting}
+          disabled={ffmpegImportBusy(analyzing) && !exporting}
         >
           {exporting ? 'Cancel' : 'Export'}
         </button>

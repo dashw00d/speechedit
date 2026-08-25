@@ -10,6 +10,7 @@ import {
 import { annotateProtected } from './analysis'
 import { DEFAULT_SPEAKER_COLOR } from './theme'
 import { normalizeScenes } from './sceneAnalysis'
+import { ensurePrimaryOffsets } from './takes'
 
 function normalizeTransform(t?: Partial<Transform>): Transform {
   return {
@@ -29,6 +30,7 @@ export function normalizeProject(project: Project): Project {
     })),
     picture: normalizeTransform(project.picture),
     tags: project.tags ?? [],
+    inserts: project.inserts ?? [],
     scenes: normalizeScenes(project.scenes),
     suggestions: annotateProtected(project.suggestions ?? [], project.tags ?? []),
     audioMaster: { ...DEFAULT_AUDIO_MASTER, ...project.audioMaster },
@@ -50,14 +52,18 @@ export function normalizeProject(project: Project): Project {
     },
     markIn: project.markIn ?? null,
     markOut: project.markOut ?? null,
-    assets: Object.fromEntries(
-      Object.entries(project.assets ?? {}).map(([id, asset]) => [
-        id,
-        { ...asset, waveform: asset.waveform ?? [] }
-      ])
-    ),
+    assets: ensurePrimaryOffsets({
+      tracks: project.tracks ?? [],
+      assets: Object.fromEntries(
+        Object.entries(project.assets ?? {}).map(([id, asset]) => [
+          id,
+          { ...asset, waveform: asset.waveform ?? [] }
+        ])
+      )
+    }),
     tracks: project.tracks.map((track) => ({
       ...track,
+      solo: Boolean(track.solo),
       clips: track.clips.map((clip) => ({
         ...emptyClipFields(),
         ...clip,

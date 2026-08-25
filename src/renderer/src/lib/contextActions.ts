@@ -1,16 +1,19 @@
 import type { Command, EditSuggestion, Project } from '../types'
 import { blockedByLabel } from './analysis'
-import { commandForScene, suggestionForScene, takeFamily } from './sceneAnalysis'
+import { safeEditCandidates } from './firstEdit'
+import { commandForScene, hasUncollapsedRetakes, suggestionForScene, takeFamily } from './sceneAnalysis'
 import { isFillerToken } from './transcript'
 import { coveringAppliedSuggestion, tagAt, wordRange } from './transcriptEdit'
 import { formatClock } from './time'
 
+export { hasUncollapsedRetakes }
+
 export type PaceId = 'natural' | 'balanced' | 'tight'
 
-export const PACE_PRESETS: { id: PaceId; label: string; margin: number }[] = [
-  { id: 'natural', label: 'Natural', margin: 0.22 },
-  { id: 'balanced', label: 'Balanced', margin: 0.12 },
-  { id: 'tight', label: 'Tight', margin: 0.04 }
+export const PACE_PRESETS: { id: PaceId; label: string; margin: number; hint: string }[] = [
+  { id: 'natural', label: 'Natural', margin: 0.22, hint: 'Leave more air between words' },
+  { id: 'balanced', label: 'Balanced', margin: 0.12, hint: 'Typical cleanup — short pauses stay' },
+  { id: 'tight', label: 'Tight', margin: 0.04, hint: 'Cut most silence' }
 ]
 
 export interface ContextChoice {
@@ -33,6 +36,7 @@ export interface SuggestTask {
   showWatch: boolean
   showPace: boolean
   showPreviewToggle: boolean
+  fillerCount: number
 }
 
 export function formatSpan(seconds: number): string {
@@ -154,7 +158,7 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
       choices.push({
         id: 'tighten',
         label: 'Make shorter',
-        consequence: 'Cuts the air between these words. Guarded demo stays.',
+        consequence: 'Cuts the air between these words. Protected demo stays.',
         command: { type: 'tightenRange', start: span.start, end: span.end }
       })
     }
@@ -163,7 +167,7 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
   if (!project.tags.some((t) => t.kind === 'keep' && t.start <= span.start && t.end >= span.end)) {
     choices.push({
       id: 'keep',
-      label: 'Keep',
+      label: 'Protect',
       consequence: 'Auto Edit will leave this section unchanged.',
       command: { type: 'addTag', start: span.start, end: span.end, kind: 'keep' }
     })
@@ -175,27 +179,50 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
   }
 }
 
-export function hasUncollapsedRetakes(project: Project): boolean {
-  return (project.scenes ?? [])
-    .filter((s) => s.kind === 'retake')
-    .some((scene) => {
-      const spoken = project.transcript.words.filter((w) => w.start >= scene.start && w.end <= scene.end)
-      const dropped =
-        Boolean(suggestionForScene(project, scene)?.applied) ||
-        (spoken.length > 0 && spoken.every((w) => w.deleted))
-      return !dropped
-    })
-}
-
 export function suggestTask(project: Project): SuggestTask {
   const pending = project.suggestions.filter((s) => !s.applied)
   const applied = project.suggestions.filter((s) => s.applied)
-  const safe = pending.filter((s) => s.safe && !s.blockedBy && (s.action === 'cut' || s.action === 'normalize'))
+  const safe = safeEditCandidates(project)
   const review = pending.filter((s) => !safe.includes(s))
   const findRetakes = (project.scenes ?? []).every((s) => s.kind !== 'retake') && applied.length === 0
   const collapseRetakes = hasUncollapsedRetakes(project)
+  const fillerCount = pending.filter(
+    (s) => s.type === 'filler' && !s.blockedBy && (s.action === 'cut' || s.action === 'speed')
+  ).length
 
   if (!project.transcript.words.length) {
+    if (applied.length) {
+      return {
+        headline: review.length
+          ? `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need review. Transcribing…`
+          : 'First edit done. Transcribing…',
+        applyLabel: safe.length ? `Apply ${safe.length} safe` : null,
+        reviewLabel: review.length ? `Review ${review.length}` : 'Review',
+        reviewCount: review.length,
+        safeCount: safe.length,
+        findRetakes: false,
+        collapseRetakes,
+        showWatch: true,
+        showPace: false,
+        showPreviewToggle: false,
+        fillerCount: 0
+      }
+    }
+    if (safe.length) {
+      return {
+        headline: `Pauses found. ${safe.length} safe to clean · transcribing…`,
+        applyLabel: `Clean ${safe.length} pauses`,
+        reviewLabel: review.length ? `Review ${review.length}` : 'Review',
+        reviewCount: review.length,
+        safeCount: safe.length,
+        findRetakes: false,
+        collapseRetakes,
+        showWatch: false,
+        showPace: true,
+        showPreviewToggle: true,
+        fillerCount: 0
+      }
+    }
     return {
       headline: 'Open media to transcribe and find pauses.',
       applyLabel: null,
@@ -206,7 +233,8 @@ export function suggestTask(project: Project): SuggestTask {
       collapseRetakes: false,
       showWatch: false,
       showPace: false,
-      showPreviewToggle: false
+      showPreviewToggle: false,
+      fillerCount: 0
     }
   }
   if (!applied.length && safe.length) {
@@ -220,7 +248,8 @@ export function suggestTask(project: Project): SuggestTask {
       collapseRetakes,
       showWatch: false,
       showPace: true,
-      showPreviewToggle: true
+      showPreviewToggle: true,
+      fillerCount
     }
   }
   if (applied.length && review.length) {
@@ -234,7 +263,8 @@ export function suggestTask(project: Project): SuggestTask {
       collapseRetakes,
       showWatch: true,
       showPace: false,
-      showPreviewToggle: false
+      showPreviewToggle: false,
+      fillerCount
     }
   }
   if (applied.length && !pending.length) {
@@ -248,7 +278,8 @@ export function suggestTask(project: Project): SuggestTask {
       collapseRetakes: false,
       showWatch: true,
       showPace: false,
-      showPreviewToggle: false
+      showPreviewToggle: false,
+      fillerCount: 0
     }
   }
   return {
@@ -263,7 +294,8 @@ export function suggestTask(project: Project): SuggestTask {
     collapseRetakes,
     showWatch: applied.length > 0,
     showPace: safe.length > 0 && applied.length === 0,
-    showPreviewToggle: safe.length > 0 && applied.length === 0
+    showPreviewToggle: safe.length > 0 && applied.length === 0,
+    fillerCount
   }
 }
 
@@ -401,8 +433,8 @@ export function nextPauseAfter(
 function suggestionSafetyExplanation(project: Project, suggestion: EditSuggestion): string {
   if (suggestion.blockedBy) {
     const tag = project.tags.find((t) => t.id === suggestion.blockedBy)
-    if (tag?.kind === 'demo') return 'Guarded by silent demo — Auto Edit will not cut through here.'
-    if (tag?.kind === 'keep') return 'This section is marked keep — cuts are blocked.'
+    if (tag?.kind === 'demo') return 'Protected by silent demo — Auto Edit will not cut through here.'
+    if (tag?.kind === 'keep') return 'This section is protected — Auto Edit will skip it.'
     const label = blockedByLabel(project.tags, suggestion.blockedBy)
     return label ? `Blocked by ${label}. Auto Edit will not cut through protected sections.` : 'Blocked by a protected section.'
   }
@@ -454,6 +486,12 @@ export function gapInspectorDetail(project: Project, start: number, end: number)
       consequence: `Removes ${formatSpan(dur)} and closes the gap.`,
       command: { type: 'deleteRange', start, end, source: 'transcript' },
       primary: true
+    })
+    actions.push({
+      id: 'lift-pause',
+      label: 'Lift pause',
+      consequence: `Removes ${formatSpan(dur)} of air but leaves a hold so later clips stay put.`,
+      command: { type: 'deleteRange', start, end, source: 'transcript', lift: true }
     })
     if (dur > 1.2) {
       actions.push({
@@ -643,6 +681,22 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
         command: { type: 'collapseRetakes' }
       })
     }
+  } else if (dropped) {
+    actions.push({
+      id: 'restore-scene',
+      label: 'Put scene back',
+      consequence: `Restores ${formatSpan(dur)} and opens the gap.`,
+      command: { type: 'restoreRange', start: scene.start, end: scene.end },
+      primary: true
+    })
+  } else {
+    actions.push({
+      id: 'cut-scene',
+      label: scene.kind === 'demo' ? 'Remove walkthrough' : 'Remove scene',
+      consequence: `Removes ${formatSpan(dur)} and closes the gap. Captions stay in sync.`,
+      command: { type: 'deleteRange', start: scene.start, end: scene.end, source: 'transcript' },
+      primary: true
+    })
   }
 
   let title = 'Scene'
@@ -798,7 +852,7 @@ export function projectInspectorDetail(project: Project): ProjectInspectorDetail
 
   const agentHint =
     pendingCount > 0
-      ? `${pendingCount} open edit${pendingCount === 1 ? '' : 's'} — Agent can batch-apply safe cuts or explain what's blocked.`
+      ? `${pendingCount} open edit${pendingCount === 1 ? '' : 's'} — Agent can batch-apply safe cuts or explain what's protected.`
       : undefined
 
   return {
@@ -846,14 +900,20 @@ export function inspectorTabs(focus: InspectorFocus): Array<{ id: InspectorFocus
 
 export interface PaletteSpec {
   name: string
-  group: 'job' | 'selection' | 'edit' | 'export' | 'file'
+  group: 'job' | 'selection' | 'edit' | 'export' | 'file' | 'playback'
   run: () => void
 }
 
 export function rankPalette(
   items: PaletteSpec[],
   query: string,
-  ctx: { exporting: boolean; analyzing: string | null; hasWordSelection: boolean; hasClip: boolean }
+  ctx: {
+    exporting: boolean
+    analyzing: string | null
+    hasWordSelection: boolean
+    hasClip: boolean
+    empty?: boolean
+  }
 ): PaletteSpec[] {
   const q = query.trim().toLowerCase()
   const filtered = items.filter((item) => {
@@ -869,6 +929,10 @@ export function rankPalette(
     let score = 40
     if (item.group === 'job' && ctx.exporting && /export/i.test(item.name)) score = 0
     else if (item.group === 'job' && ctx.analyzing && /import/i.test(item.name)) score = 0
+    else if (ctx.empty && item.group === 'file') score = 8
+    else if (ctx.empty && item.name === 'Export…') score = 14
+    else if (ctx.empty && (item.group === 'export' || item.group === 'edit' || item.group === 'selection'))
+      score = 70
     else if (item.group === 'selection' && ctx.hasWordSelection) score = 10
     else if (item.group === 'selection' && ctx.hasClip) score = 12
     else if (item.group === 'edit') score = 20

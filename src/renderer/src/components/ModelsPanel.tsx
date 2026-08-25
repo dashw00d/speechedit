@@ -11,6 +11,7 @@ import {
   type AppSettings
 } from '../lib/settings'
 import { presetIdFor } from '../../../shared/asr'
+import { applySafeFirstEdit, describeFirstEdit } from '../lib/firstEdit'
 import { busyMessage, isJobCancelled, whisperMissingMessage } from '../lib/mediaJobs'
 import { useEditor } from '../store'
 
@@ -58,7 +59,8 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
       if (!words.length) throw new Error(`${whisperMissingMessage()} Or use speech islands.`)
       useEditor.getState().loadTranscript(words)
-      onToast(`Transcript · ${words.length} words`)
+      const first = applySafeFirstEdit()
+      onToast(first ? describeFirstEdit(first.applied, first.review, first.retakes) : `Transcript · ${words.length} words`)
     } catch (err) {
       onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Transcribe failed.')
     } finally {
@@ -232,8 +234,16 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         >
           {busy === 'transcribe' ? 'Transcribing…' : 'Transcribe again'}
         </button>
-        <button className="chip" disabled={Boolean(busy)} onClick={() => void ask()}>
-          {busy === 'intel' ? 'Thinking…' : 'Ask model…'}
+        <button
+          className="chip"
+          type="button"
+          disabled={Boolean(busy)}
+          onClick={() => {
+            useEditor.getState().setInspectorTab('agent')
+            useEditor.getState().setAgentOpen(true)
+          }}
+        >
+          Ask in Agent…
         </button>
         <button
           className="chip"
@@ -242,10 +252,26 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         >
           Find scenes
         </button>
-        <button className="chip" disabled={Boolean(busy)} onClick={() => dispatch({ type: 'inferScenes' })}>
-          Local heuristic
+        <button
+          className="chip"
+          type="button"
+          disabled={Boolean(busy)}
+          onClick={() => {
+            dispatch({ type: 'inferScenes' })
+            onToast('Scenes from the transcript — no model. Review them in the script.')
+          }}
+        >
+          Local scenes
         </button>
-        <button className="chip" disabled={Boolean(busy)} onClick={() => dispatch({ type: 'rebuildIntelligence' })}>
+        <button
+          className="chip"
+          type="button"
+          disabled={Boolean(busy)}
+          onClick={() => {
+            dispatch({ type: 'rebuildIntelligence' })
+            onToast('Rebuilt scenes and suggestions from the transcript.')
+          }}
+        >
           Rebuild intelligence
         </button>
       </div>

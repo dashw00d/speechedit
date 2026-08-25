@@ -1,27 +1,19 @@
 import { useMemo, useState } from 'react'
 import { confirmLoseWork, saveCurrentDocument } from '../lib/documentIo'
+import { listRecents } from '../lib/recents'
+import { openRecentAction } from '../lib/fileActions'
 import { rankPalette, type PaletteSpec } from '../lib/contextActions'
 import { paletteSearchHits } from '../lib/paletteSearch'
-import {
-  projectToAutoEditor,
-  projectToChapters,
-  projectToFcpxml,
-  projectToKdenlive,
-  projectToMlt,
-  projectToOtio,
-  projectToPremiere,
-  projectToSrt,
-  projectToTranscriptMd,
-  projectToTranscriptTxt,
-  projectToVtt
-} from '../lib/interchange'
 import { cancelExport, cancelImport } from '../lib/mediaJobs'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
-import { saveTextExport } from '../lib/saveText'
+import { exportSidecar, type SidecarId } from '../lib/exportActions'
+import { readPaletteRecents, rememberPaletteCommand } from '../lib/paletteRecent'
+import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
+import { hopNote } from '../lib/clipEdit'
 import { useEditor, usePlayback } from '../store'
 
-export function Palette() {
+export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
   const open = useEditor((s) => s.palette)
   const setPalette = useEditor((s) => s.setPalette)
   const dispatch = useEditor((s) => s.dispatch)
@@ -78,7 +70,7 @@ export function Palette() {
         }
       },
       {
-        name: 'Paint guards',
+        name: 'Protect words',
         group: 'edit',
         run: () => useEditor.getState().setTool(useEditor.getState().tool === 'guard' ? 'select' : 'guard')
       },
@@ -138,6 +130,88 @@ export function Palette() {
       { name: 'Undo', group: 'file', run: () => useEditor.getState().undo() },
       { name: 'Redo', group: 'file', run: () => useEditor.getState().redo() },
       {
+        name: 'Keyboard shortcuts',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:shortcuts'))
+      },
+      {
+        name: 'Note at playhead',
+        group: 'edit',
+        run: () => {
+          const project = useEditor.getState().project
+          const source = programToSourceOf(project, usePlayback.getState().programTime)
+          const word = project.transcript.words.find((w) => source >= w.start && source <= w.end)
+          dispatch({
+            type: 'addTag',
+            start: word?.start ?? source,
+            end: word?.end ?? source + 1,
+            kind: 'note',
+            label: 'Note'
+          })
+        }
+      },
+      {
+        name: 'Dismiss pending suggestions',
+        group: 'edit',
+        run: () => dispatch({ type: 'dismissPendingSuggestions' })
+      },
+      {
+        name: 'Cut all fillers',
+        group: 'edit',
+        run: () => dispatch({ type: 'applySuggestionsByType', suggestionType: 'filler' })
+      },
+      {
+        name: 'Duplicate selected clip',
+        group: 'selection',
+        run: () => {
+          const id = useEditor.getState().selectedClipId
+          if (id) dispatch({ type: 'duplicateClip', clipId: id })
+        }
+      },
+      {
+        name: 'Copy clip',
+        group: 'selection',
+        run: () => void copySelectedClip('clip')
+      },
+      {
+        name: 'Paste clip at playhead',
+        group: 'selection',
+        run: () => void pasteClipboard('clip')
+      },
+      {
+        name: 'Paste clip look',
+        group: 'selection',
+        run: () => void pasteClipboard('look')
+      },
+      {
+        name: 'Next note',
+        group: 'edit',
+        run: () => {
+          const editor = useEditor.getState()
+          const note = hopNote(editor.project, programToSourceOf(editor.project, usePlayback.getState().programTime), 1)
+          if (note) usePlayback.getState().seekSource(note.start)
+        }
+      },
+      {
+        name: 'Previous note',
+        group: 'edit',
+        run: () => {
+          const editor = useEditor.getState()
+          const note = hopNote(editor.project, programToSourceOf(editor.project, usePlayback.getState().programTime), -1)
+          if (note) usePlayback.getState().seekSource(note.start)
+        }
+      },
+      {
+        name: 'Select all clips on track',
+        group: 'selection',
+        run: () => {
+          const editor = useEditor.getState()
+          const clip = editor.project.tracks.flatMap((t) => t.clips).find((c) => c.id === editor.selectedClipId)
+          const track = editor.project.tracks.find((t) => t.clips.some((c) => c.id === editor.selectedClipId))
+          if (track && clip) editor.selectClips(track.clips.map((c) => c.id))
+        }
+      },
+      {
         name: 'Razor at playhead',
         group: 'edit',
         run: () =>
@@ -147,11 +221,55 @@ export function Palette() {
           })
       },
       { name: 'Blade at word', group: 'edit', run: () => bladeAtWord() },
-      { name: 'Play I/O or selection', group: 'selection', run: () => playInOutOrSelection() },
+      { name: 'Play marked range or selection', group: 'selection', run: () => playInOutOrSelection() },
       { name: 'Select paragraph', group: 'selection', run: () => selectParagraphAtCaret() },
-      { name: 'Ripple delete I/O', group: 'edit', run: () => dispatch({ type: 'rippleDeleteMarks' }) },
+      { name: 'Fit timeline', group: 'edit', run: () => usePlayback.getState().fitTimeline() },
       {
-        name: 'Q ripple trim in to playhead',
+        name: 'Cut marked range',
+        group: 'edit',
+        run: () => dispatch({ type: useEditor.getState().ripple ? 'rippleDeleteMarks' : 'liftMarks' })
+      },
+      { name: 'Lift marked range', group: 'edit', run: () => dispatch({ type: 'liftMarks' }) },
+      {
+        name: 'Insert 1s hold',
+        group: 'edit',
+        run: () => dispatch({ type: 'insertGap', time: usePlayback.getState().programTime, duration: 1 })
+      },
+      {
+        name: 'Match frame',
+        group: 'edit',
+        run: () => {
+          const project = useEditor.getState().project
+          const source = programToSourceOf(project, usePlayback.getState().programTime)
+          const word = project.transcript.words.find((w) => source >= w.start && source <= w.end)
+          if (word) {
+            useEditor.getState().selectWords([word.id])
+            useEditor.getState().setFollowPlayhead(true)
+          }
+        }
+      },
+      {
+        name: 'Clear In and Out',
+        group: 'edit',
+        run: () => dispatch({ type: 'setMarks', markIn: null, markOut: null })
+      },
+      {
+        name: 'Tighten pauses in marked range',
+        group: 'edit',
+        run: () => {
+          const project = useEditor.getState().project
+          if (project.markIn == null || project.markOut == null) return
+          const start = Math.min(project.markIn, project.markOut)
+          const end = Math.max(project.markIn, project.markOut)
+          dispatch({
+            type: 'tightenRange',
+            start: programToSourceOf(project, start),
+            end: programToSourceOf(project, end)
+          })
+        }
+      },
+      {
+        name: 'Trim start to playhead',
         group: 'edit',
         run: () =>
           dispatch({
@@ -161,7 +279,7 @@ export function Palette() {
           })
       },
       {
-        name: 'W ripple trim out to playhead',
+        name: 'Trim end to playhead',
         group: 'edit',
         run: () =>
           dispatch({
@@ -286,121 +404,100 @@ export function Palette() {
         run: () => dispatch({ type: 'setAudioMaster', patch: { normalize: true } })
       },
       {
-        name: 'Export captions SRT',
+        name: 'Export…',
         group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.srt`, projectToSrt(project))
-        }
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:export'))
       },
-      {
-        name: 'Export captions VTT',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.vtt`, projectToVtt(project))
-        }
-      },
-      {
-        name: 'Export transcript Markdown',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.md`, projectToTranscriptMd(project))
-        }
-      },
-      {
-        name: 'Export transcript TXT',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.txt`, projectToTranscriptTxt(project))
-        }
-      },
-      {
-        name: 'Export chapters JSON',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.chapters.json`, projectToChapters(project))
-        }
-      },
-      {
-        name: 'Export OTIO',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.otio`, projectToOtio(project))
-        }
-      },
-      {
-        name: 'Export FCPXML',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.fcpxml`, projectToFcpxml(project))
-        }
-      },
-      {
-        name: 'Export Premiere XML',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.xml`, projectToPremiere(project))
-        }
-      },
-      {
-        name: 'Export Auto-Editor JSON',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.autoeditor.json`, projectToAutoEditor(project))
-        }
-      },
-      {
-        name: 'Export Shotcut MLT',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.mlt`, projectToMlt(project))
-        }
-      },
-      {
-        name: 'Export Kdenlive',
-        group: 'export',
-        run: () => {
-          const project = useEditor.getState().project
-          void saveTextExport(`${project.name}.kdenlive`, projectToKdenlive(project))
-        }
-      },
+      ...(
+        [
+          ['srt', 'Export captions SRT'],
+          ['vtt', 'Export captions VTT'],
+          ['md', 'Export transcript Markdown'],
+          ['txt', 'Export transcript TXT'],
+          ['chapters', 'Export chapters JSON'],
+          ['otio', 'Export OTIO'],
+          ['fcpxml', 'Export FCPXML'],
+          ['premiere', 'Export Premiere XML'],
+          ['autoeditor', 'Export Auto-Editor JSON'],
+          ['mlt', 'Export Shotcut MLT'],
+          ['kdenlive', 'Export Kdenlive']
+        ] as const
+      ).map(([id, name]) => ({
+        name,
+        group: 'export' as const,
+        run: () => void exportSidecar(id as SidecarId, onToast ?? (() => undefined))
+      })),
       { name: 'Save', group: 'file', run: () => void saveCurrentDocument() },
       { name: 'Save As…', group: 'file', run: () => void saveCurrentDocument({ saveAs: true }) },
+      {
+        name: 'Open media…',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:open-media'))
+      },
+      {
+        name: 'Add take…',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:add-take'))
+      },
+      {
+        name: 'Open project…',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:open-project'))
+      },
+      {
+        name: 'Open transcript…',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:open-transcript'))
+      },
+      ...listRecents().map((recent) => ({
+        name: `Open recent · ${recent.name}`,
+        group: 'file' as const,
+        run: () => void openRecentAction(recent.path, onToast ?? (() => undefined))
+      })),
       {
         name: 'Load studio demo',
         group: 'file',
         run: () => {
-          if (!confirmLoseWork()) return
-          useEditor.getState().loadDemo()
+          void confirmLoseWork().then((ok) => {
+            if (ok) useEditor.getState().loadDemo()
+          })
         }
       },
       {
         name: 'New reel',
         group: 'file',
         run: () => {
-          if (!confirmLoseWork()) return
-          useEditor.getState().newProject()
+          void confirmLoseWork().then((ok) => {
+            if (ok) useEditor.getState().newProject()
+          })
         }
       }
     ],
-    [dispatch]
+    [dispatch, onToast]
   )
 
-  const shown = rankPalette([...actions, ...paletteSearchHits(project, q)], q, {
+  const ranked = rankPalette([...actions, ...paletteSearchHits(project, q)], q, {
     exporting,
     analyzing: analyzing,
     hasWordSelection: selectedWordIds.length > 0,
-    hasClip: Boolean(selectedClipId)
+    hasClip: Boolean(selectedClipId),
+    empty: project.transcript.words.length === 0
   })
+  const recents = !q.trim()
+    ? readPaletteRecents()
+        .map((name) => ranked.find((action) => action.name === name) ?? actions.find((action) => action.name === name))
+        .filter((action): action is (typeof actions)[number] => Boolean(action))
+    : []
+  const shown = recents.length
+    ? [...recents, ...ranked.filter((action) => !recents.some((recent) => recent.name === action.name))]
+    : ranked
+
+  function runAction(action: (typeof shown)[number]) {
+    rememberPaletteCommand(action.name)
+    action.run()
+    setPalette(false)
+  }
+
   if (!open) return null
 
   return (
@@ -414,20 +511,13 @@ export function Palette() {
           onKeyDown={(e) => {
             if (e.key === 'Escape') setPalette(false)
             if (e.key === 'Enter' && shown[0]) {
-              shown[0].run()
-              setPalette(false)
+              runAction(shown[0])
             }
           }}
         />
         {shown.map((action) => (
-          <button
-            key={action.name}
-            onClick={() => {
-              action.run()
-              setPalette(false)
-            }}
-          >
-            {action.name}
+          <button key={action.name} onClick={() => runAction(action)}>
+            {recents.some((recent) => recent.name === action.name) ? `Recent · ${action.name}` : action.name}
           </button>
         ))}
       </div>

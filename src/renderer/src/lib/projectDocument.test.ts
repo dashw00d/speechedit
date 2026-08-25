@@ -13,6 +13,7 @@ import {
   parseRecovery,
   relativizeMediaPath,
   serializeDocument,
+  siblingRelinkGuesses,
   shouldOfferRecovery,
   slimProjectForCache,
   suggestedDocumentName,
@@ -185,6 +186,22 @@ describe('project document portability', () => {
       { id: 'take', name: 'take.mp4', path: '/missing/take.mp4' }
     ])
     expect(missingMedia(withFile, () => true)).toEqual([])
+  })
+
+  test('sibling relink guesses other missing names in the picked folder', () => {
+    expect(
+      siblingRelinkGuesses('/new/bin/talk.mp4', [
+        { id: 'a', name: 'talk.mp4', path: '/old/bin/talk.mp4' },
+        { id: 'b', name: 'broll.mp4', path: '/old/bin/broll.mp4' },
+        { id: 'c', name: 'music.wav', path: '/old/bin/music.wav' }
+      ])
+    ).toEqual([
+      { id: 'b', path: '/new/bin/broll.mp4' },
+      { id: 'c', path: '/new/bin/music.wav' }
+    ])
+    expect(siblingRelinkGuesses('talk.mp4', [{ id: 'b', name: 'broll.mp4', path: '/old/broll.mp4' }])).toEqual(
+      []
+    )
   })
 
   test('suggested name and file label stay portable', () => {

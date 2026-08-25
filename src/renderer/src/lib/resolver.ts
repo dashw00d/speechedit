@@ -7,6 +7,7 @@ import {
   type Transform
 } from '../types'
 import { projectKept } from './edl'
+import { takeBoundaryMarks } from './takes'
 import { sampleTransform } from './keyframes'
 import { clamp } from './edl'
 
@@ -23,6 +24,8 @@ export interface ResolvedSegment {
   fadeOut: number
   overlapNext: number
   keyframes: SegmentStyle['keyframes']
+  kind: 'media' | 'slug'
+  pan: number
 }
 
 export function segmentId(start: number, end: number): string {
@@ -54,10 +57,10 @@ function styleFor(project: Project, span: Interval): SegmentStyle | undefined {
 }
 
 export function sourcePieces(project: Project): Interval[] {
-  return splitKept(projectKept(project), project.splits ?? [])
+  return splitKept(projectKept(project), [...(project.splits ?? []), ...takeBoundaryMarks(project)])
 }
 
-export function resolveSegments(project: Project): ResolvedSegment[] {
+export function resolveMediaSegments(project: Project): ResolvedSegment[] {
   const pieces = sourcePieces(project)
   const built: ResolvedSegment[] = []
   let program = 0
@@ -82,11 +85,92 @@ export function resolveSegments(project: Project): ResolvedSegment[] {
       fadeIn: style?.fadeIn ?? 0,
       fadeOut,
       overlapNext,
-      keyframes: style?.keyframes ?? []
+      keyframes: style?.keyframes ?? [],
+      kind: 'media',
+      pan: style?.pan ?? 0
     })
     program += duration - overlapNext
   }
   return built
+}
+
+function spliceInserts(media: ResolvedSegment[], inserts: Project['inserts']): ResolvedSegment[] {
+  const slugs = [...(inserts ?? [])]
+    .filter((row) => row.duration > 0.03)
+    .sort((a, b) => a.programStart - b.programStart || a.id.localeCompare(b.id))
+  if (!slugs.length) return media.map((seg) => ({ ...seg, kind: seg.kind ?? 'media' }))
+
+  const out: ResolvedSegment[] = []
+  let idx = 0
+  let used = 0
+  let program = 0
+
+  const emitMedia = (need: number) => {
+    while (need > 0.001 && idx < media.length) {
+      const seg = media[idx]
+      const remain = seg.duration - used
+      if (remain <= 0.001) {
+        idx += 1
+        used = 0
+        continue
+      }
+      const take = Math.min(remain, need)
+      const fullFromStart = used < 0.001 && take >= remain - 0.001
+      const speed = Math.max(0.1, seg.speed)
+      const inPoint = seg.inPoint + used * speed
+      const outPoint = inPoint + take * speed
+      const overlapNext = fullFromStart && need >= remain ? seg.overlapNext : 0
+      out.push({
+        ...seg,
+        id: fullFromStart ? seg.id : segmentId(inPoint, outPoint),
+        start: program,
+        duration: take,
+        inPoint,
+        outPoint,
+        overlapNext,
+        kind: 'media'
+      })
+      program += take - overlapNext
+      used += take
+      need -= take
+      if (used >= seg.duration - 0.001) {
+        idx += 1
+        used = 0
+      }
+    }
+  }
+
+  for (const slug of slugs) {
+    const need = Math.max(0, slug.programStart - program)
+    if (need > 0.001) emitMedia(need)
+    out.push({
+      id: `slug_${slug.id}`,
+      start: program,
+      duration: slug.duration,
+      inPoint: slug.holdSourceTime ?? 0,
+      outPoint: slug.holdSourceTime ?? 0,
+      speed: 1,
+      transform: { ...DEFAULT_TRANSFORM, ...projectPictureFallback(media) },
+      volume: 0,
+      fadeIn: 0,
+      fadeOut: 0,
+      overlapNext: 0,
+      keyframes: [],
+      kind: 'slug',
+      pan: 0
+    })
+    program += slug.duration
+  }
+  emitMedia(Number.POSITIVE_INFINITY)
+  return out
+}
+
+function projectPictureFallback(media: ResolvedSegment[]): Transform {
+  return media[0]?.transform ?? { ...DEFAULT_TRANSFORM }
+}
+
+export function resolveSegments(project: Project): ResolvedSegment[] {
+  return spliceInserts(resolveMediaSegments(project), project.inserts)
 }
 
 export function programLengthOf(project: Project): number {
@@ -102,6 +186,10 @@ export function programLengthOf(project: Project): number {
 export function sourceToProgramOf(project: Project, sourceTime: number): number {
   let program = 0
   for (const seg of resolveSegments(project)) {
+    if (seg.kind === 'slug') {
+      program += seg.duration - seg.overlapNext
+      continue
+    }
     if (sourceTime < seg.inPoint) return program
     if (sourceTime <= seg.outPoint) return program + (sourceTime - seg.inPoint) / seg.speed
     program += seg.duration - seg.overlapNext
@@ -114,6 +202,7 @@ export function programToSourceOf(project: Project, programTime: number): number
   const hits = segs.filter((s) => programTime >= s.start && programTime < s.start + s.duration)
   const seg = hits[hits.length - 1] ?? segs.find((s) => programTime < s.start) ?? segs[segs.length - 1]
   if (!seg) return 0
+  if (seg.kind === 'slug') return seg.inPoint
   const local = Math.min(seg.duration, Math.max(0, programTime - seg.start))
   return seg.inPoint + local * seg.speed
 }
@@ -150,6 +239,10 @@ function sourceToProgramCached(
 ): number {
   let program = 0
   for (const seg of segs) {
+    if (seg.kind === 'slug') {
+      program += seg.duration - seg.overlapNext
+      continue
+    }
     if (sourceTime < seg.inPoint) return program
     if (sourceTime <= seg.outPoint) return program + (sourceTime - seg.inPoint) / seg.speed
     program += seg.duration - seg.overlapNext
@@ -211,6 +304,8 @@ export function asVideoClips(project: Project): Clip[] {
     speed: seg.speed,
     fadeIn: seg.fadeIn,
     fadeOut: seg.fadeOut,
-    keyframes: seg.keyframes
+    keyframes: seg.keyframes,
+    pan: seg.pan,
+    kind: seg.kind
   }))
 }

@@ -1,36 +1,43 @@
 import { useEffect, useState } from 'react'
+import { ConfirmSheet } from './components/ConfirmSheet'
+import { ExportSheet } from './components/ExportSheet'
 import { ContextMenuHost, useContextMenu } from './components/ContextMenu'
 import { AgentPanel } from './components/AgentPanel'
 import { Inspector } from './components/Inspector'
 import { MenuBar } from './components/MenuBar'
 import { Monitor } from './components/Monitor'
 import { Palette } from './components/Palette'
+import { ShortcutsOverlay } from './components/ShortcutsOverlay'
 import { Suggestions } from './components/Suggestions'
 import { Timeline } from './components/Timeline'
 import { Transcript } from './components/Transcript'
-import { host, isElectron } from './host'
 import { findMovableClip, programLength } from './lib/commands'
+import { copySelectedClip, copyWordText, pasteClipboard } from './lib/clipClipboard'
+import { hopNote, movableIds } from './lib/clipEdit'
 import {
   discardRecovery,
   hydrateWorkspace,
   recoveryCopy,
   refreshMissingAssets,
+  relinkAllMissing,
   relinkAssetInteractive,
+  relinkToast,
   restoreRecovery,
   saveCurrentDocument
 } from './lib/documentIo'
 import { currentWord } from './lib/edl'
-import { summarizeJob, validateExportJob } from './lib/exportGraph'
-import { buildExportJob } from './lib/exportJob'
-import { programToSourceOf, snapTime, sourceToProgramOf } from './lib/resolver'
+import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
-import { extendSelection, sentenceIds, wordRange } from './lib/transcriptEdit'
-import { cancelExport, cancelImport, isJobCancelled, mediaBusyToast } from './lib/mediaJobs'
+import { neighborScene } from './lib/sceneChip'
+import { extendSelection, sentenceIds, shrinkSelection, wordRange } from './lib/transcriptEdit'
+import { cancelExport, cancelImport, mediaBusyToast } from './lib/mediaJobs'
 import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
 import { useClearSelection } from './useClearSelection'
 
 export function App() {
   const [toast, setToast] = useState<string | null>(null)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [keysOpen, setKeysOpen] = useState(false)
   const { menu: contextMenu, closeMenu: closeContextMenu } = useContextMenu()
   useClearSelection()
   const exporting = useEditor((s) => s.exporting)
@@ -72,9 +79,9 @@ export function App() {
     return () => clearTimeout(id)
   }, [toast, exporting])
 
-  useHotkeys(setToast)
+  useHotkeys(setToast, () => setKeysOpen((open) => !open))
 
-  async function onExport() {
+  function onExportClick() {
     const editor = useEditor.getState()
     if (editor.exporting) {
       void cancelExport()
@@ -85,50 +92,28 @@ export function App() {
       setToast(busy)
       return
     }
-    const project = editor.project
-    const job = buildExportJob(project, '')
-    if (!job) {
-      setToast('Open media to export a program.')
-      return
-    }
-    const graphProblem = validateExportJob(job)
-    if (graphProblem) {
-      setToast(graphProblem)
-      return
-    }
-    if (!isElectron) {
-      setToast('Export needs the Electron app.')
-      return
-    }
-    const output = await host.chooseExport()
-    if (!output) return
-    editor.setExporting(true)
-    setToast(`Export 0% — ${summarizeJob(job)}`)
-    const stop = host.onExportProgress((info) =>
-      setToast(`Export ${Math.round(info.ratio * 100)}% — ${info.stage}`)
-    )
-    try {
-      await host.exportProgram({ ...job, output })
-      setToast(`Export finished — ${summarizeJob(job)}. File: ${output}`)
-    } catch (err) {
-      setToast(isJobCancelled(err) ? 'Export cancelled.' : err instanceof Error ? err.message : 'Export failed.')
-    } finally {
-      stop()
-      useEditor.getState().setExporting(false)
-    }
+    setExportOpen(true)
   }
 
   useEffect(() => {
-    const onExportEvent = () => {
-      void onExport()
-    }
+    const onExportEvent = () => onExportClick()
+    const onKeys = () => setKeysOpen(true)
     window.addEventListener('speechedit:export', onExportEvent)
-    return () => window.removeEventListener('speechedit:export', onExportEvent)
+    window.addEventListener('speechedit:shortcuts', onKeys)
+    return () => {
+      window.removeEventListener('speechedit:export', onExportEvent)
+      window.removeEventListener('speechedit:shortcuts', onKeys)
+    }
   }, [])
 
   return (
     <div className="app">
-      <MenuBar onToast={setToast} onExport={onExport} exporting={exporting} />
+      <MenuBar
+        onToast={setToast}
+        onExport={onExportClick}
+        exporting={exporting}
+        onShortcuts={() => setKeysOpen(true)}
+      />
       <div className="stage">
         {(recoveryOffer || missingAssets.length > 0) && (
           <div className="doc-banners">
@@ -163,37 +148,52 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    void relinkAssetInteractive(missingAssets[0].id).then((path) => {
-                      if (path) {
+                    void relinkAssetInteractive(missingAssets[0].id).then((result) => {
+                      if (result) {
                         void refreshMissingAssets()
-                        setToast(`Relinked ${missingAssets[0].name}.`)
+                        setToast(relinkToast(missingAssets[0].name, result.nearby))
                       }
                     })
                   }}
                 >
                   Relink…
                 </button>
+                {missingAssets.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void relinkAllMissing((name) => setToast(`Relinked ${name}.`)).then((n) => {
+                        if (n) setToast(`Relinked ${n} file${n === 1 ? '' : 's'}.`)
+                      })
+                    }}
+                  >
+                    Relink all…
+                  </button>
+                )}
               </div>
             )}
           </div>
         )}
         <main className="workspace">
           <Transcript onToast={setToast} />
-          <Monitor />
+          <Monitor onToast={setToast} />
           <Inspector onToast={setToast} />
         </main>
       </div>
       <Timeline />
       <Suggestions />
-      <Palette />
+      <Palette onToast={setToast} />
       {agentOpen && <AgentPanel variant="dock" onToast={setToast} />}
       {toast && <div className="toast">{toast}</div>}
+      <ConfirmSheet />
+      <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
+      <ShortcutsOverlay open={keysOpen} onClose={() => setKeysOpen(false)} />
       <ContextMenuHost menu={contextMenu} onClose={closeContextMenu} />
     </div>
   )
 }
 
-function useHotkeys(setToast: (msg: string) => void) {
+function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey
@@ -201,6 +201,11 @@ function useHotkeys(setToast: (msg: string) => void) {
       const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
       const editor = useEditor.getState()
       const playback = usePlayback.getState()
+      if ((e.key === '?' || (e.key === '/' && e.shiftKey)) && !typing && !meta) {
+        e.preventDefault()
+        toggleKeys()
+        return
+      }
 
       if (e.key === 'Escape' && (editor.exporting || editor.analyzing) && !editor.palette) {
         e.preventDefault()
@@ -264,28 +269,81 @@ function useHotkeys(setToast: (msg: string) => void) {
         playback.seekProgram(currentProgramDuration())
         return
       }
+      if ((e.key === '\\' || e.code === 'Backslash') && !typing && !meta) {
+        e.preventDefault()
+        playback.fitTimeline()
+        setToast('Timeline fits the reel.')
+        return
+      }
       if ((e.key === 'q' || e.key === 'Q') && !typing && !meta) {
         e.preventDefault()
-        editor.dispatch({ type: 'rippleTrimToPlayhead', edge: 'in', time: playback.programTime })
-        setToast('Q · ripple trimmed in to playhead')
+        editor.dispatch({
+          type: 'rippleTrimToPlayhead',
+          edge: 'in',
+          time: playback.programTime,
+          lift: !editor.ripple
+        })
+        setToast('Trimmed the start up to here.')
         return
       }
       if ((e.key === 'w' || e.key === 'W') && !typing && !meta) {
         e.preventDefault()
-        editor.dispatch({ type: 'rippleTrimToPlayhead', edge: 'out', time: playback.programTime })
-        setToast('W · ripple trimmed out to playhead')
+        editor.dispatch({
+          type: 'rippleTrimToPlayhead',
+          edge: 'out',
+          time: playback.programTime,
+          lift: !editor.ripple
+        })
+        setToast('Trimmed the end back to here.')
+        return
+      }
+      if ((e.key === 'c' || e.key === 'C') && meta && !typing) {
+        e.preventDefault()
+        if (editor.selectedWordIds.length) {
+          if (copyWordText()) setToast('Copied the selected words.')
+          return
+        }
+        if (copySelectedClip(e.shiftKey ? 'look' : 'clip')) {
+          setToast(e.shiftKey ? 'Copied clip look (transform, volume, fades).' : 'Copied clip. ⌘V pastes at the playhead.')
+        }
+        return
+      }
+      if ((e.key === 'v' || e.key === 'V') && meta && !typing) {
+        e.preventDefault()
+        if (pasteClipboard(e.shiftKey ? 'look' : 'clip')) {
+          setToast(e.shiftKey ? 'Pasted look onto the selected clip.' : 'Pasted the clip at the playhead.')
+        }
+        return
+      }
+      if ((e.key === 'n' || e.key === 'N') && !typing && !meta) {
+        const note = hopNote(editor.project, programToSourceOf(editor.project, playback.programTime), e.shiftKey ? -1 : 1)
+        if (note) {
+          e.preventDefault()
+          playback.seekSource(note.start)
+          setToast(note.label || 'Note')
+        }
+        return
+      }
+      if ((e.key === 'e' || e.key === 'E') && !typing && !meta) {
+        const movable = findMovableClip(editor.project, editor.selectedClipId)
+        if (movable) {
+          e.preventDefault()
+          editor.dispatch({ type: 'extendClip', clipId: movable.id, time: playback.programTime })
+          setToast('Extended the clip to the playhead.')
+        }
         return
       }
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !typing && !meta) {
         e.preventDefault()
         const dir = e.key === 'ArrowRight' ? 1 : -1
         const frame = 1 / Math.max(1, editor.project.fps)
-        const movable = findMovableClip(editor.project, editor.selectedClipId)
-        if (movable) {
+        const ids = movableIds(
+          editor.project,
+          editor.selectedClipIds.length ? editor.selectedClipIds : editor.selectedClipId ? [editor.selectedClipId] : []
+        )
+        if (ids.length) {
           const step = e.shiftKey ? 1 : e.altKey ? frame * 10 : frame
-          let start = Math.max(0, movable.start + dir * step)
-          if (editor.snap && e.shiftKey) start = snapTime(editor.project, start, [playback.programTime])
-          editor.dispatch({ type: 'moveClip', clipId: movable.id, start })
+          editor.dispatch({ type: 'nudgeClips', clipIds: ids, delta: dir * step })
           return
         }
         const step = e.shiftKey ? 1 : frame
@@ -324,7 +382,7 @@ function useHotkeys(setToast: (msg: string) => void) {
       if (e.key === '/' && !typing && !meta) {
         e.preventDefault()
         usePlayback.setState({ loop: !playback.loop })
-        setToast(playback.loop ? 'Loop off' : 'Loop I/O — or the whole reel if marks are empty.')
+        setToast(playback.loop ? 'Loop off' : 'Loop the marked range — or the whole reel if marks are empty.')
         return
       }
       if ((e.key === 'g' || e.key === 'G') && !typing && !meta) {
@@ -335,9 +393,9 @@ function useHotkeys(setToast: (msg: string) => void) {
         setToast(
           next === 'guard'
             ? e.shiftKey
-              ? 'Guard brush — silent demo. Drag the tape or words; already-cut air comes back.'
-              : 'Guard brush — drag the tape or words. Shift = silent demo.'
-            : 'Select tool'
+              ? 'Protecting as silent demo — drag words. Esc or Done to stop.'
+              : 'Protecting — drag words so Auto Edit skips them. Shift = silent demo. Esc to stop.'
+            : 'Done protecting'
         )
         return
       }
@@ -373,7 +431,7 @@ function useHotkeys(setToast: (msg: string) => void) {
         if (span) {
           e.preventDefault()
           editor.dispatch({ type: 'tightenRange', start: span.start, end: span.end })
-          setToast('Tightened gaps — guarded demo/keep ranges stayed.')
+          setToast('Tightened pauses. Protected demo stayed.')
         }
         return
       }
@@ -382,7 +440,7 @@ function useHotkeys(setToast: (msg: string) => void) {
         playInOutOrSelection()
         setToast(
           editor.project.markIn != null && editor.project.markOut != null
-            ? 'Playing I/O.'
+            ? 'Playing the marked range.'
             : editor.selectedWordIds.length
               ? 'Playing the selection.'
               : 'Playing from the playhead.'
@@ -404,7 +462,7 @@ function useHotkeys(setToast: (msg: string) => void) {
       }
       if ((e.key === 'x' || e.key === 'X') && !typing && !meta && editor.selectedWordIds.length) {
         e.preventDefault()
-        editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds })
+        editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds, lift: !editor.ripple })
         return
       }
       if ((e.key === 'u' || e.key === 'U') && !typing && !meta) {
@@ -436,32 +494,54 @@ function useHotkeys(setToast: (msg: string) => void) {
             end: span.end,
             kind: e.shiftKey ? 'demo' : 'keep'
           })
-          setToast(e.shiftKey ? 'Tagged silent demo — Auto Edit will skip it.' : 'Tagged keep — Auto Edit will skip it.')
+          setToast(
+            e.shiftKey
+              ? 'Silent demo — Auto Edit will skip pauses here.'
+              : 'Protected — Auto Edit will skip this.'
+          )
         }
         return
       }
       if ((e.key === '[' || e.key === ']') && !typing) {
         e.preventDefault()
+        const sceneStep = e.key === ']' ? 1 : -1
+        const hop =
+          editor.selectedSceneId && neighborScene(editor.project.scenes ?? [], editor.selectedSceneId, sceneStep)
+        if (hop) {
+          editor.selectScene(hop.id)
+          playback.seekSource(hop.start)
+          playback.playLoop(
+            sourceToProgramOf(editor.project, hop.start),
+            sourceToProgramOf(editor.project, hop.end)
+          )
+          return
+        }
         editor.selectWords(
-          extendSelection(editor.project.transcript.words, editor.selectedWordIds, e.key === '[' ? -1 : 1)
+          e.key === '['
+            ? shrinkSelection(editor.project.transcript.words, editor.selectedWordIds)
+            : extendSelection(editor.project.transcript.words, editor.selectedWordIds, 1)
         )
         return
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
         if (editor.selectedWordIds.length) {
           e.preventDefault()
-          editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds })
+          editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds, lift: !editor.ripple })
           return
         }
         if (editor.project.markIn != null && editor.project.markOut != null) {
           e.preventDefault()
-          editor.dispatch({ type: 'rippleDeleteMarks' })
+          editor.dispatch({ type: editor.ripple ? 'rippleDeleteMarks' : 'liftMarks' })
           return
         }
-        const clip = editor.project.tracks.flatMap((t) => t.clips).find((c) => c.id === editor.selectedClipId)
-        if (clip) {
+        const clipIds = editor.selectedClipIds.length
+          ? editor.selectedClipIds
+          : editor.selectedClipId
+            ? [editor.selectedClipId]
+            : []
+        if (clipIds.length) {
           e.preventDefault()
-          editor.dispatch({ type: 'removeClip', clipId: clip.id })
+          editor.dispatch({ type: 'removeClips', clipIds })
         }
         return
       }
@@ -482,5 +562,5 @@ function useHotkeys(setToast: (msg: string) => void) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setToast])
+  }, [setToast, toggleKeys])
 }

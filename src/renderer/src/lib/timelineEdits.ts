@@ -10,7 +10,7 @@ export type EditBlockKind =
   | 'suggestion-blocked'
   | 'scene'
 
-export type EditBlockFilter = 'all' | 'applied' | 'pending' | 'scenes' | 'guards'
+export type EditBlockFilter = 'all' | 'applied' | 'pending' | 'scenes' | 'guards' | 'notes'
 
 export interface EditBlock {
   id: string
@@ -28,14 +28,34 @@ export interface EditBlock {
 
 function suggestionDetail(s: EditSuggestion): string {
   if (s.applied) return `${s.label} · applied · click to review`
-  if (s.blockedBy) return `${s.label} · blocked by a guard`
+  if (s.blockedBy) return `${s.label} · protected — Auto Edit skips this`
   if (s.safe) return `${s.label} · safe to apply`
   return `${s.label} · needs review`
+}
+
+function suggestionLaneLabel(s: EditSuggestion): string {
+  if (s.applied) return 'Cut'
+  if (s.type === 'silence') return 'Pause'
+  if (s.type === 'filler') return 'Filler'
+  if (s.type === 'repeat') return 'Retake'
+  if (s.type === 'static' || s.type === 'low-motion') return 'Static'
+  if (s.type === 'loud') return 'Loud'
+  return s.type
+}
+
+function sceneLaneLabel(scene: { title: string; kind: string; takeIndex?: number }): string {
+  if (scene.takeIndex) return `Take ${scene.takeIndex}`
+  if (scene.kind === 'demo') return 'Demo'
+  if (scene.kind === 'retake') return 'Retake'
+  const word = scene.title.trim().split(/\s+/)[0]
+  return word || 'Scene'
 }
 
 function tagDetail(tag: RangeTag): string {
   if (tag.kind === 'keep') return tag.label || 'Protected · Auto Edit skips this'
   if (tag.kind === 'demo') return tag.label || 'Silent demo · Auto Edit keeps this pause'
+  if (tag.kind === 'hook') return tag.label || 'Hook · opening beat'
+  if (tag.kind === 'cta') return tag.label || 'CTA · ask or next step'
   return tag.label || 'Note'
 }
 
@@ -46,7 +66,8 @@ export function filterEditBlocks(blocks: EditBlock[], filter: EditBlockFilter): 
     return blocks.filter((b) => b.kind === 'suggestion-pending' || b.kind === 'suggestion-blocked')
   }
   if (filter === 'scenes') return blocks.filter((b) => b.kind === 'scene')
-  return blocks.filter((b) => b.kind === 'keep' || b.kind === 'demo' || b.kind === 'note')
+  if (filter === 'notes') return blocks.filter((b) => b.kind === 'note')
+  return blocks.filter((b) => b.kind === 'keep' || b.kind === 'demo')
 }
 
 export function editBlockCounts(blocks: EditBlock[]): Record<EditBlockFilter, number> {
@@ -55,7 +76,8 @@ export function editBlockCounts(blocks: EditBlock[]): Record<EditBlockFilter, nu
     applied: filterEditBlocks(blocks, 'applied').length,
     pending: filterEditBlocks(blocks, 'pending').length,
     scenes: filterEditBlocks(blocks, 'scenes').length,
-    guards: filterEditBlocks(blocks, 'guards').length
+    guards: filterEditBlocks(blocks, 'guards').length,
+    notes: filterEditBlocks(blocks, 'notes').length
   }
 }
 
@@ -71,7 +93,16 @@ export function buildEditBlocks(project: Project): EditBlock[] {
       kind: tag.kind === 'keep' ? 'keep' : tag.kind === 'demo' ? 'demo' : 'note',
       start,
       end,
-      label: tag.kind === 'keep' ? 'Keep' : tag.kind === 'demo' ? 'Demo' : 'Note',
+      label:
+        tag.kind === 'keep'
+          ? 'Protected'
+          : tag.kind === 'demo'
+            ? 'Demo'
+            : tag.kind === 'hook'
+              ? 'Hook'
+              : tag.kind === 'cta'
+                ? 'CTA'
+                : 'Note',
       detail: tagDetail(tag),
       tagId: tag.id
     })
@@ -87,7 +118,7 @@ export function buildEditBlocks(project: Project): EditBlock[] {
       kind: s.applied ? 'suggestion-applied' : s.blockedBy ? 'suggestion-blocked' : 'suggestion-pending',
       start,
       end,
-      label: s.applied ? 'Cut' : s.type === 'silence' ? 'Pause' : s.type === 'filler' ? 'Filler' : s.type,
+      label: suggestionLaneLabel(s),
       detail: suggestionDetail(s),
       suggestionId: s.id,
       suggestionType: s.type,
@@ -102,7 +133,7 @@ export function buildEditBlocks(project: Project): EditBlock[] {
       kind: 'scene',
       start,
       end: start + 0.02,
-      label: scene.takeIndex ? `T${scene.takeIndex}` : scene.kind,
+      label: sceneLaneLabel(scene),
       detail: `${scene.title}${scene.summary ? ` · ${scene.summary}` : ''}`,
       sceneId: scene.id
     })

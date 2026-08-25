@@ -1,6 +1,8 @@
 import { host, isElectron } from '../host'
 import { assetNeedsProxy } from '../../../shared/proxy'
 import { flushWorkspace, useEditor } from '../store'
+import { requestLoseWork } from './loseWork'
+import { rememberRecent } from './recents'
 import {
   documentLabel,
   isExternalMediaPath,
@@ -12,14 +14,28 @@ import {
   parseSession,
   serializeDocument,
   shouldOfferRecovery,
+  siblingRelinkGuesses,
   suggestedDocumentName,
   type RecoveryRecord
 } from './projectDocument'
 
-export function confirmLoseWork(message = 'This reel has unsaved edits. Discard them?'): boolean {
+export async function confirmLoseWork(
+  message = 'This reel has unsaved edits. Save them first, discard, or cancel?'
+): Promise<boolean> {
   if (!useEditor.getState().dirty) return true
   if (typeof window === 'undefined') return true
-  return window.confirm(message)
+  const choice = await requestLoseWork(message)
+  if (choice === 'cancel') return false
+  if (choice === 'save') {
+    const path = await saveCurrentDocument()
+    return Boolean(path)
+  }
+  return true
+}
+
+export function rememberSavedDocument(path: string | null | undefined, savedAt = Date.now()): void {
+  if (!path) return
+  rememberRecent(path, currentDocumentTitle(), savedAt)
 }
 
 export async function hydrateAssetLooks(): Promise<void> {
@@ -209,6 +225,7 @@ export async function saveCurrentDocument(opts?: { saveAs?: boolean }): Promise<
   }
   if (!path) return ''
   useEditor.getState().markClean({ path, savedAt: envelope.savedAt })
+  rememberSavedDocument(path, envelope.savedAt)
   await refreshMissingAssets()
   return path
 }
@@ -222,18 +239,56 @@ export async function openCurrentDocument(): Promise<string> {
     clean: true,
     lastSavedAt: opened.savedAt
   })
+  rememberSavedDocument(result.path, opened.savedAt)
   await refreshMissingAssets()
   await hydrateMedia()
   return result.path
 }
 
-export async function relinkAssetInteractive(assetId: string): Promise<string | null> {
+export async function relinkNearbyMissing(pickedPath: string, exceptId: string): Promise<number> {
+  const missing = useEditor.getState().missingAssets.filter((asset) => asset.id !== exceptId)
+  const guesses = siblingRelinkGuesses(pickedPath, missing)
+  if (!guesses.length) return 0
+  const checks = await host.mediaExists(guesses.map((guess) => guess.path))
+  const present = new Set(checks.filter((row) => row.exists).map((row) => row.path))
+  let linked = 0
+  for (const guess of guesses) {
+    if (!present.has(guess.path)) continue
+    useEditor.getState().dispatch({ type: 'relinkAsset', assetId: guess.id, path: guess.path })
+    linked += 1
+  }
+  if (linked) await refreshMissingAssets()
+  return linked
+}
+
+export function relinkToast(name: string, nearby = 0): string {
+  return nearby ? `Relinked ${name} and ${nearby} nearby file${nearby === 1 ? '' : 's'}.` : `Relinked ${name}.`
+}
+
+export async function relinkAllMissing(onEach?: (name: string, path: string) => void): Promise<number> {
+  const ids = useEditor.getState().missingAssets.map((asset) => asset.id)
+  let linked = 0
+  for (const id of ids) {
+    const still = useEditor.getState().missingAssets.find((asset) => asset.id === id)
+    if (!still) continue
+    const result = await relinkAssetInteractive(id)
+    if (!result) break
+    linked += 1 + result.nearby
+    onEach?.(still.name, result.path)
+  }
+  return linked
+}
+
+export async function relinkAssetInteractive(
+  assetId: string
+): Promise<{ path: string; nearby: number } | null> {
   const file = await host.openMedia()
   if (!file) return null
   useEditor.getState().dispatch({ type: 'relinkAsset', assetId, path: file })
   await refreshMissingAssets()
+  const nearby = await relinkNearbyMissing(file, assetId)
   await hydrateMedia()
-  return file
+  return { path: file, nearby }
 }
 
 export function currentDocumentTitle(): string {

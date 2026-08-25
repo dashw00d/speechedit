@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { appliedSuggestionAt } from '../lib/analysis'
-import { parseAnyTranscript, isFillerToken } from '../lib/transcript'
+import { isFillerToken } from '../lib/transcript'
+import { ingestDroppedFile } from '../lib/fileActions'
 import { currentWord } from '../lib/edl'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
   appliedForWord,
   coveringAppliedSuggestion,
   extendSelection,
+  shrinkSelection,
   PARAGRAPH_GAP,
   paragraphIds,
   sentenceIds,
@@ -16,8 +18,10 @@ import {
   wordIdsInRange,
   wordRange
 } from '../lib/transcriptEdit'
-import { transcriptChoices } from '../lib/contextActions'
-import { findInTranscript } from '../lib/transcriptFind'
+import { formatSpan, sceneInspectorDetail, transcriptChoices } from '../lib/contextActions'
+import { SCENE_CHIP_ACTION_IDS, groupScenesByTranscriptAnchor, neighborScene, sceneClockLabel, sceneKindLabel } from '../lib/sceneChip'
+import { takeFamily } from '../lib/sceneAnalysis'
+import { findInTranscript, findWordGroups, replacePlan } from '../lib/transcriptFind'
 import { speakerColor } from '../lib/theme'
 import { useEditor, usePlayback } from '../store'
 import { StartGuide } from './StartGuide'
@@ -35,10 +39,10 @@ function rectsOverlap(a: Marquee, b: DOMRect): boolean {
 export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
   const selected = useEditor((s) => s.selectedWordIds)
+  const selectedSceneId = useEditor((s) => s.selectedSceneId)
   const selectWords = useEditor((s) => s.selectWords)
   const selectScene = useEditor((s) => s.selectScene)
   const dispatch = useEditor((s) => s.dispatch)
-  const loadTranscript = useEditor((s) => s.loadTranscript)
   const programTime = usePlayback((s) => s.programTime)
   const sourceTime = programToSourceOf(project, programTime)
   const seekSource = usePlayback((s) => s.seekSource)
@@ -48,26 +52,176 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const [paintIds, setPaintIds] = useState<string[] | null>(null)
   const [marquee, setMarquee] = useState<Marquee | null>(null)
   const [findQuery, setFindQuery] = useState('')
+  const [replaceQuery, setReplaceQuery] = useState('')
   const [findNote, setFindNote] = useState<string | null>(null)
+  const [findIndex, setFindIndex] = useState(0)
+  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null)
+  const [editingScene, setEditingScene] = useState<string | null>(null)
+  const [dropHover, setDropHover] = useState(false)
   const dragMoved = useRef(false)
   const pendingDouble = useRef<ReturnType<typeof setTimeout> | null>(null)
   const anchorRef = useRef<string | null>(null)
   const paintAdditiveRef = useRef(false)
+  const paintIdsRef = useRef<string[] | null>(null)
+
+  function setPaint(next: string[] | null) {
+    paintIdsRef.current = next
+    setPaintIds(next)
+  }
   const scriptRef = useRef<HTMLDivElement>(null)
+  const findRef = useRef<HTMLInputElement>(null)
   const wordRefs = useRef(new Map<string, HTMLButtonElement>())
   const tool = useEditor((s) => s.tool)
+  const setTool = useEditor((s) => s.setTool)
   const guardKind = useEditor((s) => s.guardKind)
+  const setGuardKind = useEditor((s) => s.setGuardKind)
+  const analyzing = useEditor((s) => s.analyzing)
+  const hasSource = Object.values(project.assets).some((asset) => Boolean(asset.path))
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const clearSelection = useEditor((s) => s.clearSelection)
   const selectGap = useEditor((s) => s.selectGap)
   const seekProgram = usePlayback((s) => s.seekProgram)
+  const playing = usePlayback((s) => s.playing)
+  const followPlayhead = useEditor((s) => s.followPlayhead)
+  const setFollowPlayhead = useEditor((s) => s.setFollowPlayhead)
+  const followLock = useRef(false)
   const words = project.transcript.words
+  const findGroups = findWordGroups(words, findQuery)
+  const findHitIds = new Set(findGroups.flat())
   const { choices } = transcriptChoices(project, selected)
   const selectedSet = new Set(selected)
-  const popoverAnchor = [...words].reverse().find((w) => selectedSet.has(w.id))
+  const popoverAnchor =
+    selectedSceneId || tool === 'guard' ? undefined : [...words].reverse().find((w) => selectedSet.has(w.id))
+  const selectedScene = selectedSceneId ? (project.scenes ?? []).find((s) => s.id === selectedSceneId) : undefined
+  const sceneAnchors = groupScenesByTranscriptAnchor(project.scenes ?? [], words)
 
   function loopSpan(start: number, end: number) {
     playLoop(sourceToProgramOf(project, start), sourceToProgramOf(project, end))
+  }
+
+  function hearScene(scene: (typeof project.scenes)[number]) {
+    selectScene(scene.id)
+    seekSource(scene.start)
+    loopSpan(scene.start, scene.end)
+  }
+
+  function renderScene(scene: (typeof project.scenes)[number]) {
+    const family = takeFamily(project.scenes ?? [], scene.id)
+    const detail = sceneInspectorDetail(project, scene.id)
+    const on = selectedSceneId === scene.id
+    const prev = neighborScene(project.scenes ?? [], scene.id, -1)
+    const next = neighborScene(project.scenes ?? [], scene.id, 1)
+    const actions = (detail?.actions ?? []).filter((a) => {
+      if (!a.command || !SCENE_CHIP_ACTION_IDS.has(a.id)) return false
+      if (a.id === 'cut-scene' || a.id === 'restore-scene') return on
+      return on || Boolean(a.primary)
+    })
+    const editing = editingScene === scene.id
+    return (
+      <div key={scene.id} className="scene-chip-row">
+        {editing ? (
+          <div className="scene-chip" data-kind={scene.kind} data-on="true">
+            <span className="scene-chip-kicker">
+              {sceneKindLabel(scene, family)} · {sceneClockLabel(scene)}
+            </span>
+            <input
+              className="scene-chip-edit"
+              autoFocus
+              defaultValue={scene.title}
+              aria-label="Scene name"
+              onBlur={(e) => {
+                const title = e.target.value.trim()
+                if (title && title !== scene.title) dispatch({ type: 'renameScene', sceneId: scene.id, title })
+                setEditingScene(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                if (e.key === 'Escape') setEditingScene(null)
+              }}
+            />
+            {scene.summary ? <span className="scene-chip-summary">{scene.summary}</span> : null}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="scene-chip"
+            data-scene-id={scene.id}
+            data-kind={scene.kind}
+            data-on={on || undefined}
+            aria-pressed={on}
+            title="Click to hear this chapter · double-click the name to rename"
+            onClick={() => hearScene(scene)}
+            onDoubleClick={(e) => {
+              e.preventDefault()
+              setEditingScene(scene.id)
+            }}
+          >
+            <span className="scene-chip-kicker">
+              {sceneKindLabel(scene, family)} · {sceneClockLabel(scene)}
+            </span>
+            <span className="scene-chip-title">{scene.title}</span>
+            {scene.summary ? <span className="scene-chip-summary">{scene.summary}</span> : null}
+          </button>
+        )}
+        {(on || actions.length > 0) && (
+          <div className="scene-chip-actions">
+            {on && prev && (
+              <button type="button" className="chip" title={`Previous · ${prev.title}`} onClick={() => hearScene(prev)}>
+                ‹ {prev.title}
+              </button>
+            )}
+            {actions.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                className="chip"
+                title={action.consequence}
+                onClick={() => dispatch(action.command!)}
+              >
+                {action.label}
+              </button>
+            ))}
+            {on && (
+              tagAt(project.tags, (scene.start + scene.end) / 2) ? (
+                <button
+                  type="button"
+                  className="chip"
+                  title="Remove protection so Auto Edit can cut here again"
+                  onClick={() => {
+                    const hit = tagAt(project.tags, (scene.start + scene.end) / 2)
+                    if (hit) dispatch({ type: 'removeTag', tagId: hit.id })
+                  }}
+                >
+                  Unprotect
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chip"
+                  title="Auto Edit will skip this chapter"
+                  onClick={() =>
+                    dispatch({
+                      type: 'addTag',
+                      start: scene.start,
+                      end: scene.end,
+                      kind: 'keep',
+                      label: scene.title
+                    })
+                  }
+                >
+                  Protect
+                </button>
+              )
+            )}
+            {on && next && (
+              <button type="button" className="chip" title={`Next · ${next.title}`} onClick={() => hearScene(next)}>
+                {next.title} ›
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    )
   }
 
   function loopSelection(ids: string[]) {
@@ -101,38 +255,44 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     return sortWordIds(words, hits)
   }
 
-  function findAndSelect(phrase: string) {
+  function showFindGroup(groups: string[][], index: number) {
+    if (!groups.length) return
+    const next = ((index % groups.length) + groups.length) % groups.length
+    const ids = groups[next]
+    setFindIndex(next)
+    applySelection(ids, { loop: false, anchor: ids[0] })
+    setFindNote(`${next + 1} / ${groups.length}`)
+    wordRefs.current.get(ids[0])?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+
+  function findAndSelect(phrase: string, step: 0 | 1 | -1 = 0) {
     const trimmed = phrase.trim()
     if (!trimmed) {
       setFindNote(null)
+      setFindIndex(0)
+      return
+    }
+    const groups = findWordGroups(words, trimmed)
+    if (groups.length) {
+      showFindGroup(groups, step === 0 ? 0 : findIndex + step)
       return
     }
     const hit = findInTranscript(project, words, trimmed)
     if (!hit) {
       setFindNote(`No “${trimmed}” in transcript, scenes, or edits`)
-      onToast?.(`No matches for “${trimmed}”.`)
-      return
-    }
-    if (hit.kind === 'words') {
-      applySelection(hit.ids, { anchor: hit.ids[0] })
-      setFindNote(
-        `${hit.matchGroups} match${hit.matchGroups === 1 ? '' : 'es'} · ${hit.ids.length} word${hit.ids.length === 1 ? '' : 's'}`
-      )
-      const first = wordRefs.current.get(hit.ids[0])
-      first?.scrollIntoView({ block: 'center', behavior: 'smooth' })
       return
     }
     if (hit.kind === 'scene') {
-      selectScene(hit.scene.id)
-      clearSelection()
-      seekSource(hit.scene.start)
+      hearScene(hit.scene)
       setFindNote(`Scene · ${hit.scene.title}`)
       return
     }
-    selectSuggestion(hit.suggestion.id)
-    clearSelection()
-    seekProgram(sourceToProgramOf(project, hit.suggestion.start))
-    setFindNote(`Edit · ${hit.suggestion.label}`)
+    if (hit.kind === 'suggestion') {
+      selectSuggestion(hit.suggestion.id)
+      clearSelection()
+      seekProgram(sourceToProgramOf(project, hit.suggestion.start))
+      setFindNote(`Edit · ${hit.suggestion.label}`)
+    }
   }
 
   useEffect(() => {
@@ -160,75 +320,320 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     return () => script.removeEventListener('keydown', onKey)
   }, [words])
 
+  useEffect(() => {
+    const onFind = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'f') return
+      if (!words.length) return
+      e.preventDefault()
+      findRef.current?.focus()
+      findRef.current?.select()
+    }
+    window.addEventListener('keydown', onFind)
+    return () => window.removeEventListener('keydown', onFind)
+  }, [words.length])
+
+  useEffect(() => {
+    if (!followPlayhead || !playing || !active) return
+    const el = wordRefs.current.get(active.id)
+    if (!el) return
+    followLock.current = true
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const timer = window.setTimeout(() => {
+      followLock.current = false
+    }, 420)
+    return () => window.clearTimeout(timer)
+  }, [followPlayhead, playing, active?.id])
+
+  useEffect(() => {
+    const script = scriptRef.current
+    if (!script) return
+    const onScroll = () => {
+      if (followLock.current) return
+      if (useEditor.getState().followPlayhead) useEditor.getState().setFollowPlayhead(false)
+    }
+    script.addEventListener('scroll', onScroll, { passive: true })
+    return () => script.removeEventListener('scroll', onScroll)
+  }, [])
+
+  function runReplace(all: boolean) {
+    const groups = all ? findGroups : findGroups.length ? [findGroups[findIndex] ?? findGroups[0]] : []
+    const pairs = replacePlan(words, findQuery, replaceQuery, groups)
+    if (!pairs.length) {
+      setFindNote('Nothing to replace')
+      return
+    }
+    dispatch({ type: 'replaceWords', pairs })
+    onToast?.(
+      all
+        ? `Replaced ${groups.length} “${findQuery.trim()}” with “${replaceQuery}”.`
+        : `Replaced “${findQuery.trim()}” with “${replaceQuery}”.`
+    )
+  }
+
   return (
     <section
       className="panel transcript"
+      data-drop={dropHover || undefined}
+      onDragEnter={(e) => {
+        if (e.dataTransfer.types.includes('Files')) setDropHover(true)
+      }}
       onDragOver={(e) => e.preventDefault()}
-      onDrop={async (e) => {
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropHover(false)
+      }}
+      onDrop={(e) => {
         e.preventDefault()
+        setDropHover(false)
         const file = e.dataTransfer.files[0]
         if (!file) return
-        try {
-          const parsed = parseAnyTranscript(file.name, await file.text())
-          loadTranscript(parsed)
-          onToast?.(`Transcript · ${parsed.length} words`)
-        } catch (err) {
-          onToast?.(err instanceof Error ? err.message : 'Could not read that transcript.')
-        }
+        void ingestDroppedFile(file, onToast ?? (() => undefined)).catch((err) => {
+          onToast?.(err instanceof Error ? err.message : 'Could not open that file.')
+        })
       }}
     >
       <div className="panel-head">
         Transcript
         <div className="speakers">
-          {project.transcript.speakers.map((s) => (
-            <button
-              className="speaker"
-              key={s.id}
-              title={selected.length ? `Assign ${s.name}` : `Select ${s.name}`}
-              onClick={() => {
-                if (selected.length) {
-                  dispatch({ type: 'setSpeaker', wordIds: selected, speakerId: s.id })
-                  return
-                }
-                applySelection(
-                  words.filter((w) => w.speaker === s.id).map((w) => w.id),
-                  { loop: false }
-                )
-              }}
-              onDoubleClick={(e) => {
-                e.preventDefault()
-                const name = window.prompt('Speaker name', s.name)
-                if (name?.trim()) dispatch({ type: 'renameSpeaker', speakerId: s.id, name: name.trim() })
-              }}
-            >
-              <i className="swatch" style={{ background: s.color }} />
-              {s.name}
-            </button>
-          ))}
+          {project.transcript.speakers.map((s) =>
+            editingSpeaker === s.id ? (
+              <input
+                key={s.id}
+                className="speaker-edit"
+                autoFocus
+                defaultValue={s.name}
+                aria-label="Speaker name"
+                onBlur={(e) => {
+                  const name = e.target.value.trim()
+                  if (name && name !== s.name) dispatch({ type: 'renameSpeaker', speakerId: s.id, name })
+                  setEditingSpeaker(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  if (e.key === 'Escape') setEditingSpeaker(null)
+                }}
+              />
+            ) : (
+              <button
+                className="speaker"
+                key={s.id}
+                title={selected.length ? `Assign ${s.name}` : `Select ${s.name} · double-click to rename`}
+                onClick={() => {
+                  if (selected.length) {
+                    dispatch({ type: 'setSpeaker', wordIds: selected, speakerId: s.id })
+                    return
+                  }
+                  applySelection(
+                    words.filter((w) => w.speaker === s.id).map((w) => w.id),
+                    { loop: false }
+                  )
+                }}
+                onDoubleClick={(e) => {
+                  e.preventDefault()
+                  setEditingSpeaker(s.id)
+                }}
+              >
+                <i className="swatch" style={{ background: s.color }} />
+                {s.name}
+              </button>
+            )
+          )}
           <button className="speaker add" onClick={() => dispatch({ type: 'addSpeaker' })}>
             + speaker
           </button>
         </div>
       </div>
+      {words.length > 0 && tool === 'guard' && (
+        <div className="guard-banner" role="status">
+          <span>
+            {guardKind === 'demo'
+              ? 'Drag words to mark a silent demo — Auto Edit will skip pauses.'
+              : guardKind === 'note'
+                ? 'Drag words to drop a note on the tape — it does not change Auto Edit.'
+                : guardKind === 'hook'
+                  ? 'Drag words to tag the opening hook.'
+                  : guardKind === 'cta'
+                    ? 'Drag words to tag the call to action.'
+                    : 'Drag words to protect them — Auto Edit will skip this.'}
+          </span>
+          <button
+            type="button"
+            className="chip"
+            data-on={guardKind === 'keep' || undefined}
+            title="Keep this speech. Auto Edit will not cut it."
+            onClick={() => setGuardKind('keep')}
+          >
+            Keep
+          </button>
+          <button
+            type="button"
+            className="chip"
+            data-on={guardKind === 'demo' || undefined}
+            title="Product walkthrough. Auto Edit will skip pauses here."
+            onClick={() => setGuardKind('demo')}
+          >
+            Silent demo
+          </button>
+          <button
+            type="button"
+            className="chip"
+            data-on={guardKind === 'note' || undefined}
+            title="Leave a comment on these words. Auto Edit ignores notes."
+            onClick={() => setGuardKind('note')}
+          >
+            Note
+          </button>
+          <button
+            type="button"
+            className="chip"
+            data-on={guardKind === 'hook' || undefined}
+            title="Tag the opening hook."
+            onClick={() => setGuardKind('hook')}
+          >
+            Hook
+          </button>
+          <button
+            type="button"
+            className="chip"
+            data-on={guardKind === 'cta' || undefined}
+            title="Tag the call to action."
+            onClick={() => setGuardKind('cta')}
+          >
+            CTA
+          </button>
+          <button type="button" className="chip" title="Leave protect mode (Esc)" onClick={() => setTool('select')}>
+            Done
+          </button>
+        </div>
+      )}
       {words.length > 0 && (
         <div className="transcript-toolbar">
           <input
+            ref={findRef}
             type="search"
             className="transcript-find"
             value={findQuery}
-            placeholder="Find phrase, scene, or edit…"
+            placeholder="Find phrase, scene, or edit… ⌘F"
             onChange={(e) => {
-              setFindQuery(e.target.value)
-              if (!e.target.value.trim()) setFindNote(null)
+              const next = e.target.value
+              setFindQuery(next)
+              if (!next.trim()) {
+                setFindNote(null)
+                setFindIndex(0)
+                return
+              }
+              findAndSelect(next, 0)
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') findAndSelect(findQuery)
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                findAndSelect(findQuery, e.shiftKey ? -1 : 1)
+              }
               if (e.key === 'Escape') {
                 setFindQuery('')
                 setFindNote(null)
+                setFindIndex(0)
+                scriptRef.current?.focus()
               }
             }}
           />
+          {findGroups.length > 0 && (
+            <>
+              <button
+                type="button"
+                className="chip"
+                title="Previous match (Shift+Enter)"
+                onClick={() => findAndSelect(findQuery, -1)}
+              >
+                ‹
+              </button>
+              <span className="transcript-find-note">
+                {findIndex + 1} / {findGroups.length}
+              </span>
+              <button
+                type="button"
+                className="chip"
+                title="Next match (Enter)"
+                onClick={() => findAndSelect(findQuery, 1)}
+              >
+                ›
+              </button>
+              {findGroups.length > 1 && (
+                <button
+                  type="button"
+                  className="chip"
+                  title="Select every match — then Remove to cut them all"
+                  onClick={() => applySelection(findGroups.flat(), { loop: false, anchor: findGroups[0][0] })}
+                >
+                  All {findGroups.length}
+                </button>
+              )}
+              <input
+                type="text"
+                className="transcript-find transcript-replace"
+                value={replaceQuery}
+                placeholder="Replace with…"
+                aria-label="Replace with"
+                onChange={(e) => setReplaceQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    runReplace(e.shiftKey)
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="chip"
+                title="Replace this match. Timing stays; only the words change."
+                onClick={() => runReplace(false)}
+              >
+                Replace
+              </button>
+              {findGroups.length > 1 && (
+                <button
+                  type="button"
+                  className="chip"
+                  title="Replace every match in one undo."
+                  onClick={() => runReplace(true)}
+                >
+                  Replace all
+                </button>
+              )}
+            </>
+          )}
+          <button
+            type="button"
+            className="chip"
+            data-on={followPlayhead || undefined}
+            title={
+              followPlayhead
+                ? 'Transcript scrolls with playback. Scroll the words to pause follow.'
+                : 'Keep the current word in view while playing'
+            }
+            onClick={() => setFollowPlayhead(!followPlayhead)}
+          >
+            {followPlayhead ? 'Follow on' : 'Follow'}
+          </button>
+          {selected.length > 0 && !selectedSceneId && (
+            <>
+              <button
+                type="button"
+                className="chip"
+                title="Shrink selection by one word ([)"
+                onClick={() => applySelection(shrinkSelection(words, selected), { loop: false })}
+              >
+                Fewer
+              </button>
+              <button
+                type="button"
+                className="chip"
+                title="Grow selection by one word (])"
+                onClick={() => applySelection(extendSelection(words, selected, 1), { loop: false })}
+              >
+                More
+              </button>
+            </>
+          )}
           <button
             type="button"
             className="chip"
@@ -242,11 +647,23 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           >
             Select all
           </button>
-          {findNote && <span className="transcript-find-note">{findNote}</span>}
+          {findNote && !findGroups.length && <span className="transcript-find-note">{findNote}</span>}
         </div>
       )}
       {words.length === 0 ? (
-        <StartGuide />
+        hasSource || analyzing ? (
+          <div className="start-guide compact">
+            <p className="start-guide-lead">
+              {analyzing ? `Transcribing · ${analyzing}` : 'No transcript yet.'}
+            </p>
+            <p>
+              Play and cut on the timeline. Words land when analysis finishes, or drop a transcript
+              here now.
+            </p>
+          </div>
+        ) : (
+          <StartGuide onToast={onToast} />
+        )
       ) : (
       <div
         ref={scriptRef}
@@ -256,7 +673,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
         data-guard={guardKind}
         onMouseDown={(e) => {
           if (tool === 'guard') return
-          if ((e.target as HTMLElement).closest('.word, .gap-chip, .scene-chip, .word-popover, .word-edit')) return
+          if ((e.target as HTMLElement).closest('.word, .gap-chip, .scene-chip, .scene-chip-row, .scene-chip-actions, .guard-chip, .word-popover, .word-edit')) return
           if (e.button !== 0) return
           e.preventDefault()
           paintAdditiveRef.current = e.ctrlKey || e.metaKey || e.shiftKey
@@ -279,38 +696,54 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           window.addEventListener('mouseup', up)
         }}
         onMouseUp={() => {
-          if (!paintIds?.length) {
-            setPaintIds(null)
+          const painted = paintIdsRef.current
+          if (!painted?.length) {
+            setPaint(null)
             return
           }
           if (tool === 'guard') {
-            const span = wordRange(words, paintIds)
+            const span = wordRange(words, painted)
             if (span) {
               dispatch({
                 type: 'addTag',
                 start: span.start,
                 end: span.end,
-                kind: guardKind
+                kind: guardKind,
+                label:
+                  guardKind === 'demo'
+                    ? 'Silent demo'
+                    : guardKind === 'note'
+                      ? 'Note'
+                      : guardKind === 'hook'
+                        ? 'Hook'
+                        : guardKind === 'cta'
+                          ? 'CTA'
+                          : 'Protected'
               })
-              applySelection(paintIds, { loop: false })
+              applySelection(painted, { loop: false })
+              const dur = formatSpan(span.end - span.start)
+              onToast?.(
+                guardKind === 'demo'
+                  ? `Silent demo · ${dur} — Auto Edit will skip pauses here.`
+                  : guardKind === 'note'
+                    ? `Note · ${dur}`
+                    : guardKind === 'hook'
+                      ? `Hook · ${dur}`
+                      : guardKind === 'cta'
+                        ? `CTA · ${dur}`
+                        : `Protected ${dur} — Auto Edit will skip this.`
+              )
             }
           } else {
-            applySelection(paintIds, { additive: paintAdditiveRef.current })
+            applySelection(painted, { additive: paintAdditiveRef.current })
           }
-          setPaintIds(null)
+          setPaint(null)
         }}
         onMouseLeave={() => {
-          if (paintIds) setPaintIds(null)
+          if (paintIdsRef.current) setPaint(null)
           dragMoved.current = false
         }}
       >
-        {words.length === 0 && (
-          <p className="script-hint">
-            Open a recording. SpeechEdit analyzes silence, motion, and loudness, then builds a
-            transcript — Whisper if you have it, speech islands if you don’t. Drop SRT, VTT, or JSON
-            anytime.
-          </p>
-        )}
         {words.map((word, i) => {
           const prev = words[i - 1]
           const gap = prev ? word.start - prev.end : 0
@@ -323,32 +756,42 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                 (c) => prev && c.start <= prev.end + 0.05 && c.end >= word.start - 0.05
               )
           )
-          const scene = (project.scenes ?? []).find((s) => word.start >= s.start && word.start < s.end)
-          const sceneStart = scene && (!prev || prev.start < scene.start)
+          const headed = sceneAnchors.atWord.get(i) ?? []
+          const tagStart = Boolean(tag && (!prev || prev.start < tag.start))
           const applied = word.deleted ? appliedForWord(project, word) : undefined
           const gapSuggestion = prev ? coveringAppliedSuggestion(project, prev.end, word.start) : undefined
           const gapTag = prev ? tagAt(project.tags, (prev.end + word.start) / 2) : undefined
           const appliedAtGap = gapSuggestion ?? ate
           return (
-            <span key={word.id} className="word-wrap">
-              {sceneStart && scene && (
-                <span className="scene-chip-row">
-                  <button
-                    className="scene-chip"
-                    data-scene-id={scene.id}
-                    data-kind={scene.kind}
-                    title={scene.summary}
-                    onClick={() => {
-                      selectScene(scene.id)
-                      seekSource(scene.start)
-                    }}
-                  >
-                    {scene.takeIndex ? `Take ${scene.takeIndex} · ` : ''}
-                    {scene.title}
-                    {scene.kind === 'retake' ? ' · retake' : ''}
-                  </button>
-                </span>
+            <Fragment key={word.id}>
+              {headed.map((scene) => renderScene(scene))}
+              {tagStart && tag && (
+                <button
+                  type="button"
+                  className="guard-chip"
+                  data-kind={tag.kind}
+                  title="Click to hear this protected range · double-click removes it"
+                  onClick={() => {
+                    const ids = words.filter((w) => w.start >= tag.start && w.end <= tag.end).map((w) => w.id)
+                    if (ids.length) applySelection(ids)
+                    else {
+                      seekSource(tag.start)
+                      loopSpan(tag.start, tag.end)
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    e.preventDefault()
+                    dispatch({ type: 'removeTag', tagId: tag.id })
+                  }}
+                >
+                  {tag.kind === 'note'
+                    ? tag.label || 'Note'
+                    : tag.kind === 'demo'
+                      ? 'Silent demo — Auto Edit skips pauses'
+                      : 'Protected — Auto Edit skips this'}
+                </button>
               )}
+              <span className="word-wrap">
               {gap > 0.45 && prev && (
                 <span className="gap-cluster">
                   <button
@@ -361,8 +804,8 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                     data-sug={appliedAtGap?.type ?? ate?.type}
                     title={
                       gapCut
-                        ? 'Click to review · double-click puts this air back'
-                        : 'Click to review · double-click to cut'
+                        ? 'This pause is cut. Click to review · double-click puts the air back'
+                        : 'Click to hear this pause · double-click removes it from the video'
                     }
                     onClick={(e) => {
                       e.preventDefault()
@@ -387,12 +830,12 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                       dispatch({ type: 'deleteRange', start: prev.end, end: word.start, source: 'transcript' })
                     }}
                   >
-                    {gap.toFixed(1)}s
+                    {gap.toFixed(1)}s pause
                   </button>
                 </span>
               )}
               {gap > PARAGRAPH_GAP && <span className="para-gap" />}
-              {editing === word.id ? (
+              {!word.text.trim() && editing !== word.id ? null : editing === word.id ? (
                 <input
                   className="word-edit"
                   autoFocus
@@ -415,18 +858,24 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                   className="word"
                   data-word-id={word.id}
                   data-on={active?.id === word.id}
-                  data-sel={selected.includes(word.id)}
+                      data-sel={selected.includes(word.id) && !selectedSceneId}
+                      data-scene-sel={
+                        Boolean(
+                          selectedScene && word.start >= selectedScene.start && word.end <= selectedScene.end
+                        ) || undefined
+                      }
                   data-deleted={word.deleted}
                   data-filler={isFillerToken(word.text)}
                   data-tag={tag?.kind}
                   data-sug={applied?.type}
                   data-paint={paintIds?.includes(word.id) ?? false}
+                  data-find={findHitIds.has(word.id) || undefined}
                   title={
                     applied
                       ? `${applied.label} · double-click puts this cut back`
                       : tag
                         ? `${tag.label}`
-                        : 'Click · Shift range · Ctrl toggle · drag or box to select'
+                        : 'Click to hear · double-click the sentence · Delete removes it from the video'
                   }
                   style={{ ['--spk' as string]: speakerColor(project.transcript.speakers, word.speaker) }}
                   onMouseDown={(e) => {
@@ -435,16 +884,16 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                     e.preventDefault()
                     dragMoved.current = false
                     paintAdditiveRef.current = e.ctrlKey || e.metaKey || e.shiftKey
-                    setPaintIds([word.id])
+                    setPaint([word.id])
                   }}
                   onMouseEnter={() => {
-                    if (!paintIds) return
-                    const start = words.findIndex((w) => w.id === paintIds[0])
+                    if (!paintIdsRef.current) return
+                    const start = words.findIndex((w) => w.id === paintIdsRef.current![0])
                     if (start < 0) return
                     const [lo, hi] = start <= i ? [start, i] : [i, start]
                     const next = wordIdsInRange(words, lo, hi)
                     if (next.length > 1) dragMoved.current = true
-                    setPaintIds(next)
+                    setPaint(next)
                   }}
                   onClick={(e) => {
                     if (tool === 'guard') return
@@ -499,7 +948,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                         dispatch({ type: 'revertSuggestion', suggestionId: applied.id })
                         return
                       }
-                      dispatch({ type: 'toggleWords', wordIds: [word.id] })
+                      applySelection(sentenceIds(words, i))
                     }, 220)
                   }}
                 >
@@ -524,11 +973,15 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                 </span>
               )}
             </span>
+            </Fragment>
           )
         })}
+        {sceneAnchors.after.map((scene) => renderScene(scene))}
         {words.length > 0 && (
           <p className="script-hint">
-            Click words and pauses to edit — inspector follows your selection. ⌘K for all commands.
+            {tool === 'guard'
+              ? 'Drag across words to protect them. Done or Esc leaves this mode.'
+              : 'Click a word to hear it. Double-click a sentence. Click a scene heading to hear that chapter. Delete removes the selection from the video.'}
           </p>
         )}
       </div>

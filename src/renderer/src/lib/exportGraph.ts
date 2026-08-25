@@ -1,4 +1,5 @@
 import { transposeFilters } from '../../../shared/mediaOrient'
+import { primaryReadArgs, sourceReadArgs, sourceTrimFilters } from '../../../shared/sourceSeek'
 
 /** FFmpeg 4.4-safe filter graph. Command-bus jobs from exportJob.ts are the render truth. */
 
@@ -15,6 +16,20 @@ export interface GraphSegment {
   overlapNext?: number
   programStart?: number
   opacity?: number
+  rotation?: number
+  input?: string
+  sourceOffset?: number
+  inputIndex?: number
+  inputRotation?: number
+  kind?: 'media' | 'slug'
+  duration?: number
+  pan?: number
+}
+
+export interface GraphInput {
+  path: string
+  sourceOffset: number
+  duration: number
   rotation?: number
 }
 
@@ -60,6 +75,7 @@ export interface ProgrammedSegment extends GraphSegment {
 
 export interface GraphJob {
   input: string
+  inputs?: GraphInput[]
   output: string
   fps: number
   width: number
@@ -80,6 +96,7 @@ export interface GraphJob {
   beds?: GraphBed[]
   segments: GraphSegment[]
   layers: GraphLayer[]
+  audioOnly?: boolean
 }
 
 export interface InputSpec {
@@ -115,10 +132,17 @@ export function even(n: number): number {
   return Math.max(2, n - (n % 2))
 }
 
+export function segmentProgramDuration(seg: GraphSegment): number {
+  if (seg.kind === 'slug') {
+    return Math.max(0.01, seg.duration ?? (seg.end - seg.start) / Math.max(0.1, seg.speed || 1))
+  }
+  return (seg.end - seg.start) / Math.max(0.1, seg.speed)
+}
+
 export function programmedSegments(job: GraphJob): ProgrammedSegment[] {
   let cursor = 0
   return job.segments.map((seg) => {
-    const programDuration = (seg.end - seg.start) / Math.max(0.1, seg.speed)
+    const programDuration = segmentProgramDuration(seg)
     const programStart = seg.programStart ?? cursor
     cursor = programStart + programDuration - (seg.overlapNext ?? 0)
     return { ...seg, programStart, programDuration }
@@ -154,8 +178,17 @@ export function validateExportJob(
   opts?: { fontFile?: string | undefined }
 ): string | null {
   if (!job.segments.length) return 'Nothing to export — the timeline is empty.'
-  if (!job.input) return 'Open media to export a program.'
+  if (!job.input && !job.inputs?.some((row) => row.path)) return 'Open media to export a program.'
+  for (const row of job.inputs ?? []) {
+    if (!row.path) return 'A take is missing its file. Relink the recording and export again.'
+  }
   for (const [i, seg] of job.segments.entries()) {
+    if (seg.kind === 'slug') {
+      if (!Number.isFinite(segmentProgramDuration(seg)) || segmentProgramDuration(seg) < 0.03) {
+        return `Hold ${i + 1} has no length. Close the gap or give it time, then export again.`
+      }
+      continue
+    }
     if (!Number.isFinite(seg.speed) || seg.speed < 0.25 || seg.speed > 8) {
       return `Clip ${i + 1} is ${seg.speed}×. Stay between 0.25× and 8×, then export again.`
     }
@@ -198,14 +231,27 @@ export function explainGraphBuildError(err: unknown): string {
   return `Could not build the export graph. ${msg}\nCheck every bed, overlay, and caption still has a file, then export again.`
 }
 
-export function assertMixGraph(mix: MixGraph): void {
-  if (!mix.filterComplex) return
-  if (mix.mapVideo.startsWith('[') && !mix.filterComplex.includes(mix.mapVideo)) {
+export function assertLabeledGraph(graph: {
+  filterComplex: string
+  mapVideo: string
+  mapAudio: string
+}): void {
+  if (graph.mapVideo.startsWith('[') && !graph.filterComplex.includes(graph.mapVideo)) {
     throw new Error('Video map label is missing from the filter graph.')
   }
-  if (mix.mapAudio.startsWith('[') && !mix.filterComplex.includes(mix.mapAudio)) {
+  if (graph.mapAudio.startsWith('[') && !graph.filterComplex.includes(graph.mapAudio)) {
     throw new Error('Audio map label is missing from the filter graph.')
   }
+}
+
+export function assertMixGraph(mix: MixGraph): void {
+  if (!mix.filterComplex) return
+  assertLabeledGraph(mix)
+}
+
+export function assertProgramGraph(program: ProgramGraph): void {
+  if (!program.filterComplex) throw new Error('Program filter graph is empty.')
+  assertLabeledGraph(program)
 }
 
 export function escapeDrawtext(text: string): string {
@@ -276,7 +322,20 @@ export function dissolveIn(job: GraphJob, index: number): number {
   return index > 0 ? (job.segments[index - 1]?.overlapNext ?? 0) : 0
 }
 
+export function buildSlugFilters(job: GraphJob, seg: GraphSegment): SegmentFilters {
+  const duration = segmentProgramDuration(seg)
+  const w = even(job.width)
+  const h = even(job.height)
+  const d = duration.toFixed(3)
+  return {
+    vf: `color=c=black:s=${w}x${h}:d=${d}:r=${job.fps},format=yuv420p`,
+    af: `anullsrc=channel_layout=stereo:sample_rate=48000:d=${d},aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=48000,volume=0`,
+    duration
+  }
+}
+
 export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: number): SegmentFilters {
+  if (seg.kind === 'slug') return buildSlugFilters(job, seg)
   const scale = Math.max(0.2, seg.scale)
   const zoomW = even(Math.round(job.width * scale))
   const zoomH = even(Math.round(job.height * scale))
@@ -297,8 +356,11 @@ export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: nu
     vfade.push(`fade=t=out:st=${st}:d=${seg.fadeOut.toFixed(2)}`)
     afade.push(`afade=t=out:st=${st}:d=${seg.fadeOut.toFixed(2)}`)
   }
+  const offset = seg.sourceOffset ?? 0
+  const trim = sourceTrimFilters(seg.start - offset, seg.end - offset)
   const vf = [
-    ...transposeFilters(job.inputRotation),
+    trim.vf,
+    ...transposeFilters(seg.inputRotation ?? job.inputRotation),
     `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase`,
     `crop=${even(job.width)}:${even(job.height)}:${x}:${y}`,
     seg.speed !== 1 ? `setpts=PTS/${seg.speed.toFixed(3)}` : '',
@@ -309,7 +371,9 @@ export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: nu
     .filter(Boolean)
     .join(',')
   const af = [
+    trim.af,
     `volume=${(job.volume * seg.volume).toFixed(3)}`,
+    Math.abs(seg.pan ?? 0) > 0.02 ? `stereotools=balance_out=${(seg.pan ?? 0).toFixed(2)}` : '',
     'aformat=sample_fmts=fltp:channel_layouts=stereo:sample_rates=48000',
     seg.speed !== 1 ? atempoChain(seg.speed) : '',
     ...afade
@@ -319,34 +383,141 @@ export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: nu
   return { vf, af: af || 'anull', duration }
 }
 
-export function buildJoinGraph(job: GraphJob, partCount: number): JoinGraph | null {
-  if (partCount < 2) return null
-  const hasDissolve = job.segments.some((s) => (s.overlapNext ?? 0) > 0.04)
-  if (!hasDissolve) return null
-
+function joinSegmentPads(
+  job: GraphJob,
+  partCount: number,
+  labeled: boolean,
+  finals: { video: string; audio: string } = { video: '[vout]', audio: '[aout]' }
+): JoinGraph {
+  const videoPad = (i: number) => (labeled ? `[v${i}]` : `[${i}:v]`)
+  const audioPad = (i: number) => (labeled ? `[a${i}]` : `[${i}:a]`)
   const starts = programmedSegments(job).map((s) => s.programStart)
   const filters: string[] = []
-  let v = '[0:v]'
-  let a = '[0:a]'
+  let v = videoPad(0)
+  let a = audioPad(0)
   for (let i = 1; i < partCount; i++) {
     const overlap = job.segments[i - 1]?.overlapNext ?? 0
-    const nextV = i === partCount - 1 ? '[vout]' : `[vj${i}]`
-    const nextA = i === partCount - 1 ? '[aout]' : `[aj${i}]`
+    const nextV = i === partCount - 1 ? finals.video : `[vj${i}]`
+    const nextA = i === partCount - 1 ? finals.audio : `[aj${i}]`
     if (overlap > 0.04) {
       filters.push(
-        `${v}[${i}:v]xfade=transition=fade:duration=${overlap.toFixed(3)}:offset=${starts[i].toFixed(3)}${nextV}`
+        `${v}${videoPad(i)}xfade=transition=fade:duration=${overlap.toFixed(3)}:offset=${starts[i].toFixed(3)}${nextV}`
       )
-      filters.push(`${a}[${i}:a]acrossfade=d=${overlap.toFixed(3)}${nextA}`)
+      filters.push(`${a}${audioPad(i)}acrossfade=d=${overlap.toFixed(3)}${nextA}`)
     } else {
       // Keep v/a on separate chains. Interleaved concat=n=2:v=1:a=1 breaks after xfade
       // because the next pads would be treated as v,v,a,a.
-      filters.push(`${v}[${i}:v]concat=n=2:v=1:a=0${nextV}`)
-      filters.push(`${a}[${i}:a]concat=n=2:v=0:a=1${nextA}`)
+      filters.push(`${v}${videoPad(i)}concat=n=2:v=1:a=0${nextV}`)
+      filters.push(`${a}${audioPad(i)}concat=n=2:v=0:a=1${nextA}`)
     }
     v = nextV
     a = nextA
   }
   return { filterComplex: filters.join(';'), mapVideo: v, mapAudio: a }
+}
+
+export function buildJoinGraph(job: GraphJob, partCount: number): JoinGraph | null {
+  if (partCount < 2) return null
+  const hasDissolve = job.segments.some((s) => (s.overlapNext ?? 0) > 0.04)
+  if (!hasDissolve) return null
+  return joinSegmentPads(job, partCount, false)
+}
+
+export interface ProgramGraph {
+  filterComplex: string
+  mapVideo: string
+  mapAudio: string
+  duration: number
+  encodes: number
+  extraInputs: InputSpec[]
+  notes: string[]
+}
+
+export function takeInputCount(job: GraphJob): number {
+  return Math.max(1, job.inputs?.length || (job.input ? 1 : 1))
+}
+
+/** One filter graph: every keep, then captions / B-roll / beds. Export encodes this once. */
+export function buildProgramGraph(job: GraphJob, opts?: { fontFile?: string }): ProgramGraph {
+  const n = job.segments.length
+  if (!n) throw new Error('Nothing to export — the timeline is empty.')
+  const chains: string[] = []
+  for (let i = 0; i < n; i++) {
+    const seg = job.segments[i]
+    const filters = buildSegmentFilters(job, seg, i)
+    const vTag = n === 1 ? 'vprog' : `v${i}`
+    const aTag = n === 1 ? 'aprog' : `a${i}`
+    if (seg.kind === 'slug') {
+      chains.push(`${filters.vf}[${vTag}]`)
+      chains.push(`${filters.af}[${aTag}]`)
+    } else {
+      const src = seg.inputIndex ?? 0
+      chains.push(`[${src}:v]${filters.vf}[${vTag}]`)
+      chains.push(`[${src}:a]${filters.af}[${aTag}]`)
+    }
+  }
+  const duration = jobDuration(job)
+  if (n > 1) {
+    const hasDissolve = job.segments.some((s) => (s.overlapNext ?? 0) > 0.04)
+    if (!hasDissolve) {
+      const vs = job.segments.map((_, i) => `[v${i}]`).join('')
+      const as = job.segments.map((_, i) => `[a${i}]`).join('')
+      chains.push(`${vs}concat=n=${n}:v=1:a=0[vprog]`)
+      chains.push(`${as}concat=n=${n}:v=0:a=1[aprog]`)
+    } else {
+      const join = joinSegmentPads(job, n, true, { video: '[vprog]', audio: '[aprog]' })
+      chains.push(join.filterComplex)
+    }
+  }
+  const mix = buildMixFilters(job, {
+    videoPad: '[vprog]',
+    audioPad: '[aprog]',
+    extraInputBase: takeInputCount(job),
+    fontFile: opts?.fontFile
+  })
+  chains.push(...mix.filters)
+  return {
+    filterComplex: chains.filter(Boolean).join(';'),
+    mapVideo: mix.mapVideo,
+    mapAudio: mix.mapAudio,
+    duration,
+    encodes: 1,
+    extraInputs: mix.extraInputs,
+    notes: mix.notes
+  }
+}
+
+export function programReadArgs(job: GraphJob, extraInputs: InputSpec[] = []): string[] {
+  const inputs = job.inputs?.length
+    ? job.inputs
+    : job.input
+      ? [{ path: job.input, sourceOffset: 0, duration: 0, rotation: job.inputRotation }]
+      : []
+  const takes = inputs.flatMap((inp, index) => {
+    const first = job.segments.find(
+      (seg) =>
+        seg.kind !== 'slug' &&
+        (seg.input === inp.path || (seg.inputIndex ?? 0) === index || (!seg.input && index === 0))
+    )
+    const local = first ? first.start - (first.sourceOffset ?? inp.sourceOffset) : 0
+    return primaryReadArgs(inp.path, Math.max(0, local))
+  })
+  return [...takes, ...extraInputs.flatMap((input) => input.args)]
+}
+
+/** Command lines this long go in a script file so Windows ARG_MAX cannot truncate a 200-cut reel. */
+export const PROGRAM_GRAPH_SCRIPT = 80_000
+
+export function encoderFallback(encoder: string, message: string): string | null {
+  if (!encoder || encoder === 'libx264') return null
+  if (
+    !/hardware encoder|Unknown encoder|Encoder .* not found|No NVENC|libcuda|Quick Sync|qsv|AMF|videotoolbox|Function not implemented/i.test(
+      message
+    )
+  ) {
+    return null
+  }
+  return 'libx264'
 }
 
 function overlayPrep(layer: GraphLayer, inputIndex: number, job: GraphJob, tag: string): string[] {
@@ -422,13 +593,11 @@ function bedFilter(bed: GraphBed, inputIndex: number, tag: string, masterVolume:
   return `[${inputIndex}:a]${parts.join(',')}[${tag}]`
 }
 
-export function buildMixGraph(job: GraphJob, opts?: { fontFile?: string }): MixGraph {
+export function mixNotes(job: GraphJob): string[] {
   const images = imageLayers(job)
   const blurs = blurLayers(job)
   const texts = textLayers(job)
   const beds = activeBeds(job)
-  const duration = jobDuration(job)
-  const voice = voiceAudioFilters(job)
   const notes: string[] = []
   if (texts.length) notes.push(`${texts.length} caption${texts.length === 1 ? '' : 's'}`)
   if (images.length) notes.push(`${images.length} still/b-roll`)
@@ -436,14 +605,39 @@ export function buildMixGraph(job: GraphJob, opts?: { fontFile?: string }): MixG
   if (beds.length) notes.push(`${beds.length} music bed${beds.length === 1 ? '' : 's'}`)
   if (job.eqLow || job.eqMid || job.eqHigh) notes.push('EQ')
   if (job.compress) notes.push('compressor')
-  if (job.duck && job.duckWindows?.length) notes.push(`${job.duckWindows.length} duck window${job.duckWindows.length === 1 ? '' : 's'}`)
+  if (job.duck && job.duckWindows?.length) {
+    notes.push(`${job.duckWindows.length} duck window${job.duckWindows.length === 1 ? '' : 's'}`)
+  }
   if (job.normalize) notes.push('loudnorm')
   if (job.fadeIn > 0.02 || job.fadeOut > 0.02) notes.push('master fade')
+  return notes
+}
 
-  const inputs: InputSpec[] = []
+export function buildMixFilters(
+  job: GraphJob,
+  opts: {
+    videoPad: string
+    audioPad: string
+    extraInputBase: number
+    fontFile?: string
+  }
+): {
+  filters: string[]
+  extraInputs: InputSpec[]
+  mapVideo: string
+  mapAudio: string
+  notes: string[]
+} {
+  const images = imageLayers(job)
+  const blurs = blurLayers(job)
+  const texts = textLayers(job)
+  const beds = activeBeds(job)
+  const duration = jobDuration(job)
+  const voice = voiceAudioFilters(job)
+  const extraInputs: InputSpec[] = []
   for (const layer of images) {
     if (layer.loop) {
-      inputs.push({
+      extraInputs.push({
         role: 'image',
         path: layer.path!,
         args: ['-loop', '1', '-framerate', String(job.fps), '-t', duration.toFixed(3), '-i', layer.path!]
@@ -451,19 +645,19 @@ export function buildMixGraph(job: GraphJob, opts?: { fontFile?: string }): MixG
     } else {
       const span = Math.max(0.05, layer.end - layer.start)
       const srcDur = span * Math.max(0.1, layer.speed ?? 1)
-      inputs.push({
+      extraInputs.push({
         role: 'image',
         path: layer.path!,
-        args: ['-ss', (layer.inPoint ?? 0).toFixed(3), '-t', srcDur.toFixed(3), '-i', layer.path!]
+        args: sourceReadArgs(layer.path!, layer.inPoint ?? 0, srcDur)
       })
     }
   }
   for (const bed of beds) {
-    inputs.push({ role: 'bed', path: bed.path, args: ['-i', bed.path] })
+    extraInputs.push({ role: 'bed', path: bed.path, args: ['-i', bed.path] })
   }
 
   const filters: string[] = []
-  let last = '[0:v]'
+  let last = opts.videoPad
   blurs.forEach((layer, i) => {
     const bw = even(Math.round(job.width * Math.max(0.12, layer.scale)))
     const bh = even(Math.round(bw * 0.62))
@@ -482,14 +676,14 @@ export function buildMixGraph(job: GraphJob, opts?: { fontFile?: string }): MixG
     const tag = `ov${i}`
     const x = Math.round((job.width - even(Math.round(job.width * Math.max(0.15, layer.scale)))) / 2 + layer.x)
     const y = Math.round(80 + layer.y)
-    filters.push(...overlayPrep(layer, i + 1, job, tag))
+    filters.push(...overlayPrep(layer, opts.extraInputBase + i, job, tag))
     filters.push(
       `${last}[${tag}s]overlay=${x}:${y}:format=auto:enable='between(t,${layer.start.toFixed(3)},${layer.end.toFixed(3)})'[${tag}]`
     )
     last = `[${tag}]`
   })
   if (texts.length) {
-    filters.push(`${last}${texts.map((layer) => drawtextFilter(layer, job, opts?.fontFile)).join(',')}[vtxt]`)
+    filters.push(`${last}${texts.map((layer) => drawtextFilter(layer, job, opts.fontFile)).join(',')}[vtxt]`)
     last = '[vtxt]'
   }
 
@@ -498,43 +692,68 @@ export function buildMixGraph(job: GraphJob, opts?: { fontFile?: string }): MixG
     filters.push(`${last}format=yuv420p[vout]`)
   }
 
+  let mapAudio = opts.audioPad
   if (beds.length) {
-    filters.push(voice.length ? `[0:a]${voice.join(',')}[a0]` : '[0:a]anull[a0]')
-    const bedOffset = 1 + images.length
+    filters.push(voice.length ? `${opts.audioPad}${voice.join(',')}[mixa]` : `${opts.audioPad}anull[mixa]`)
     beds.forEach((bed, i) => {
-      filters.push(bedFilter(bed, bedOffset + i, `bed${i}`, job.volume))
+      filters.push(bedFilter(bed, opts.extraInputBase + images.length + i, `bed${i}`, job.volume))
     })
-    const mix = ['[a0]', ...beds.map((_, i) => `[bed${i}]`)].join('')
-    filters.push(`${mix}amix=inputs=${1 + beds.length}:duration=first:dropout_transition=0:normalize=0[aout]`)
-  }
-
-  if (beds.length) {
-    return {
-      inputs,
-      filterComplex: filters.join(';'),
-      mapVideo: videoGraph ? '[vout]' : '0:v',
-      mapAudio: '[aout]',
-      encodeVideo: videoGraph,
-      encodeAudio: true,
-      simpleAudio: '',
-      notes
-    }
+    const mixed = ['[mixa]', ...beds.map((_, i) => `[bed${i}]`)].join('')
+    filters.push(
+      `${mixed}amix=inputs=${1 + beds.length}:duration=first:dropout_transition=0:normalize=0[aout]`
+    )
+    mapAudio = '[aout]'
+  } else if (voice.length) {
+    filters.push(`${opts.audioPad}${voice.join(',')}[aout]`)
+    mapAudio = '[aout]'
   }
 
   return {
-    inputs,
-    filterComplex: videoGraph ? filters.join(';') : '',
-    mapVideo: videoGraph ? '[vout]' : '0:v',
-    mapAudio: '0:a?',
-    encodeVideo: videoGraph,
-    encodeAudio: voice.length > 0,
-    simpleAudio: voice.join(','),
-    notes
+    filters,
+    extraInputs,
+    mapVideo: videoGraph ? '[vout]' : opts.videoPad,
+    mapAudio,
+    notes: mixNotes(job)
   }
 }
 
-export function summarizeJob(job: GraphJob, mix?: MixGraph): string {
-  const notes = mix?.notes ?? buildMixGraph(job).notes
+export function buildMixGraph(job: GraphJob, opts?: { fontFile?: string }): MixGraph {
+  const visual = imageLayers(job).length + blurLayers(job).length + textLayers(job).length > 0
+  const beds = activeBeds(job).length > 0
+  const voice = voiceAudioFilters(job)
+  const notes = mixNotes(job)
+  if (!visual && !beds) {
+    return {
+      inputs: [],
+      filterComplex: '',
+      mapVideo: '0:v',
+      mapAudio: '0:a?',
+      encodeVideo: false,
+      encodeAudio: voice.length > 0,
+      simpleAudio: voice.join(','),
+      notes
+    }
+  }
+  const built = buildMixFilters(job, {
+    videoPad: '[0:v]',
+    audioPad: '[0:a]',
+    extraInputBase: 1,
+    fontFile: opts?.fontFile
+  })
+  return {
+    inputs: built.extraInputs,
+    filterComplex: built.filters.join(';'),
+    mapVideo: built.mapVideo === '[0:v]' ? '0:v' : built.mapVideo,
+    mapAudio: built.mapAudio === '[0:a]' ? '0:a?' : built.mapAudio,
+    encodeVideo: visual,
+    encodeAudio: beds || voice.length > 0,
+    simpleAudio: '',
+    notes: built.notes
+  }
+}
+
+export function summarizeJob(job: GraphJob, mix?: { notes: string[] }): string {
+  const notes = mix?.notes ?? mixNotes(job)
   const n = job.segments.length
   const clips = `${n} clip${n === 1 ? '' : 's'}`
   return notes.length ? `${clips} · ${notes.join(', ')}` : clips

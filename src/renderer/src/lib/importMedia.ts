@@ -1,7 +1,7 @@
 import { host } from '../host'
 import { displaySize, quarterTurn } from '../../../shared/mediaOrient'
 import { needsProxy } from '../../../shared/proxy'
-import type { Asset, Project, Word } from '../types'
+import type { Asset, Command, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
 import { wordsFromAsr } from './asr'
 import { applyCommand } from './commands'
@@ -23,6 +23,20 @@ import {
 export interface ImportRecordingOpts {
   onStage?: (stage: string) => void
   signal?: AbortSignal
+  onReady?: (take: InspectedTake) => void | Promise<void>
+  onProxy?: (take: InspectedTake) => void | Promise<void>
+  onLooks?: (take: InspectedTake) => void | Promise<void>
+}
+
+export interface InspectedTake {
+  asset: Asset
+  words: Word[]
+  whispered: { text: string; start: number; end: number; speaker?: string }[] | null
+  analysis: {
+    silence: { start: number; end: number }[]
+    scenes: { times: number[]; staticRegions: { start: number; end: number }[] }
+    loudness: { start: number; end: number; lufs: number }[]
+  }
 }
 
 function asOpts(arg?: ((stage: string) => void) | ImportRecordingOpts): ImportRecordingOpts {
@@ -31,11 +45,19 @@ function asOpts(arg?: ((stage: string) => void) | ImportRecordingOpts): ImportRe
   return arg
 }
 
-export async function importRecording(
+function emptyIntel(): Pick<InspectedTake, 'words' | 'whispered' | 'analysis'> {
+  return {
+    words: [],
+    whispered: null,
+    analysis: { silence: [], scenes: { times: [], staticRegions: [] }, loudness: [] }
+  }
+}
+
+export async function inspectRecording(
   file: string,
   onStageOrOpts?: ((stage: string) => void) | ImportRecordingOpts
-): Promise<Project> {
-  const { onStage, signal } = asOpts(onStageOrOpts)
+): Promise<InspectedTake> {
+  const { onStage, signal, onReady, onProxy, onLooks } = asOpts(onStageOrOpts)
   throwIfAborted(signal, 'import')
   if (!file) throw new Error('Pick a media file to import.')
 
@@ -46,77 +68,10 @@ export async function importRecording(
   })
   throwIfAborted(signal, 'import')
 
-  onStage?.('proxy')
-  const proxyPath =
-    info.hasVideo && needsProxy(info)
-      ? await host.makeProxy(file).catch((err) => {
-          if (isJobCancelled(err)) throw err
-          return ''
-        })
-      : ''
-  throwIfAborted(signal, 'import')
-
-  onStage?.('waveform')
-  const peaks = await host.waveform(file).catch((err) => {
-    if (isJobCancelled(err)) throw err
-    throw new Error(explainImportError(err))
-  })
-  throwIfAborted(signal, 'import')
-
-  onStage?.('thumbnails')
-  const thumbs = await host.thumbnails(file).catch((err) => {
-    if (isJobCancelled(err)) throw err
-    return []
-  })
-  throwIfAborted(signal, 'import')
-
-  onStage?.('analyze')
-  const analysis = await host.analyze(file).catch(async (err) => {
-    if (isJobCancelled(err)) throw err
-    const silence = await host.silence(file).catch((inner) => {
-      if (isJobCancelled(inner)) throw inner
-      throw new Error(explainImportError(err))
-    })
-    return { silence, scenes: { times: [], staticRegions: [] }, loudness: [] }
-  })
-  throwIfAborted(signal, 'import')
-
-  onStage?.('transcript')
-  const stopProgress = host.onTranscribeProgress((info) => {
-    onStage?.(`transcript:${info.stage}`)
-  })
-  let words: Word[] = []
-  let whispered: { text: string; start: number; end: number; speaker?: string }[] | null = null
-  const kind = loadSettings().transcript.kind
-  try {
-    try {
-      whispered = await host.transcribe(file, loadSettings().transcript)
-    } catch (err) {
-      if (isJobCancelled(err)) throw err
-      const explained = explainImportError(err)
-      if (/FFmpeg did not start|Can't open that recording/i.test(explained)) throw new Error(explained)
-      if (isWhisperUnavailable(err) || kind !== 'off') {
-        onStage?.('transcript:missing')
-        whispered = null
-      } else {
-        throw new Error(explained)
-      }
-    }
-    words = wordsFromAsr(whispered)
-    if (!words.length) {
-      if (kind && kind !== 'off' && !whispered) onStage?.('transcript:missing')
-      onStage?.('transcript:islands')
-      words = wordsFromIslands(speechIslands(info.duration, analysis.silence))
-    }
-  } finally {
-    stopProgress()
-  }
-  throwIfAborted(signal, 'import')
-
   const name = file.split(/[\\/]/).pop() ?? 'Recording'
   const shown = displaySize(info.width, info.height, info.rotation)
   const displayRotation = quarterTurn(info.rotation)
-  const asset: Asset = {
+  const baseAsset: Asset = {
     id: uid('asset'),
     path: file,
     name,
@@ -126,20 +81,137 @@ export async function importRecording(
     height: shown.height,
     fps: info.fps,
     sampleRate: info.sampleRate,
-    waveform: peaks,
-    thumbnails: thumbs,
-    ...(proxyPath ? { proxyPath } : {}),
+    waveform: [],
+    sourceOffset: 0,
     ...(displayRotation ? { displayRotation } : {}),
     ...(info.codec ? { codec: info.codec } : {}),
     ...(info.vfr ? { vfr: true } : {})
   }
-  const base = createEmptyProject(name.replace(/\.[^.]+$/, ''))
+  await onReady?.({
+    asset: baseAsset,
+    ...emptyIntel()
+  })
+
+  const wantProxy = Boolean(info.hasVideo && needsProxy(info))
+  let proxyPath = ''
+  let looksFinished = false
+  let proxyFinished = !wantProxy
+
+  const proxyP = (async () => {
+    if (!wantProxy) return ''
+    if (!looksFinished) onStage?.('proxy')
+    throwIfAborted(signal, 'import')
+    const path = await host.makeProxy(file).catch((err) => {
+      if (isJobCancelled(err)) throw err
+      return ''
+    })
+    throwIfAborted(signal, 'import')
+    proxyPath = path
+    proxyFinished = true
+    await onProxy?.({
+      asset: { ...baseAsset, ...(path ? { proxyPath: path } : {}) },
+      ...emptyIntel()
+    })
+    if (!looksFinished) onStage?.('looks')
+    return path
+  })()
+
+  const looksP = (async () => {
+    if (proxyFinished) onStage?.('looks')
+    throwIfAborted(signal, 'import')
+    const analysisP = host.analyze(file).catch(async (err) => {
+      if (isJobCancelled(err)) throw err
+      const silence = await host.silence(file).catch((inner) => {
+        if (isJobCancelled(inner)) throw inner
+        throw new Error(explainImportError(err))
+      })
+      return { silence, scenes: { times: [], staticRegions: [] }, loudness: [] }
+    })
+    const peaksP = host.waveform(file).catch((err) => {
+      if (isJobCancelled(err)) throw err
+      throw new Error(explainImportError(err))
+    })
+    const thumbsP = host.thumbnails(file).catch((err) => {
+      if (isJobCancelled(err)) throw err
+      return []
+    })
+    const [peaks, thumbs, analysis] = await Promise.all([peaksP, thumbsP, analysisP])
+    throwIfAborted(signal, 'import')
+    looksFinished = true
+    const withLooks: InspectedTake = {
+      asset: {
+        ...baseAsset,
+        waveform: peaks,
+        thumbnails: thumbs,
+        ...(proxyPath ? { proxyPath } : {})
+      },
+      words: [],
+      whispered: null,
+      analysis
+    }
+    await onLooks?.(withLooks)
+    return withLooks
+  })()
+
+  const asrP = (async () => {
+    const stopProgress = host.onTranscribeProgress((info) => {
+      if (looksFinished) onStage?.(`transcript:${info.stage}`)
+    })
+    const kind = loadSettings().transcript.kind
+    try {
+      try {
+        return await host.transcribe(file, loadSettings().transcript)
+      } catch (err) {
+        if (isJobCancelled(err)) throw err
+        const explained = explainImportError(err)
+        if (/FFmpeg did not start|Can't open that recording/i.test(explained)) throw new Error(explained)
+        if (isWhisperUnavailable(err) || kind !== 'off') return null
+        throw new Error(explained)
+      }
+    } finally {
+      stopProgress()
+    }
+  })()
+
+  const [withLooks, madeProxy] = await Promise.all([looksP, proxyP])
+  const kind = loadSettings().transcript.kind
+  let whispered: InspectedTake['whispered']
+  try {
+    whispered = await asrP
+  } catch (err) {
+    if (isJobCancelled(err)) throw err
+    throw err
+  }
+  throwIfAborted(signal, 'import')
+  if (!whispered && kind && kind !== 'off') onStage?.('transcript:missing')
+  else onStage?.('transcript')
+  let words = wordsFromAsr(whispered)
+  if (!words.length) {
+    if (kind && kind !== 'off' && !whispered) onStage?.('transcript:missing')
+    onStage?.('transcript:islands')
+    words = wordsFromIslands(speechIslands(info.duration, withLooks.analysis.silence))
+  }
+
+  return {
+    asset: {
+      ...withLooks.asset,
+      ...(madeProxy ? { proxyPath: madeProxy } : {})
+    },
+    words,
+    whispered,
+    analysis: withLooks.analysis
+  }
+}
+
+export function projectFromTake(take: InspectedTake): Project {
+  const { asset, words, whispered, analysis } = take
+  const base = createEmptyProject(asset.name.replace(/\.[^.]+$/, ''))
   const draft = {
     ...base,
-    sourceDuration: info.duration,
-    width: shown.width ?? 1920,
-    height: shown.height ?? 1080,
-    fps: info.fps && info.fps < 120 ? Math.round(info.fps) : 30,
+    sourceDuration: asset.duration,
+    width: asset.width ?? 1920,
+    height: asset.height ?? 1080,
+    fps: asset.fps && asset.fps < 120 ? Math.round(asset.fps) : 30,
     assets: { [asset.id]: asset },
     transcript: { ...base.transcript, words },
     analysis: {
@@ -148,7 +220,7 @@ export async function importRecording(
       loudness: analysis.loudness
     },
     suggestions: buildSuggestions({
-      duration: info.duration,
+      duration: asset.duration,
       silence: analysis.silence,
       scenes: analysis.scenes.times,
       sceneHits: analysis.scenes.staticRegions,
@@ -170,6 +242,99 @@ export async function importRecording(
     })
   }
   return withScenes
+}
+
+export function importedProxyCommands(project: Project, take: InspectedTake): Command[] {
+  if (!project.assets[take.asset.id] || !take.asset.proxyPath) return []
+  return [{ type: 'setAssetProxy', assetId: take.asset.id, proxyPath: take.asset.proxyPath }]
+}
+
+export function importedLooksCommands(project: Project, take: InspectedTake): Command[] {
+  if (!project.assets[take.asset.id]) return []
+  return [
+    {
+      type: 'setAssetLooks',
+      assetId: take.asset.id,
+      waveform: take.asset.waveform,
+      thumbnails: take.asset.thumbnails,
+      ...(take.asset.proxyPath ? { proxyPath: take.asset.proxyPath } : {})
+    },
+    {
+      type: 'attachTakeIntel',
+      assetId: take.asset.id,
+      analysis: {
+        silence: take.analysis.silence,
+        staticRegions: take.analysis.scenes.staticRegions,
+        loudness: take.analysis.loudness
+      }
+    }
+  ]
+}
+
+export function importedWordsCommands(project: Project, take: InspectedTake): Command[] {
+  if (!project.assets[take.asset.id] || !take.words.length) return []
+  return [
+    {
+      type: 'attachTakeIntel',
+      assetId: take.asset.id,
+      words: take.words,
+      whispered: take.whispered
+    }
+  ]
+}
+
+export function importedTakeCommands(project: Project, take: InspectedTake): Command[] {
+  return [...importedLooksCommands(project, take), ...importedWordsCommands(project, take)]
+}
+
+export function fillImportedTake(project: Project, take: InspectedTake): Project {
+  return importedTakeCommands(project, take).reduce((next, command) => applyCommand(next, command), project)
+}
+
+export async function importRecording(
+  file: string,
+  onStageOrOpts?: ((stage: string) => void) | ImportRecordingOpts
+): Promise<Project> {
+  return projectFromTake(await inspectRecording(file, onStageOrOpts))
+}
+
+export async function appendTakeFromFile(
+  project: Project,
+  file: string,
+  onStageOrOpts?: ((stage: string) => void) | ImportRecordingOpts
+): Promise<Project> {
+  const opts = asOpts(onStageOrOpts)
+  let next = project
+  let opened = false
+  const take = await inspectRecording(file, {
+    ...opts,
+    onReady: (partial) => {
+      opened = true
+      next = applyCommand(next, { type: 'appendTake', asset: partial.asset, words: [] })
+      opts.onReady?.(partial)
+    },
+    onProxy: (partial) => {
+      if (partial.asset.proxyPath) {
+        next = applyCommand(next, {
+          type: 'setAssetProxy',
+          assetId: partial.asset.id,
+          proxyPath: partial.asset.proxyPath
+        })
+      }
+      opts.onProxy?.(partial)
+    }
+  })
+  if (opened) return fillImportedTake(next, take)
+  return applyCommand(next, {
+    type: 'appendTake',
+    asset: take.asset,
+    words: take.words,
+    analysis: {
+      silence: take.analysis.silence,
+      staticRegions: take.analysis.scenes.staticRegions,
+      loudness: take.analysis.loudness
+    }
+  })
 }
 
 export { parseSrt, whisperMissingMessage }

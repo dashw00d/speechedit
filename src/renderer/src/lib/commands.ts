@@ -2,9 +2,11 @@ import {
   DEFAULT_CAPTION_STYLE,
   DEFAULT_TRANSFORM,
   emptyClipFields,
+  type Asset,
   type Clip,
   type Command,
   type Cut,
+  type Interval,
   type Project,
   type SegmentStyle,
   type SuggestionType,
@@ -25,7 +27,7 @@ import {
 } from './captions'
 import { autoHideEmptyStackTrack, revealStackTrack } from './timelineTracks'
 import { SPEAKER_PALETTE } from './theme'
-import { prettySpeakerName, speakerSlug } from './diarize'
+import { assignmentsFromCues, hasProviderSpeakers, prettySpeakerName, speakerSlug } from './diarize'
 import {
   commandForScene,
   inferScenesLocal,
@@ -34,16 +36,17 @@ import {
   suggestionsFromScenes,
   takeFamily
 } from './sceneAnalysis'
+import { transcriptIsPlaceholder } from './transcript'
 import { coveringAppliedSuggestion, previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
   mergeIntervals,
   overlap,
   projectKept,
-  shiftProgramClips,
-  sourceToProgram
+  shiftProgramClips
 } from './edl'
 import { normalizeProject } from './normalize'
+import { sourceOffsetOf } from './takes'
 import {
   asVideoClips,
   programLengthOf,
@@ -53,7 +56,24 @@ import {
   segmentId,
   sourceToProgramOf
 } from './resolver'
+import {
+  closeInsert,
+  consumeInsert,
+  isSlugId,
+  placeInsert,
+  rippleInserts,
+  shiftInserts,
+  slugInsertId
+} from './inserts'
 import { uid } from './time'
+import {
+  applyLookToClip,
+  extendedClip,
+  neighborsOnTrack,
+  rolledPair,
+  slidTrio,
+  slippedClip
+} from './clipEdit'
 
 function touch(project: Project): Project {
   return normalizeProject({ ...project, updatedAt: Date.now() })
@@ -143,15 +163,16 @@ function deleteSourceRange(
   project: Project,
   start: number,
   end: number,
-  source: Cut['source']
+  source: Cut['source'],
+  lift = false
 ): Project {
   const lo = clamp(Math.min(start, end), 0, project.sourceDuration || end)
   const hi = clamp(Math.max(start, end), 0, project.sourceDuration || end)
   if (hi - lo < 0.03) return project
 
-  const before = projectKept(project)
-  const removed = before.reduce((sum, span) => sum + overlap(span, { start: lo, end: hi }), 0)
-  const programStart = sourceToProgram(lo, before)
+  const programStart = sourceToProgramOf(project, lo)
+  const programEnd = sourceToProgramOf(project, hi)
+  const removedProgram = Math.max(0, programEnd - programStart)
 
   let next = markWords(project, lo, hi, true)
   next = {
@@ -165,7 +186,10 @@ function deleteSourceRange(
       if (style.end > hi + 0.02) pieces.push({ ...style, id: uid('sty'), start: hi })
       return pieces
     }),
-    tracks: shiftOverlays(next, programStart, -removed),
+    tracks: lift ? next.tracks : shiftOverlays(next, programStart, -removedProgram),
+    inserts: lift
+      ? placeInsert(next.inserts ?? [], programStart, removedProgram, lo)
+      : rippleInserts(next.inserts ?? [], programStart, programEnd),
     suggestions: next.suggestions.map((s) =>
       overlap(s, { start: lo, end: hi }) > s.end - s.start - 0.05 ? { ...s, applied: true } : s
     )
@@ -189,8 +213,7 @@ function subtractFromCuts(cuts: Cut[], lo: number, hi: number): Cut[] {
 function restoreSourceRange(project: Project, start: number, end: number): Project {
   const lo = Math.min(start, end)
   const hi = Math.max(start, end)
-  const before = projectKept(project)
-  const programStart = sourceToProgram(lo, before)
+  const programStart = sourceToProgramOf(project, lo)
 
   let next: Project = {
     ...project,
@@ -204,21 +227,42 @@ function restoreSourceRange(project: Project, start: number, end: number): Proje
     )
   }
 
-  const after = projectKept(next)
-  const added = after.reduce((sum, span) => sum + overlap(span, { start: lo, end: hi }), 0)
-  next = { ...next, tracks: shiftOverlays(next, programStart, added) }
+  const addedProgram = Math.max(0, sourceToProgramOf(next, hi) - sourceToProgramOf(next, lo))
+  const eaten = consumeInsert(next.inserts ?? [], programStart, addedProgram)
+  const leftover = addedProgram - eaten.consumed
+  next = {
+    ...next,
+    inserts: leftover > 0.03 ? shiftInserts(eaten.inserts, programStart, leftover) : eaten.inserts,
+    tracks: leftover > 0.03 ? shiftOverlays(next, programStart, leftover) : next.tracks
+  }
   return touch(next)
 }
 
-function toggleWords(project: Project, wordIds: string[]): Project {
+function toggleWords(project: Project, wordIds: string[], lift = false): Project {
   const selected = project.transcript.words.filter((w) => wordIds.includes(w.id))
   if (!selected.length) return project
   const start = Math.min(...selected.map((w) => w.start))
   const end = Math.max(...selected.map((w) => w.end))
   const shouldDelete = selected.some((w) => !w.deleted)
   return shouldDelete
-    ? deleteSourceRange(project, start, end, 'transcript')
+    ? deleteSourceRange(project, start, end, 'transcript', lift)
     : restoreSourceRange(project, start, end)
+}
+
+function cutMarkedRange(project: Project, lift: boolean): Project {
+  if (project.markIn == null || project.markOut == null) return project
+  const start = Math.min(project.markIn, project.markOut)
+  const end = Math.max(project.markIn, project.markOut)
+  return applyCommand(
+    { ...project, markIn: null, markOut: null },
+    {
+      type: 'deleteRange',
+      start: programToSourceOf(project, start),
+      end: programToSourceOf(project, end),
+      source: 'manual',
+      lift
+    }
+  )
 }
 
 function findClip(project: Project, clipId: string): { track: Track; clip: Clip } | undefined {
@@ -248,6 +292,24 @@ function splitClipsAtProgram(clips: Clip[], program: number): Clip[] {
     }
   }
   return out
+}
+
+function replaceTrackClips(project: Project, trackId: string, clips: Clip[]): Project {
+  return touch({
+    ...project,
+    tracks: project.tracks.map((track) => (track.id === trackId ? { ...track, clips } : track))
+  })
+}
+
+function mapClips(project: Project, ids: string[], fn: (clip: Clip) => Clip): Project {
+  const set = new Set(ids)
+  return touch({
+    ...project,
+    tracks: project.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => (set.has(clip.id) ? fn(clip) : clip))
+    }))
+  })
 }
 
 function mapClip(project: Project, clipId: string, fn: (clip: Clip) => Clip): Project {
@@ -406,7 +468,9 @@ function tightenRange(project: Project, start: number, end: number): Project {
 const TAG_LABELS: Record<TagKind, string> = {
   keep: 'Keep · auto-edit skips this',
   demo: 'Demo · silent walkthrough',
-  note: 'Note'
+  note: 'Note',
+  hook: 'Hook',
+  cta: 'CTA'
 }
 
 function addTag(project: Project, start: number, end: number, kind: TagKind, label?: string): Project {
@@ -507,13 +571,12 @@ function newGraphic(
 ): Project {
   const track = project.tracks.find((t) => t.type === trackType)
   if (!track) return project
+  const inPoint = Math.max(0, extra.inPoint ?? 0)
   const clip: Clip = {
     id: uid('clip'),
     trackId: track.id,
     start,
     duration,
-    inPoint: 0,
-    outPoint: duration,
     transform: { ...DEFAULT_TRANSFORM },
     volume: 1,
     muted: false,
@@ -521,7 +584,9 @@ function newGraphic(
     text,
     style: { ...DEFAULT_CAPTION_STYLE },
     ...emptyClipFields(),
-    ...extra
+    ...extra,
+    inPoint,
+    outPoint: extra.outPoint ?? inPoint + duration
   }
   return touch({
     ...project,
@@ -535,11 +600,11 @@ export function applyCommand(project: Project, command: Command): Project {
   const current = normalizeProject(project)
   switch (command.type) {
     case 'deleteRange':
-      return deleteSourceRange(current, command.start, command.end, command.source ?? 'manual')
+      return deleteSourceRange(current, command.start, command.end, command.source ?? 'manual', command.lift)
     case 'restoreRange':
       return restoreSourceRange(current, command.start, command.end)
     case 'toggleWords':
-      return toggleWords(current, command.wordIds)
+      return toggleWords(current, command.wordIds, command.lift)
     case 'setWordText':
       return touch({
         ...current,
@@ -550,21 +615,42 @@ export function applyCommand(project: Project, command: Command): Project {
           )
         }
       })
+    case 'replaceWords': {
+      const map = new Map(command.pairs.map((pair) => [pair.wordId, pair.text]))
+      if (!map.size) return current
+      let changed = false
+      const words = current.transcript.words.map((word) => {
+        if (!map.has(word.id)) return word
+        const text = map.get(word.id)!
+        if (word.text === text) return word
+        changed = true
+        return { ...word, text }
+      })
+      return changed ? touch({ ...current, transcript: { ...current.transcript, words } }) : current
+    }
     case 'rippleDelete':
       return deleteSourceRange(current, command.start, command.end, 'manual')
-    case 'rippleDeleteMarks': {
-      if (current.markIn == null || current.markOut == null) return current
-      const start = Math.min(current.markIn, current.markOut)
-      const end = Math.max(current.markIn, current.markOut)
-      return applyCommand(
-        { ...current, markIn: null, markOut: null },
-        {
-          type: 'deleteRange',
-          start: programToSourceOf(current, start),
-          end: programToSourceOf(current, end),
-          source: 'manual'
-        }
-      )
+    case 'rippleDeleteMarks':
+      return cutMarkedRange(current, false)
+    case 'liftMarks':
+      return cutMarkedRange(current, true)
+    case 'insertGap': {
+      const duration = clamp(command.duration, 0.05, 60)
+      const time = clamp(command.time, 0, programLengthOf(current) + 0.01)
+      return touch({
+        ...current,
+        inserts: placeInsert(current.inserts ?? [], time, duration, programToSourceOf(current, time)),
+        tracks: shiftOverlays(current, time, duration)
+      })
+    }
+    case 'removeInsert': {
+      const closed = closeInsert(current.inserts ?? [], command.insertId)
+      if (!closed.removed) return current
+      return touch({
+        ...current,
+        inserts: closed.inserts,
+        tracks: shiftOverlays(current, closed.removed.programStart, -closed.removed.duration)
+      })
     }
     case 'splitAt': {
       const source = command.time
@@ -621,12 +707,16 @@ export function applyCommand(project: Project, command: Command): Project {
     case 'trimPrimary': {
       const seg = resolveSegments(current).find((s) => s.id === command.segmentId)
       if (!seg) return current
+      if (seg.kind === 'slug') {
+        const insertId = slugInsertId(seg.id)
+        return insertId ? applyCommand(current, { type: 'removeInsert', insertId }) : current
+      }
       if (command.edge === 'in') {
         const next = clamp(command.sourceTime, seg.inPoint, seg.outPoint - 0.05)
-        return deleteSourceRange(current, seg.inPoint, next, 'manual')
+        return deleteSourceRange(current, seg.inPoint, next, 'manual', command.lift)
       }
       const next = clamp(command.sourceTime, seg.inPoint + 0.05, seg.outPoint)
-      return deleteSourceRange(current, next, seg.outPoint, 'manual')
+      return deleteSourceRange(current, next, seg.outPoint, 'manual', command.lift)
     }
     case 'rippleTrimToPlayhead': {
       const seg =
@@ -635,13 +725,45 @@ export function applyCommand(project: Project, command: Command): Project {
           .filter((s) => s.start + s.duration <= command.time + 1e-4)
           .at(-1)
       if (!seg) return current
+      if (seg.kind === 'slug') {
+        const insertId = slugInsertId(seg.id)
+        return insertId ? applyCommand(current, { type: 'removeInsert', insertId }) : current
+      }
       const sourceTime = programToSourceOf(current, command.time)
       return applyCommand(current, {
         type: 'trimPrimary',
         segmentId: seg.id,
         edge: command.edge,
-        sourceTime
+        sourceTime,
+        lift: command.lift
       })
+    }
+    case 'replaceClipMedia': {
+      const found = findClip(current, command.clipId)
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
+      return touch({
+        ...current,
+        assets: { ...current.assets, [command.asset.id]: command.asset },
+        tracks: current.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) =>
+            clip.id === command.clipId
+              ? {
+                  ...clip,
+                  assetId: command.asset.id,
+                  text: command.asset.name,
+                  outPoint: clip.inPoint + clip.duration
+                }
+              : clip
+          )
+        }))
+      })
+    }
+    case 'setPan': {
+      const pan = clamp(command.pan, -1, 1)
+      const seg = resolveSegments(current).find((s) => s.id === command.clipId)
+      if (seg) return upsertStyle(current, seg.inPoint, seg.outPoint, { pan })
+      return mapClip(current, command.clipId, (clip) => ({ ...clip, pan }))
     }
     case 'setTransform': {
       const merge = (base: Transform, patch: Partial<Transform>): Transform => ({
@@ -756,12 +878,14 @@ export function applyCommand(project: Project, command: Command): Project {
         transform: { ...DEFAULT_TRANSFORM, scale: command.scale }
       })
     case 'addBroll': {
+      const inPoint = Math.max(0, command.inPoint ?? 0)
       const withAsset = {
         ...current,
         assets: { ...current.assets, [command.asset.id]: command.asset }
       }
       return newGraphic(withAsset, 'overlay', command.start, command.duration, command.asset.name, {
-        assetId: command.asset.id
+        assetId: command.asset.id,
+        inPoint
       })
     }
     case 'addAudio': {
@@ -770,14 +894,15 @@ export function applyCommand(project: Project, command: Command): Project {
         : applyCommand(current, { type: 'addTrack', trackType: 'audio', name: 'A2 Music' })
       const track = next.tracks.find((t) => t.type === 'audio' && t.id !== 'a1')
       if (!track) return current
+      const inPoint = Math.max(0, command.inPoint ?? 0)
       const clip: Clip = {
         id: uid('clip'),
         trackId: track.id,
         assetId: command.asset.id,
         start: command.start,
         duration: command.duration,
-        inPoint: 0,
-        outPoint: command.duration,
+        inPoint,
+        outPoint: inPoint + command.duration,
         transform: { ...DEFAULT_TRANSFORM },
         volume: 0.35,
         muted: false,
@@ -880,15 +1005,164 @@ export function applyCommand(project: Project, command: Command): Project {
         fadeOut: command.edge === 'out' ? command.duration : clip.fadeOut
       }))
     }
-    case 'removeClip':
+    case 'removeClip': {
+      const insertId = slugInsertId(command.clipId)
+      if (insertId) return applyCommand(current, { type: 'removeInsert', insertId })
       return touch({
         ...current,
         tracks: current.tracks.map((track) =>
           autoHideEmptyStackTrack({ ...track, clips: track.clips.filter((c) => c.id !== command.clipId) })
         )
       })
+    }
+    case 'duplicateClip': {
+      const hit = findClip(current, command.clipId)
+      if (!hit) return current
+      const start = command.start ?? hit.clip.start + hit.clip.duration
+      const clone: Clip = {
+        ...hit.clip,
+        id: uid('clip'),
+        start,
+        keyframes: hit.clip.keyframes.map((key) => ({ ...key, transform: { ...key.transform } })),
+        transform: { ...hit.clip.transform, crop: { ...hit.clip.transform.crop } },
+        style: hit.clip.style ? { ...hit.clip.style } : undefined
+      }
+      return touch({
+        ...current,
+        tracks: current.tracks.map((track) =>
+          track.id === hit.track.id ? { ...track, clips: [...track.clips, clone] } : track
+        )
+      })
+    }
+    case 'pasteClip': {
+      const destTrack =
+        current.tracks.find((track) => track.id === (command.trackId ?? command.clip.trackId)) ??
+        current.tracks.find((track) => track.type === 'overlay' && !isPrimaryLane(track) && !track.locked)
+      if (!destTrack || isPrimaryLane(destTrack) || destTrack.locked) return current
+      const clone: Clip = {
+        ...command.clip,
+        id: uid('clip'),
+        start: Math.max(0, command.start),
+        trackId: destTrack.id,
+        keyframes: command.clip.keyframes.map((key) => ({ ...key, transform: { ...key.transform } })),
+        transform: { ...command.clip.transform, crop: { ...command.clip.transform.crop } },
+        style: command.clip.style ? { ...command.clip.style } : undefined
+      }
+      return touch({
+        ...current,
+        tracks: current.tracks.map((track) =>
+          track.id === destTrack.id ? revealStackTrack({ ...track, clips: [...track.clips, clone] }) : track
+        )
+      })
+    }
+    case 'applyClipLook': {
+      const ids = command.clipIds.filter((id) => {
+        const hit = findClip(current, id)
+        return Boolean(hit && !isPrimaryLane(hit.track))
+      })
+      if (!ids.length) return current
+      return mapClips(current, ids, (clip) => applyLookToClip(clip, command.look))
+    }
+    case 'slipClip': {
+      const found = findClip(current, command.clipId)
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
+      const asset = found.clip.assetId ? current.assets[found.clip.assetId] : undefined
+      const next = slippedClip(found.clip, command.delta, asset?.duration)
+      return next ? mapClip(current, command.clipId, () => next) : current
+    }
+    case 'rollClip': {
+      const found = findClip(current, command.clipId)
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
+      const { prev, next } = neighborsOnTrack(found.track, found.clip.id)
+      const neighbor = command.edge === 'in' ? prev : next
+      const rolled = rolledPair(found.clip, neighbor, command.edge, command.time)
+      if (!rolled) return current
+      return replaceTrackClips(
+        current,
+        found.track.id,
+        found.track.clips.map((clip) => {
+          if (clip.id === found.clip.id) return rolled.clip
+          if (rolled.neighbor && clip.id === rolled.neighbor.id) return rolled.neighbor
+          return clip
+        })
+      )
+    }
+    case 'slideClip': {
+      const found = findClip(current, command.clipId)
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
+      const { prev, next } = neighborsOnTrack(found.track, found.clip.id)
+      const slid = slidTrio(found.clip, prev, next, command.start)
+      if (!slid) return current
+      return replaceTrackClips(
+        current,
+        found.track.id,
+        found.track.clips.map((clip) => {
+          if (clip.id === found.clip.id) return slid.clip
+          if (slid.prev && clip.id === slid.prev.id) return slid.prev
+          if (slid.next && clip.id === slid.next.id) return slid.next
+          return clip
+        })
+      )
+    }
+    case 'extendClip': {
+      const found = findClip(current, command.clipId)
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
+      const asset = found.clip.assetId ? current.assets[found.clip.assetId] : undefined
+      const next = extendedClip(found.clip, command.time, asset?.duration)
+      return next ? mapClip(current, command.clipId, () => next) : current
+    }
+    case 'nudgeClips': {
+      const ids = command.clipIds.filter((id) => {
+        const hit = findClip(current, id)
+        return Boolean(hit && !isPrimaryLane(hit.track) && !hit.track.locked)
+      })
+      if (!ids.length) return current
+      return mapClips(current, ids, (clip) => ({ ...clip, start: Math.max(0, clip.start + command.delta) }))
+    }
+    case 'removeClips': {
+      const ids = command.clipIds.filter((id) => !isSlugId(id))
+      const slugIds = command.clipIds.map(slugInsertId).filter((id): id is string => Boolean(id))
+      let next = current
+      for (const insertId of slugIds) next = applyCommand(next, { type: 'removeInsert', insertId })
+      if (!ids.length) return next
+      return touch({
+        ...next,
+        tracks: next.tracks.map((track) =>
+          autoHideEmptyStackTrack({ ...track, clips: track.clips.filter((clip) => !ids.includes(clip.id)) })
+        )
+      })
+    }
+    case 'setSceneBounds': {
+      const scenes = [...(current.scenes ?? [])]
+      const index = scenes.findIndex((scene) => scene.id === command.sceneId)
+      if (index < 0) return current
+      const scene = scenes[index]
+      const prev = scenes[index - 1]
+      const next = scenes[index + 1]
+      let start = command.start ?? scene.start
+      let end = command.end ?? scene.end
+      if (end <= start + 0.15) return current
+      const touchingPrev = prev && Math.abs(prev.end - scene.start) < 0.08
+      const touchingNext = next && Math.abs(next.start - scene.end) < 0.08
+      if (touchingPrev && command.start != null) {
+        scenes[index - 1] = { ...prev, end: start }
+      }
+      if (touchingNext && command.end != null) {
+        scenes[index + 1] = { ...next, start: end }
+      }
+      scenes[index] = { ...scene, start, end }
+      return touch({ ...current, scenes })
+    }
+    case 'setCanvas': {
+      const width = Math.round(clamp(command.width, 320, 3840))
+      const height = Math.round(clamp(command.height, 320, 3840))
+      if (width === current.width && height === current.height) return current
+      return touch({ ...current, width, height })
+    }
     case 'applySuggestion':
       return applySuggestion(current, command.suggestionId)
+    case 'applySuggestions':
+      return command.suggestionIds.reduce((acc, id) => applySuggestion(acc, id), current)
     case 'applySafeSuggestions':
       return current.suggestions
         .filter(
@@ -904,6 +1178,21 @@ export function applyCommand(project: Project, command: Command): Project {
         ...current,
         suggestions: current.suggestions.filter((s) => s.id !== command.suggestionId)
       })
+    case 'dismissPendingSuggestions': {
+      const next = current.suggestions.filter((s) => s.applied)
+      if (next.length === current.suggestions.length) return current
+      return touch({ ...current, suggestions: next })
+    }
+    case 'applySuggestionsByType':
+      return current.suggestions
+        .filter(
+          (s) =>
+            s.type === command.suggestionType &&
+            !s.applied &&
+            !s.blockedBy &&
+            (s.action === 'cut' || s.action === 'normalize' || s.action === 'speed')
+        )
+        .reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), current)
     case 'revertSuggestion':
       return revertSuggestion(current, command.suggestionId)
     case 'revertSuggestionType':
@@ -967,12 +1256,60 @@ export function applyCommand(project: Project, command: Command): Project {
           )
         }
       })
+    case 'renameScene': {
+      const scenes = current.scenes.map((scene) => {
+        if (scene.id !== command.sceneId) return scene
+        const title = command.title !== undefined ? command.title.trim() || scene.title : scene.title
+        const summary = command.summary !== undefined ? command.summary : scene.summary
+        if (title === scene.title && summary === scene.summary) return scene
+        return { ...scene, title, summary }
+      })
+      if (scenes.every((scene, i) => scene === current.scenes[i])) return current
+      return touch({ ...current, scenes })
+    }
+    case 'splitScene': {
+      const scenes = [...(current.scenes ?? [])]
+      const index = scenes.findIndex((scene) => scene.id === command.sceneId)
+      if (index < 0) return current
+      const scene = scenes[index]
+      if (command.time <= scene.start + 0.15 || command.time >= scene.end - 0.15) return current
+      scenes.splice(index, 1, { ...scene, end: command.time }, {
+        ...scene,
+        id: uid('scene'),
+        start: command.time,
+        title: `${scene.title} (cont.)`,
+        takeOf: undefined,
+        takeIndex: undefined
+      })
+      return touch({ ...current, scenes: normalizeScenes(scenes) })
+    }
+    case 'mergeScenes': {
+      const scenes = [...(current.scenes ?? [])]
+      const a = scenes.find((scene) => scene.id === command.sceneId)
+      const b = scenes.find((scene) => scene.id === command.otherId)
+      if (!a || !b) return current
+      const lo = a.start <= b.start ? a : b
+      const hi = lo === a ? b : a
+      const merged = {
+        ...lo,
+        end: Math.max(a.end, b.end),
+        summary: [lo.summary, hi.summary].filter(Boolean).join(' ')
+      }
+      return touch({
+        ...current,
+        scenes: normalizeScenes(scenes.filter((scene) => scene.id !== a.id && scene.id !== b.id).concat(merged))
+      })
+    }
     case 'rebuildSuggestions':
       return rebuildSuggestionList(current)
     case 'setTranscript': {
+      const words = current.cuts.reduce(
+        (list, cut) => stampWords(list, cut.start, cut.end, true),
+        command.words
+      )
       const next = {
         ...current,
-        transcript: { ...current.transcript, words: command.words }
+        transcript: { ...current.transcript, words }
       }
       return rebuildSuggestionList(applyDiarization(next))
     }
@@ -1071,13 +1408,17 @@ export function applyCommand(project: Project, command: Command): Project {
       return current.suggestions
         .filter((s) => s.type === 'model' && !s.applied && !s.blockedBy && s.action === 'cut')
         .reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), current)
-    case 'setTrackFlag':
+    case 'setTrackFlag': {
+      const soloOn = command.patch.solo === true
       return touch({
         ...current,
-        tracks: current.tracks.map((track) =>
-          track.id === command.trackId ? { ...track, ...command.patch } : track
-        )
+        tracks: current.tracks.map((track) => {
+          if (track.id === command.trackId) return { ...track, ...command.patch }
+          if (soloOn) return { ...track, solo: false }
+          return track
+        })
       })
+    }
     case 'relinkAsset': {
       const asset = current.assets[command.assetId]
       if (!asset || asset.path === command.path) return current
@@ -1097,6 +1438,90 @@ export function applyCommand(project: Project, command: Command): Project {
         }
       })
     }
+    case 'appendTake': {
+      const offset = current.sourceDuration
+      if (!command.asset.path) return current
+      const asset: Asset = { ...command.asset, sourceOffset: offset }
+      const shift = <T extends Interval>(row: T): T => ({ ...row, start: row.start + offset, end: row.end + offset })
+      const extra = command.analysis ?? { silence: [], staticRegions: [], loudness: [] }
+      const words = [
+        ...current.transcript.words,
+        ...command.words.map((word) => ({
+          ...word,
+          id: word.id || uid('w'),
+          start: word.start + offset,
+          end: word.end + offset
+        }))
+      ]
+      const merged = touch({
+        ...current,
+        sourceDuration: offset + Math.max(0.01, asset.duration),
+        assets: { ...current.assets, [asset.id]: asset },
+        transcript: { ...current.transcript, words },
+        analysis: {
+          silence: [...current.analysis.silence, ...extra.silence.map(shift)],
+          staticRegions: [...current.analysis.staticRegions, ...extra.staticRegions.map(shift)],
+          loudness: [...current.analysis.loudness, ...extra.loudness.map(shift)]
+        }
+      })
+      return applyCommand(merged, { type: 'rebuildIntelligence' })
+    }
+    case 'attachTakeIntel': {
+      const asset = current.assets[command.assetId]
+      if (!asset) return current
+      const offset = sourceOffsetOf(asset)
+      const end = offset + Math.max(0.01, asset.duration)
+      const span = { start: offset, end }
+      const shift = <T extends Interval>(row: T): T => ({ ...row, start: row.start + offset, end: row.end + offset })
+      let next = current
+      if (command.analysis) {
+        const extra = command.analysis
+        if (extra.silence.length || extra.staticRegions.length || extra.loudness.length) {
+          const outside = <T extends Interval>(row: T) => overlap(row, span) <= 0
+          next = touch({
+            ...next,
+            analysis: {
+              silence: [...next.analysis.silence.filter(outside), ...extra.silence.map(shift)],
+              staticRegions: [
+                ...next.analysis.staticRegions.filter(outside),
+                ...extra.staticRegions.map(shift)
+              ],
+              loudness: [...next.analysis.loudness.filter(outside), ...extra.loudness.map(shift)]
+            }
+          })
+        }
+      }
+      if (command.words?.length) {
+        const inRange = next.transcript.words.filter((word) => overlap(word, span) > 0)
+        if (transcriptIsPlaceholder(inRange)) {
+          const words = [
+            ...next.transcript.words.filter((word) => overlap(word, span) <= 0),
+            ...command.words.map((word) => ({
+              ...word,
+              id: word.id || uid('w'),
+              start: word.start + offset,
+              end: word.end + offset
+            }))
+          ]
+          next = applyCommand(next, { type: 'setTranscript', words })
+        }
+      }
+      if (command.whispered && hasProviderSpeakers(command.whispered)) {
+        next = applyCommand(next, {
+          type: 'applyDiarization',
+          assignments: assignmentsFromCues(command.whispered).map((row) => ({
+            ...row,
+            start: row.start + offset,
+            end: row.end + offset
+          }))
+        })
+      }
+      if (next === current) return current
+      if (command.analysis && !command.words?.length) {
+        return applyCommand(next, { type: 'rebuildIntelligence' })
+      }
+      return next
+    }
     case 'setAssetProxy': {
       const asset = current.assets[command.assetId]
       if (!asset) return current
@@ -1109,6 +1534,38 @@ export function applyCommand(project: Project, command: Command): Project {
           [command.assetId]: { ...asset, proxyPath }
         }
       })
+    }
+    case 'setAssetLooks': {
+      const asset = current.assets[command.assetId]
+      if (!asset) return current
+      const proxyPath = command.proxyPath === undefined ? asset.proxyPath : command.proxyPath || undefined
+      const waveform = command.waveform ?? asset.waveform
+      const thumbnails = command.thumbnails === undefined ? asset.thumbnails : command.thumbnails
+      if (asset.proxyPath === proxyPath && asset.waveform === waveform && asset.thumbnails === thumbnails) {
+        return current
+      }
+      return touch({
+        ...current,
+        assets: {
+          ...current.assets,
+          [command.assetId]: { ...asset, proxyPath, waveform, thumbnails }
+        }
+      })
+    }
+    case 'setAnalysis': {
+      const analysis = {
+        silence: command.silence ?? current.analysis.silence,
+        staticRegions: command.staticRegions ?? current.analysis.staticRegions,
+        loudness: command.loudness ?? current.analysis.loudness
+      }
+      if (
+        analysis.silence === current.analysis.silence &&
+        analysis.staticRegions === current.analysis.staticRegions &&
+        analysis.loudness === current.analysis.loudness
+      ) {
+        return current
+      }
+      return applyCommand(touch({ ...current, analysis }), { type: 'rebuildIntelligence' })
     }
     default:
       return current

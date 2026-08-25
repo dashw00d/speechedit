@@ -23,8 +23,8 @@ export function Suggestions() {
   const selected = useEditor((s) => s.selectedSuggestionId)
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const dispatch = useEditor((s) => s.dispatch)
-  const seekProgram = usePlayback((s) => s.seekProgram)
   const playFromSource = usePlayback((s) => s.playFromSource)
+  const playLoop = usePlayback((s) => s.playLoop)
   const task = suggestTask(project)
   const pace = paceFromMargin(project.cutMargin)
   const previewSafeCuts = useEditor((s) => s.previewSafeCuts)
@@ -37,9 +37,19 @@ export function Suggestions() {
   const applied = project.suggestions.filter((s) => s.applied)
   const hasEdits = project.cuts.length > 0 || applied.length > 0
 
-  function park(s: EditSuggestion) {
+  function hearSuggestion(s: EditSuggestion) {
     selectSuggestion(s.id)
-    seekProgram(sourceToProgramOf(project, s.start))
+    playLoop(sourceToProgramOf(project, s.start), sourceToProgramOf(project, s.end))
+  }
+
+  function hearScene(start: number, end: number) {
+    playLoop(sourceToProgramOf(project, start), sourceToProgramOf(project, end))
+  }
+
+  function sceneKindChip(kind: string, takeIndex?: number) {
+    if (kind === 'demo') return 'Silent demo'
+    if (kind === 'retake' || takeIndex) return takeIndex ? `Take ${takeIndex}` : 'Retake'
+    return 'Scene'
   }
 
   return (
@@ -76,7 +86,7 @@ export function Suggestions() {
                 key={preset.id}
                 className="chip"
                 data-active={pace === preset.id}
-                title={`Cut pad ${preset.margin}s`}
+                title={preset.hint}
                 onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
               >
                 {preset.label}
@@ -89,7 +99,11 @@ export function Suggestions() {
           </button>
         )}
         {task.collapseRetakes && (
-          <button className="review-btn" onClick={() => dispatch({ type: 'collapseRetakes' })}>
+          <button
+            className="review-btn"
+            title="Drop every superseded take. You can put them back from Review."
+            onClick={() => dispatch({ type: 'collapseRetakes' })}
+          >
             Collapse retakes
           </button>
         )}
@@ -98,11 +112,21 @@ export function Suggestions() {
             {reviewing ? 'Hide review' : task.reviewLabel}
           </button>
         )}
-        {task.showWatch && (
-          <button className="review-btn" type="button" onClick={() => playFromSource(0)}>
-            {hasEdits ? 'Watch edited reel' : 'Watch full reel'}
-          </button>
-        )}
+          {task.fillerCount > 0 && (
+            <button
+              className="review-btn"
+              type="button"
+              title="Remove every um, uh, and you know in one undo"
+              onClick={() => dispatch({ type: 'applySuggestionsByType', suggestionType: 'filler' })}
+            >
+              Cut {task.fillerCount} fillers
+            </button>
+          )}
+          {task.showWatch && (
+            <button className="review-btn" type="button" onClick={() => playFromSource(0)}>
+              {hasEdits ? 'Watch edited reel' : 'Watch full reel'}
+            </button>
+          )}
         {primaryApply && (
           <button className="safe-btn" onClick={() => dispatch({ type: 'applySafeSuggestions' })}>
             {task.applyLabel}
@@ -116,6 +140,23 @@ export function Suggestions() {
       </footer>
       {reviewing && (
         <div className="drawer">
+          {pending.length > 0 && (
+            <div className="drawer-row drawer-head">
+              <span className="kind">open</span>
+              <span>{pending.length} waiting</span>
+              <span />
+              <span>
+                <button
+                  className="chip"
+                  type="button"
+                  title="Clear every unused suggestion in one undo"
+                  onClick={() => dispatch({ type: 'dismissPendingSuggestions' })}
+                >
+                  Dismiss all
+                </button>
+              </span>
+            </div>
+          )}
           {project.scenes.map((scene) => {
             const family = takeFamily(project.scenes, scene.id)
             const spoken = project.transcript.words.filter((w) => w.start >= scene.start && w.end <= scene.end)
@@ -123,8 +164,14 @@ export function Suggestions() {
               Boolean(suggestionForScene(project, scene)?.applied) ||
               (spoken.length > 0 && spoken.every((w) => w.deleted))
             return (
-              <div key={scene.id} className="drawer-row" data-kind={scene.kind} data-applied={dropped}>
-                <span className="kind">{scene.kind}</span>
+              <div
+                key={scene.id}
+                className="drawer-row"
+                data-kind={scene.kind}
+                data-applied={dropped}
+                onClick={() => hearScene(scene.start, scene.end)}
+              >
+                <span className="kind">{sceneKindChip(scene.kind, scene.takeIndex)}</span>
                 <span>
                   {scene.takeIndex ? `Take ${scene.takeIndex} · ` : ''}
                   {scene.title}
@@ -133,19 +180,47 @@ export function Suggestions() {
                   {formatClock(scene.start)}–{formatClock(scene.end)}
                 </span>
                 <span>
-                  <button className="chip" onClick={() => seekProgram(sourceToProgramOf(project, scene.start))}>
-                    Park
+                  <button
+                    className="chip"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      hearScene(scene.start, scene.end)
+                    }}
+                  >
+                    Hear
                   </button>{' '}
                   {dropped ? (
-                    <button className="chip" onClick={() => dispatch(commandForScene(project, scene, 'revert'))}>
+                    <button
+                      className="chip"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        dispatch(commandForScene(project, scene, 'revert'))
+                      }}
+                    >
                       Put back
                     </button>
                   ) : scene.kind === 'retake' ? (
-                    <button className="chip" onClick={() => dispatch(commandForScene(project, scene, 'apply'))}>
-                      Drop take
+                    <button
+                      className="chip"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        dispatch(commandForScene(project, scene, 'apply'))
+                      }}
+                    >
+                      Use later take
                     </button>
                   ) : family.length > 1 ? (
-                    <button className="chip" onClick={() => dispatch({ type: 'keepTake', sceneId: scene.id })}>
+                    <button
+                      className="chip"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        dispatch({ type: 'keepTake', sceneId: scene.id })
+                      }}
+                    >
                       Keep this take
                     </button>
                   ) : null}
@@ -162,7 +237,7 @@ export function Suggestions() {
                   <span className="kind">{group.title}</span>
                   <span>
                     {rows.length} open
-                    {rows.some((s) => s.blockedBy) ? ` · ${rows.filter((s) => s.blockedBy).length} guarded` : ''}
+                    {rows.some((s) => s.blockedBy) ? ` · ${rows.filter((s) => s.blockedBy).length} protected` : ''}
                   </span>
                   <span />
                   <span />
@@ -173,7 +248,7 @@ export function Suggestions() {
                     s={s}
                     selected={selected === s.id}
                     blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
-                    onPark={() => park(s)}
+                    onHear={() => hearSuggestion(s)}
                     onApply={() => dispatch({ type: 'applySuggestion', suggestionId: s.id })}
                     onSkip={() => dispatch({ type: 'dismissSuggestion', suggestionId: s.id })}
                   />
@@ -213,17 +288,37 @@ export function Suggestions() {
                   </span>
                 </div>
                 {rows.map((s) => (
-                  <div key={s.id} className="drawer-row" data-on={selected === s.id} data-applied="true">
+                  <div
+                    key={s.id}
+                    className="drawer-row"
+                    data-on={selected === s.id}
+                    data-applied="true"
+                    onClick={() => hearSuggestion(s)}
+                  >
                     <span className="kind">{s.type}</span>
                     <span>{s.label}</span>
                     <span className="kind">
                       {formatClock(s.start)}–{formatClock(s.end)}
                     </span>
                     <span>
-                      <button className="chip" onClick={() => park(s)}>
-                        Park
+                      <button
+                        className="chip"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          hearSuggestion(s)
+                        }}
+                      >
+                        Hear
                       </button>{' '}
-                      <button className="chip" onClick={() => dispatch({ type: 'revertSuggestion', suggestionId: s.id })}>
+                      <button
+                        className="chip"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          dispatch({ type: 'revertSuggestion', suggestionId: s.id })
+                        }}
+                      >
                         Put back one
                       </button>
                     </span>
@@ -245,20 +340,20 @@ function SuggestionRow({
   s,
   selected,
   blockedLabel,
-  onPark,
+  onHear,
   onApply,
   onSkip
 }: {
   s: EditSuggestion
   selected: boolean
   blockedLabel?: string
-  onPark: () => void
+  onHear: () => void
   onApply: () => void
   onSkip: () => void
 }) {
   return (
-    <div className="drawer-row" data-on={selected} data-blocked={Boolean(s.blockedBy)}>
-      <span className="kind">{s.blockedBy ? 'guarded' : s.type}</span>
+    <div className="drawer-row" data-on={selected} data-blocked={Boolean(s.blockedBy)} onClick={onHear}>
+        <span className="kind">{s.blockedBy ? 'protected' : s.type === 'repeat' ? 'retake' : s.type}</span>
       <span>
         {s.label}
         {blockedLabel ? <em className="blocked-by">Blocked by {blockedLabel}</em> : null}
@@ -267,19 +362,47 @@ function SuggestionRow({
         {formatClock(s.start)}–{formatClock(s.end)}
       </span>
       <span>
-        <button className="chip" onClick={onPark}>
-          Park
+        <button
+          className="chip"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onHear()
+          }}
+        >
+          Hear
         </button>{' '}
         {s.blockedBy ? (
-          <button className="chip" onClick={onSkip}>
+          <button
+            className="chip"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSkip()
+            }}
+          >
             Skip
           </button>
         ) : s.action === 'review' ? (
-          <button className="chip" onClick={onSkip}>
+          <button
+            className="chip"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSkip()
+            }}
+          >
             Keep
           </button>
         ) : (
-          <button className="chip" onClick={onApply}>
+          <button
+            className="chip"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onApply()
+            }}
+          >
             {s.action === 'speed' ? `Speed ${s.speed ?? 4}×` : s.action === 'normalize' ? 'Normalize' : 'Apply'}
           </button>
         )}

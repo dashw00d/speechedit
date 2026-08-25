@@ -9,7 +9,7 @@ export type SuggestionType =
   | 'pace'
   | 'model'
 export type SuggestionAction = 'cut' | 'speed' | 'review' | 'normalize'
-export type TagKind = 'keep' | 'demo' | 'note'
+export type TagKind = 'keep' | 'demo' | 'note' | 'hook' | 'cta'
 export type Easing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out'
 
 export interface Interval {
@@ -36,6 +36,8 @@ export interface Asset {
   /** Source codec from probe. Used to remake a preview proxy after reopen or relink. */
   codec?: string
   vfr?: boolean
+  /** Where this take sits on the unified source timeline. Overlay/B-roll assets omit it. */
+  sourceOffset?: number
 }
 
 export interface Crop {
@@ -70,6 +72,27 @@ export interface CaptionStyle {
   position: 'lower' | 'center' | 'upper'
 }
 
+export interface ClipLook {
+  transform: Transform
+  volume: number
+  muted: boolean
+  speed: number
+  fadeIn: number
+  fadeOut: number
+  pan?: number
+}
+
+export type InsertKind = 'black' | 'silence' | 'hold'
+
+/** Program-time hold. May sit on V1 after a lift or an insert-gap. */
+export interface ProgramInsert {
+  id: string
+  programStart: number
+  duration: number
+  kind: InsertKind
+  holdSourceTime?: number
+}
+
 export interface Clip {
   id: string
   trackId: string
@@ -86,9 +109,13 @@ export interface Clip {
   fadeIn: number
   fadeOut: number
   keyframes: Keyframe[]
+  /** Stereo balance −1 left … 1 right. */
+  pan?: number
   text?: string
   style?: CaptionStyle
   effect?: 'none' | 'blur'
+  /** Derived primary holds use `slug`. Overlay clips omit this. */
+  kind?: 'media' | 'slug'
 }
 
 export interface Track {
@@ -98,6 +125,8 @@ export interface Track {
   locked: boolean
   muted: boolean
   hidden: boolean
+  /** Hear this lane only. Other tracks mute for preview and export. */
+  solo?: boolean
   clips: Clip[]
 }
 
@@ -133,6 +162,7 @@ export interface SegmentStyle {
   fadeIn: number
   fadeOut: number
   keyframes: Keyframe[]
+  pan?: number
 }
 
 export interface EditSuggestion {
@@ -198,6 +228,7 @@ export interface Project {
   suggestions: EditSuggestion[]
   scenes: EditorialScene[]
   tags: RangeTag[]
+  inserts?: ProgramInsert[]
   picture: Transform
   audioMaster: {
     volume: number
@@ -253,17 +284,23 @@ export const DEFAULT_AUDIO_MASTER = {
 }
 
 export type Command =
-  | { type: 'deleteRange'; start: number; end: number; source?: Cut['source'] }
+  | { type: 'deleteRange'; start: number; end: number; source?: Cut['source']; lift?: boolean }
   | { type: 'restoreRange'; start: number; end: number }
-  | { type: 'toggleWords'; wordIds: string[] }
+  | { type: 'toggleWords'; wordIds: string[]; lift?: boolean }
   | { type: 'setWordText'; wordId: string; text: string }
+  | { type: 'replaceWords'; pairs: { wordId: string; text: string }[] }
   | { type: 'splitAt'; time: number }
   | { type: 'rippleDelete'; start: number; end: number }
   | { type: 'rippleDeleteMarks' }
+  | { type: 'liftMarks' }
+  | { type: 'insertGap'; time: number; duration: number }
+  | { type: 'removeInsert'; insertId: string }
   | { type: 'moveClip'; clipId: string; start: number; trackId?: string }
   | { type: 'trimClip'; clipId: string; edge: 'in' | 'out'; time: number }
-  | { type: 'trimPrimary'; segmentId: string; edge: 'in' | 'out'; sourceTime: number }
-  | { type: 'rippleTrimToPlayhead'; edge: 'in' | 'out'; time: number }
+  | { type: 'trimPrimary'; segmentId: string; edge: 'in' | 'out'; sourceTime: number; lift?: boolean }
+  | { type: 'rippleTrimToPlayhead'; edge: 'in' | 'out'; time: number; lift?: boolean }
+  | { type: 'replaceClipMedia'; clipId: string; asset: Asset }
+  | { type: 'setPan'; clipId: string; pan: number }
   | { type: 'setTransform'; clipId: string; transform: Partial<Transform> }
   | { type: 'setSegmentStyle'; segmentId: string; patch: Partial<Omit<SegmentStyle, 'id' | 'start' | 'end'>> }
   | { type: 'addKeyframe'; segmentId: string; time: number; transform: Partial<Transform> }
@@ -286,8 +323,8 @@ export type Command =
   | { type: 'applyDiarization'; assignments?: { start: number; end: number; speaker: string }[] }
   | { type: 'addOverlay'; start: number; duration: number; text: string }
   | { type: 'addZoom'; start: number; duration: number; scale: number }
-  | { type: 'addBroll'; start: number; duration: number; asset: Asset }
-  | { type: 'addAudio'; start: number; duration: number; asset: Asset }
+  | { type: 'addBroll'; start: number; duration: number; asset: Asset; inPoint?: number }
+  | { type: 'addAudio'; start: number; duration: number; asset: Asset; inPoint?: number }
   | { type: 'addRedaction'; start: number; duration: number }
   | { type: 'addTrack'; trackType: TrackType; name?: string }
   | { type: 'removeTrack'; trackId: string }
@@ -297,10 +334,26 @@ export type Command =
   | { type: 'setEncoder'; encoder: string }
   | { type: 'removeClip'; clipId: string }
   | { type: 'applySuggestion'; suggestionId: string }
+  | { type: 'applySuggestions'; suggestionIds: string[] }
   | { type: 'applySafeSuggestions' }
   | { type: 'dismissSuggestion'; suggestionId: string }
+  | { type: 'dismissPendingSuggestions' }
+  | { type: 'applySuggestionsByType'; suggestionType: SuggestionType }
   | { type: 'revertSuggestion'; suggestionId: string }
   | { type: 'revertSuggestionType'; suggestionType: SuggestionType }
+  | { type: 'duplicateClip'; clipId: string; start?: number }
+  | { type: 'pasteClip'; clip: Clip; start: number; trackId?: string }
+  | { type: 'applyClipLook'; clipIds: string[]; look: ClipLook }
+  | { type: 'slipClip'; clipId: string; delta: number }
+  | { type: 'rollClip'; clipId: string; edge: 'in' | 'out'; time: number }
+  | { type: 'slideClip'; clipId: string; start: number }
+  | { type: 'extendClip'; clipId: string; time: number }
+  | { type: 'nudgeClips'; clipIds: string[]; delta: number }
+  | { type: 'removeClips'; clipIds: string[] }
+  | { type: 'setSceneBounds'; sceneId: string; start?: number; end?: number }
+  | { type: 'setCanvas'; width: number; height: number }
+  | { type: 'splitScene'; sceneId: string; time: number }
+  | { type: 'mergeScenes'; sceneId: string; otherId: string }
   | { type: 'addTag'; start: number; end: number; kind: TagKind; label?: string }
   | { type: 'eraseTag'; start: number; end: number; kind?: TagKind }
   | { type: 'removeTag'; tagId: string }
@@ -312,6 +365,7 @@ export type Command =
   | { type: 'setSpeaker'; wordIds: string[]; speakerId: string }
   | { type: 'addSpeaker'; name?: string }
   | { type: 'renameSpeaker'; speakerId: string; name: string }
+  | { type: 'renameScene'; sceneId: string; title?: string; summary?: string }
   | { type: 'rebuildSuggestions' }
   | { type: 'setTranscript'; words: Word[] }
   | { type: 'cutSentence'; wordId: string }
@@ -325,9 +379,35 @@ export type Command =
   | { type: 'collapseRetakes' }
   | { type: 'keepTake'; sceneId: string }
   | { type: 'applyModelSuggestions' }
-  | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked' | 'name'>> }
+  | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked' | 'name' | 'solo'>> }
   | { type: 'relinkAsset'; assetId: string; path: string }
   | { type: 'setAssetProxy'; assetId: string; proxyPath: string | null }
+  | {
+      type: 'setAssetLooks'
+      assetId: string
+      waveform?: number[]
+      thumbnails?: string[]
+      proxyPath?: string | null
+    }
+  | {
+      type: 'setAnalysis'
+      silence?: AnalysisCache['silence']
+      staticRegions?: AnalysisCache['staticRegions']
+      loudness?: AnalysisCache['loudness']
+    }
+  | {
+      type: 'appendTake'
+      asset: Asset
+      words: Word[]
+      analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'>
+    }
+  | {
+      type: 'attachTakeIntel'
+      assetId: string
+      words?: Word[]
+      analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'>
+      whispered?: { text: string; start: number; end: number; speaker?: string }[] | null
+    }
 
 export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes' | 'effect'> {
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }

@@ -62,6 +62,8 @@ export function commandToTool(command: Command): PlannedCall {
       return { name: 'ripple_delete_marks', args: {} }
     case 'applySuggestion':
       return { name: 'apply_suggestion', args: { suggestionId: command.suggestionId } }
+    case 'applySuggestions':
+      return { name: 'apply_command', args: { command } }
     case 'applySafeSuggestions':
       return { name: 'apply_safe_edits', args: {} }
     case 'dismissSuggestion':

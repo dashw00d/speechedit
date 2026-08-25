@@ -18,5 +18,5 @@
     "vite.web.config.ts",
     "src/renderer/src/lib/exportGraph.ts"
   ],
-  "exclude": ["src/main/**/*.test.ts"]
+  "exclude": ["src/main/**/*.test.ts", "src/shared/**/*.test.ts"]
 }

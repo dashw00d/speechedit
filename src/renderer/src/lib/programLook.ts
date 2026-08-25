@@ -45,6 +45,8 @@ export interface ProgramLook {
   sourceTime: number
   incomingSource: number
   outgoingSource?: number
+  incomingInput?: string
+  outgoingInput?: string
   incomingOpacity: number
   outgoingOpacity: number
   incomingSpeed: number
@@ -85,6 +87,7 @@ export function xfadeProgress(job: GraphJob, outgoingIndex: number, t: number): 
 }
 
 export function sourceTimeAt(seg: ProgrammedSegment, t: number): number {
+  if (seg.kind === 'slug') return seg.start
   const local = Math.min(seg.programDuration, Math.max(0, t - seg.programStart))
   return seg.start + local * seg.speed
 }
@@ -134,11 +137,13 @@ export function layersAt(job: GraphJob, t: number): GraphLayer[] {
 export function nextProgramAfterCut(job: GraphJob, program: number): number | null {
   const segs = programmedSegments(job)
   const hits = segs.filter((s) => program >= s.programStart && program < s.programStart + s.programDuration)
+  if (hits.some((s) => s.kind === 'slug')) return null
   const seg = hits[hits.length - 1] ?? segs.find((s) => program < s.programStart) ?? segs[segs.length - 1]
-  const source = seg ? sourceTimeAt(seg, program) : 0
-  const inHole = segs.every((s) => source < s.start || source >= s.end)
+  if (!seg || seg.kind === 'slug') return null
+  const source = sourceTimeAt(seg, program)
+  const inHole = segs.every((s) => s.kind === 'slug' || source < s.start || source >= s.end)
   if (!inHole) return null
-  const next = segs.find((s) => s.start >= source)
+  const next = segs.find((s) => s.kind !== 'slug' && s.start >= source)
   return next ? next.programStart : null
 }
 
@@ -154,7 +159,9 @@ export function sampleProgram(job: GraphJob, t: number): ProgramLook {
   const inFade = incoming ? segmentFadeAt(job, incoming.i, t) : 1
   const outFade = outgoing ? segmentFadeAt(job, outgoing.i, t) : 0
   const incomingOpacity = incoming
-    ? (incoming.s.opacity ?? 1) * inFade * (outgoing ? progress : 1)
+    ? incoming.s.kind === 'slug'
+      ? 0
+      : (incoming.s.opacity ?? 1) * inFade * (outgoing ? progress : 1)
     : 0
   const outgoingOpacity = outgoing ? (outgoing.s.opacity ?? 1) * outFade * (1 - progress) : 0
 
@@ -166,8 +173,10 @@ export function sampleProgram(job: GraphJob, t: number): ProgramLook {
     incomingIndex: incoming?.i ?? -1,
     outgoingIndex: outgoing?.i ?? -1,
     sourceTime: incoming ? sourceTimeAt(incoming.s, t) : 0,
-    incomingSource: incoming ? sourceTimeAt(incoming.s, t) : 0,
-    outgoingSource: outgoing ? sourceTimeAt(outgoing.s, t) : undefined,
+    incomingSource: incoming ? sourceTimeAt(incoming.s, t) - (incoming.s.sourceOffset ?? 0) : 0,
+    outgoingSource: outgoing ? sourceTimeAt(outgoing.s, t) - (outgoing.s.sourceOffset ?? 0) : undefined,
+    incomingInput: incoming?.s.input,
+    outgoingInput: outgoing?.s.input,
     incomingOpacity,
     outgoingOpacity,
     incomingSpeed: incoming?.s.speed ?? 1,

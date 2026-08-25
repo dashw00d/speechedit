@@ -310,6 +310,25 @@ export function inferScenesLocal(
   return { scenes: normalizeScenes(scenes), suggestions: suggestionsFromScenes(scenes, existing) }
 }
 
+export function retakeSceneDropped(
+  project: Pick<Project, 'suggestions' | 'transcript'>,
+  scene: Interval
+): boolean {
+  const spoken = project.transcript.words.filter((word) => word.start >= scene.start && word.end <= scene.end)
+  return (
+    Boolean(suggestionForScene(project, scene)?.applied) ||
+    (spoken.length > 0 && spoken.every((word) => word.deleted))
+  )
+}
+
+export function hasUncollapsedRetakes(project: Pick<Project, 'scenes' | 'suggestions' | 'transcript'>): boolean {
+  return uncollapsedRetakeCount(project) > 0
+}
+
+export function uncollapsedRetakeCount(project: Pick<Project, 'scenes' | 'suggestions' | 'transcript'>): number {
+  return (project.scenes ?? []).filter((scene) => scene.kind === 'retake' && !retakeSceneDropped(project, scene)).length
+}
+
 export function retakeRanges(project: Pick<Project, 'scenes' | 'suggestions'>): Interval[] {
   const fromScenes = (project.scenes ?? [])
     .filter((s) => s.kind === 'retake')

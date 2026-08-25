@@ -108,14 +108,47 @@ export function parseAnyTranscript(name: string, text: string): Word[] {
   }
   if (lower.endsWith('.vtt')) return parseVtt(text)
   if (lower.endsWith('.srt')) return parseSrt(text)
+  if (lower.endsWith('.txt')) {
+    try {
+      return parseTranscriptJson(JSON.parse(text))
+    } catch {
+      const srt = parseSrt(text)
+      if (srt.length) return srt
+      return wordsFromPlainText(text)
+    }
+  }
   try {
     return parseTranscriptJson(JSON.parse(text))
   } catch (err) {
     if (err instanceof Error && /Transcript JSON needs/.test(err.message)) throw err
     const srt = parseSrt(text)
     if (srt.length) return srt
+    const plain = wordsFromPlainText(text)
+    if (plain.length) return plain
     throw err instanceof Error ? err : new Error('Could not read that transcript.')
   }
+}
+
+/** Last-resort drop: split words at 0.35s so a .txt is still editable. */
+export function wordsFromPlainText(text: string, step = 0.35): Word[] {
+  const tokens = text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+  return tokens.map((token, i) => ({
+    id: uid('w'),
+    text: token,
+    start: i * step,
+    end: i * step + step,
+    speaker: 'ryan',
+    deleted: false
+  }))
+}
+
+export function transcriptIsPlaceholder(words: Word[]): boolean {
+  if (!words.length) return true
+  return words.every((word) => /^Speech\s+\d+$/i.test(word.text.trim()))
 }
 
 export function wordsFromIslands(islands: { start: number; end: number }[]): Word[] {

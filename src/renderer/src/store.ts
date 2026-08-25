@@ -14,7 +14,7 @@ import {
 } from './lib/projectDocument'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
 import { wordRange } from './lib/transcriptEdit'
-import type { Command, Project, TagKind, Word } from './types'
+import type { Clip, ClipLook, Command, Project, TagKind, Word } from './types'
 
 const HISTORY_LIMIT = 80
 const COALESCE = new Set([
@@ -27,9 +27,37 @@ const COALESCE = new Set([
   'setPicture',
   'setFade',
   'setAudioMaster',
-  'setCutMargin'
+  'setCutMargin',
+  'slipClip',
+  'rollClip',
+  'slideClip',
+  'nudgeClips',
+  'setSceneBounds',
+  'setCanvas'
+])
+const SELECT_NEW_CLIP = new Set([
+  'addCaption',
+  'addZoom',
+  'addTitle',
+  'addRedaction',
+  'addBroll',
+  'addAudio',
+  'generateCaptions',
+  'addLowerThirds',
+  'duplicateClip',
+  'pasteClip'
 ])
 let lastCoalesce: { type: string; clipId?: string; at: number } | null = null
+
+function firstAddedClipId(before: Project, after: Project): string | undefined {
+  const beforeIds = new Set(before.tracks.flatMap((track) => track.clips.map((clip) => clip.id)))
+  for (const track of after.tracks) {
+    for (const clip of track.clips) {
+      if (!beforeIds.has(clip.id)) return clip.id
+    }
+  }
+  return undefined
+}
 
 export interface EditorState {
   project: Project
@@ -38,6 +66,9 @@ export interface EditorState {
   selectedWordIds: string[]
   selectedSceneId: string | null
   selectedClipId: string | null
+  selectedClipIds: string[]
+  clipClipboard: { kind: 'clip' | 'look'; clip?: Clip; look: ClipLook } | null
+  showSafeZone: boolean
   selectedSuggestionId: string | null
   selectedGap: { start: number; end: number } | null
   inspectorTab: 'transform' | 'audio' | 'caption' | 'project' | 'agent'
@@ -52,17 +83,21 @@ export interface EditorState {
   snap: boolean
   ripple: boolean
   tool: 'select' | 'guard' | 'blade'
-  guardKind: Extract<TagKind, 'keep' | 'demo'>
+  guardKind: TagKind
   documentPath: string | null
   lastSavedAt: number | null
   recoveryOffer: RecoveryRecord | null
   missingAssets: MediaRef[]
   dispatch: (command: Command) => void
+  replay: (command: Command) => void
   undo: () => void
   redo: () => void
   selectWords: (ids: string[], additive?: boolean) => void
   selectScene: (id: string | null) => void
-  selectClip: (id: string | null) => void
+  selectClip: (id: string | null, opts?: { additive?: boolean }) => void
+  selectClips: (ids: string[]) => void
+  setClipClipboard: (value: EditorState['clipClipboard']) => void
+  setShowSafeZone: (value: boolean) => void
   selectSuggestion: (id: string | null) => void
   selectGap: (gap: { start: number; end: number } | null) => void
   clearSelection: () => void
@@ -70,6 +105,8 @@ export interface EditorState {
   setReviewing: (value: boolean) => void
   setPreviewSafeCuts: (value: boolean) => void
   setShowNowWord: (value: boolean) => void
+  followPlayhead: boolean
+  setFollowPlayhead: (value: boolean) => void
   setPalette: (value: boolean) => void
   setAgentOpen: (value: boolean) => void
   setAnalyzing: (value: string | null) => void
@@ -187,24 +224,50 @@ export function flushWorkspace() {
   void flushPending()
 }
 
-function bootShowNowWord(): boolean {
-  if (typeof localStorage === 'undefined') return true
+type UiPrefs = {
+  showNowWord?: boolean
+  followPlayhead?: boolean
+  reviewRate?: number
+  showSafeZone?: boolean
+}
+
+function readUiPrefs(): UiPrefs {
+  if (typeof localStorage === 'undefined') return {}
   try {
-    const raw = JSON.parse(localStorage.getItem(UI_PREFS) ?? '{}') as { showNowWord?: boolean }
-    return raw.showNowWord !== false
+    return JSON.parse(localStorage.getItem(UI_PREFS) ?? '{}') as UiPrefs
   } catch {
-    return true
+    return {}
   }
 }
 
-function writeShowNowWord(value: boolean) {
+function writeUiPrefs(patch: UiPrefs) {
   if (typeof localStorage === 'undefined') return
   try {
-    const raw = JSON.parse(localStorage.getItem(UI_PREFS) ?? '{}') as Record<string, unknown>
-    localStorage.setItem(UI_PREFS, JSON.stringify({ ...raw, showNowWord: value }))
+    localStorage.setItem(UI_PREFS, JSON.stringify({ ...readUiPrefs(), ...patch }))
   } catch {
     /* ignore */
   }
+}
+
+function bootShowNowWord(): boolean {
+  return readUiPrefs().showNowWord !== false
+}
+
+function writeShowNowWord(value: boolean) {
+  writeUiPrefs({ showNowWord: value })
+}
+
+function bootFollowPlayhead(): boolean {
+  return readUiPrefs().followPlayhead !== false
+}
+
+function bootShowSafeZone(): boolean {
+  return readUiPrefs().showSafeZone === true
+}
+
+function bootReviewRate(): number {
+  const rate = readUiPrefs().reviewRate
+  return rate === 0.5 || rate === 2 ? rate : 1
 }
 
 function bootProject(): Project {
@@ -240,6 +303,7 @@ function resetView(
   | 'future'
   | 'selectedWordIds'
   | 'selectedClipId'
+  | 'selectedClipIds'
   | 'dirty'
   | 'documentPath'
   | 'lastSavedAt'
@@ -253,6 +317,7 @@ function resetView(
     future: [],
     selectedWordIds: [],
     selectedClipId: null,
+    selectedClipIds: [],
     dirty: extra.dirty,
     documentPath: extra.documentPath,
     lastSavedAt: extra.lastSavedAt,
@@ -270,12 +335,16 @@ export const useEditor = create<EditorState>((set, get) => ({
   selectedWordIds: [],
   selectedSceneId: null,
   selectedClipId: null,
+  selectedClipIds: [],
+  clipClipboard: null,
+  showSafeZone: bootShowSafeZone(),
   selectedSuggestionId: null,
   selectedGap: null,
   inspectorTab: 'project',
   reviewing: false,
   previewSafeCuts: false,
   showNowWord: bootShowNowWord(),
+  followPlayhead: bootFollowPlayhead(),
   palette: false,
   agentOpen: false,
   dirty: false,
@@ -303,12 +372,39 @@ export const useEditor = create<EditorState>((set, get) => ({
       now - lastCoalesce.at < 500
     lastCoalesce = { type: command.type, clipId, at: now }
     persist(next, { dirty: true })
+    const addedClipId = SELECT_NEW_CLIP.has(command.type) ? firstAddedClipId(project, next) : undefined
+    const addedClip = addedClipId
+      ? next.tracks.flatMap((track) => track.clips).find((clip) => clip.id === addedClipId)
+      : undefined
     set({
       project: next,
       past: coalesce ? past : [...past, project].slice(-HISTORY_LIMIT),
       future: [],
       dirty: true,
-      ...(command.type === 'applySafeSuggestions' ? { previewSafeCuts: false } : {})
+      ...(command.type === 'applySafeSuggestions' ? { previewSafeCuts: false } : {}),
+      ...(addedClipId
+        ? {
+            selectedClipId: addedClipId,
+            selectedClipIds: [addedClipId],
+            selectedWordIds: [],
+            selectedSceneId: null,
+            selectedSuggestionId: null,
+            selectedGap: null,
+            inspectorTab: addedClip?.text ? 'caption' : 'transform'
+          }
+        : {})
+    })
+  },
+  replay: (command) => {
+    const { project, past, future } = get()
+    const next = applyCommand(project, command)
+    if (next === project) return
+    persist(next, { dirty: true })
+    set({
+      project: next,
+      past: past.map((snapshot) => applyCommand(snapshot, command)),
+      future: future.map((snapshot) => applyCommand(snapshot, command)),
+      dirty: true
     })
   },
   undo: () => {
@@ -344,6 +440,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         selectedWordIds: sorted,
         selectedSceneId: null,
         selectedClipId: null,
+        selectedClipIds: [],
         selectedSuggestionId: null,
         selectedGap: null
       }
@@ -359,16 +456,26 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedSceneId: id,
       selectedWordIds: wordIds,
       selectedClipId: null,
+      selectedClipIds: [],
       selectedSuggestionId: null,
       selectedGap: null,
       inspectorTab: 'project'
     })
   },
-  selectClip: (id) => {
+  selectClip: (id, opts) => {
     const clip = get().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)
     const tab = clip?.text ? 'caption' : id ? 'transform' : 'project'
+    const existing = get().selectedClipIds
+    const selectedClipIds = !id
+      ? []
+      : opts?.additive
+        ? existing.includes(id)
+          ? existing.filter((row) => row !== id)
+          : [...existing, id]
+        : [id]
     set({
-      selectedClipId: id,
+      selectedClipId: selectedClipIds[selectedClipIds.length - 1] ?? null,
+      selectedClipIds,
       selectedWordIds: [],
       selectedSceneId: null,
       selectedSuggestionId: null,
@@ -376,12 +483,32 @@ export const useEditor = create<EditorState>((set, get) => ({
       inspectorTab: tab
     })
   },
+  selectClips: (ids) => {
+    const unique = [...new Set(ids)]
+    const last = unique[unique.length - 1] ?? null
+    const clip = last ? get().project.tracks.flatMap((t) => t.clips).find((c) => c.id === last) : undefined
+    set({
+      selectedClipId: last,
+      selectedClipIds: unique,
+      selectedWordIds: [],
+      selectedSceneId: null,
+      selectedSuggestionId: null,
+      selectedGap: null,
+      inspectorTab: clip?.text ? 'caption' : last ? 'transform' : 'project'
+    })
+  },
+  setClipClipboard: (value) => set({ clipClipboard: value }),
+  setShowSafeZone: (value) => {
+    writeUiPrefs({ showSafeZone: value })
+    set({ showSafeZone: value })
+  },
   selectSuggestion: (id) =>
     set({
       selectedSuggestionId: id,
       selectedWordIds: [],
       selectedSceneId: null,
       selectedClipId: null,
+      selectedClipIds: [],
       selectedGap: null
     }),
   selectGap: (gap) =>
@@ -390,6 +517,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedWordIds: [],
       selectedSceneId: null,
       selectedClipId: null,
+      selectedClipIds: [],
       selectedSuggestionId: null
     }),
   clearSelection: () =>
@@ -397,6 +525,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedWordIds: [],
       selectedSceneId: null,
       selectedClipId: null,
+      selectedClipIds: [],
       selectedSuggestionId: null,
       selectedGap: null
     }),
@@ -406,6 +535,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setShowNowWord: (value) => {
     writeShowNowWord(value)
     set({ showNowWord: value })
+  },
+  setFollowPlayhead: (value) => {
+    writeUiPrefs({ followPlayhead: value })
+    set({ followPlayhead: value })
   },
   setPalette: (value) => set({ palette: value }),
   setAgentOpen: (value) => set({ agentOpen: value }),
@@ -478,7 +611,10 @@ export interface PlaybackState {
   loop: boolean
   playUntil: number | null
   loopFrom: number | null
+  reviewRate: number
   pixelsPerSecond: number
+  fitPixelsPerSecond: number
+  setReviewRate: (value: number) => void
   play: () => void
   pause: () => void
   toggle: () => void
@@ -489,6 +625,8 @@ export interface PlaybackState {
   playLoop: (start: number, end: number) => void
   playSelectionOrMarks: () => void
   setPixelsPerSecond: (value: number) => void
+  setFitPixelsPerSecond: (value: number) => void
+  fitTimeline: () => void
   tickTo: (time: number) => void
 }
 
@@ -498,7 +636,9 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
   loop: false,
   playUntil: null,
   loopFrom: null,
+  reviewRate: bootReviewRate(),
   pixelsPerSecond: 72,
+  fitPixelsPerSecond: 60,
   play: () => set({ playing: true }),
   pause: () => set({ playing: false }),
   toggle: () => {
@@ -563,7 +703,17 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
     }
     set({ playing: true, playUntil: null })
   },
+  setReviewRate: (value) => {
+    const reviewRate = value === 0.5 || value === 2 ? value : 1
+    writeUiPrefs({ reviewRate })
+    set({ reviewRate })
+  },
   setPixelsPerSecond: (value) => set({ pixelsPerSecond: Math.min(280, Math.max(18, value)) }),
+  setFitPixelsPerSecond: (value) => set({ fitPixelsPerSecond: Math.min(280, Math.max(18, value)) }),
+  fitTimeline: () => {
+    const pps = get().fitPixelsPerSecond
+    set({ pixelsPerSecond: Math.min(280, Math.max(18, pps)) })
+  },
   tickTo: (time) => set({ programTime: time })
 }))
 

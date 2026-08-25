@@ -30,13 +30,14 @@ export function AgentPanel({
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState<{ q: string; a: string; calls: AgentCall[] }[]>([])
   const input = useRef<HTMLTextAreaElement>(null)
+  const inspectorTab = useEditor((s) => s.inspectorTab)
   const retakes = (project.scenes ?? []).filter((s) => s.kind === 'retake').length
   const demos = (project.scenes ?? []).filter((s) => s.kind === 'demo').length
   const recipe = useMemo(() => (intent.trim() ? planIntent(project, intent) : null), [intent, project])
 
   useEffect(() => {
-    if (variant === 'dock') input.current?.focus()
-  }, [variant])
+    if (variant === 'dock' || inspectorTab === 'agent') input.current?.focus()
+  }, [variant, inspectorTab])
 
   async function run(text: string) {
     const q = text.trim()
@@ -63,7 +64,7 @@ export function AgentPanel({
       {project.suggestions.filter((s) => !s.applied).length > 0 && (
         <p className="help agent-hint">
           {project.suggestions.filter((s) => !s.applied).length} open edits — try Auto-cut or ask why a suggestion is
-          guarded.
+          protected.
         </p>
       )}
       <p className="help">
@@ -104,9 +105,9 @@ export function AgentPanel({
           }}
         />
       </label>
-      {recipe && recipe.commands.length > 0 && (
-        <p className="help agent-recipe">
-          Will run: {recipe.commands.map((c) => c.type).join(' → ')} — {recipe.note}
+      {recipe && (
+        <p className="help agent-recipe" data-ready={recipe.commands.length > 0 || undefined}>
+          {recipe.commands.length > 0 ? `Will: ${recipe.note}` : recipe.note}
         </p>
       )}
       <button className="chip" disabled={busy || !intent.trim()} onClick={() => void run(intent)}>

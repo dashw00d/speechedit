@@ -2,7 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { applyCommand } from './commands'
 import { createDemoProject } from './demo'
 import { snapTime, sourceToProgramOf } from './resolver'
-import { allWordsMatchingPhrase, coveringAppliedSuggestion, PARAGRAPH_GAP, paragraphIds } from './transcriptEdit'
+import {
+  allWordsMatchingPhrase,
+  coveringAppliedSuggestion,
+  extendSelection,
+  PARAGRAPH_GAP,
+  paragraphIds,
+  shrinkSelection
+} from './transcriptEdit'
 import type { Word } from '../types'
 
 function w(id: string, text: string, start: number, end: number): Word {
@@ -48,6 +55,15 @@ describe('snapTime word edges', () => {
     const start = sourceToProgramOf(cut, first!.start)
     expect(snapTime(cut, start + 0.08)).toBeCloseTo(start, 2)
     expect(snapTime(cut, start + 0.4)).not.toBeCloseTo(start, 2)
+  })
+})
+
+describe('grow and shrink selection', () => {
+  test('] adds the next word and [ drops the last', () => {
+    const words = [w('a', 'one', 0, 0.2), w('b', 'two', 0.3, 0.5), w('c', 'three', 0.6, 0.8)]
+    expect(extendSelection(words, ['a'], 1)).toEqual(['a', 'b'])
+    expect(shrinkSelection(words, ['a', 'b', 'c'])).toEqual(['a', 'b'])
+    expect(shrinkSelection(words, ['a'])).toEqual(['a'])
   })
 })
 

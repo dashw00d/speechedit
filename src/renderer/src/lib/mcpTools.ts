@@ -23,6 +23,9 @@ export const COMMAND_BUS: Command['type'][] = [
   'splitAt',
   'rippleDelete',
   'rippleDeleteMarks',
+  'liftMarks',
+  'insertGap',
+  'removeInsert',
   'applySuggestion',
   'applySafeSuggestions',
   'dismissSuggestion',
@@ -52,7 +55,8 @@ export const COMMAND_BUS: Command['type'][] = [
   'setSpeed',
   'setSpeaker',
   'addSpeaker',
-  'renameSpeaker'
+  'renameSpeaker',
+  'renameScene'
 ]
 
 export interface ToolSpec {
@@ -75,7 +79,7 @@ function num(value: unknown, fallback = 0): number {
 export const MCP_TOOLS: ToolSpec[] = [
   {
     name: 'get_context',
-    description: 'Full editorial brief: transcript with cuts marked, scenes, guards, suggestions, program length.',
+    description: 'Full editorial brief: transcript with cuts marked, scenes, protected ranges, suggestions, program length.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -104,7 +108,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'get_tags',
-    description: 'Keep/demo/note guards that punch holes in auto-edit.',
+    description: 'Protected / silent-demo / note ranges that Auto Edit skips.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -119,7 +123,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'get_snapshot',
-    description: 'Compact view of the same project JSON (no waveforms). Enough to auto-cut with guards, retakes, speakers, I/O.',
+    description: 'Compact view of the same project JSON (no waveforms). Enough to auto-cut with protected ranges, retakes, speakers, and In/Out marks.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -129,7 +133,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'get_selection',
-    description: 'Selected words, selected clip, playhead (program + source), and I/O marks.',
+    description: 'Selected words, selected clip, playhead (program + source), and In/Out marks.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -201,7 +205,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'tighten',
-    description: 'Cut gaps in a source range, honoring keep/demo guards.',
+    description: 'Cut gaps in a source range. Protected and silent-demo ranges stay.',
     inputSchema: {
       type: 'object',
       properties: { start: { type: 'number' }, end: { type: 'number' } },
@@ -210,7 +214,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'apply_safe_edits',
-    description: 'Apply safe silence/filler/normalize suggestions. Guarded demo/keep ranges stay.',
+    description: 'Apply safe silence/filler/normalize suggestions. Protected demo/keep ranges stay.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -225,8 +229,22 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'ripple_delete_marks',
-    description: 'Ripple-delete the current I/O marks.',
+    description: 'Cut the marked In/Out range and close the gap.',
     inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'lift_marks',
+    description: 'Cut the marked In/Out range but leave a black/silence hold so later clips stay put.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'insert_gap',
+    description: 'Insert a program-time hold (black + silence) at time, shifting later overlays.',
+    inputSchema: {
+      type: 'object',
+      properties: { time: { type: 'number' }, duration: { type: 'number' } },
+      required: ['time']
+    }
   },
   {
     name: 'apply_suggestion',
@@ -254,13 +272,13 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'add_tag',
-    description: 'Paint a keep/demo/note guard so Auto Edit skips that footage. Keep/demo also puts back overlapping auto-edits.',
+    description: 'Protect a source range (keep / silent demo / note). Auto Edit skips it. Keep and demo also put back overlapping auto-edits.',
     inputSchema: {
       type: 'object',
       properties: {
         start: { type: 'number' },
         end: { type: 'number' },
-        kind: { type: 'string', enum: ['keep', 'demo', 'note'] },
+        kind: { type: 'string', enum: ['keep', 'demo', 'note', 'hook', 'cta'] },
         label: { type: 'string' }
       },
       required: ['start', 'end', 'kind']
@@ -268,7 +286,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'erase_tag',
-    description: 'Erase guards in a source range.',
+    description: 'Remove protection in a source range.',
     inputSchema: {
       type: 'object',
       properties: { start: { type: 'number' }, end: { type: 'number' }, kind: { type: 'string' } },
@@ -332,6 +350,19 @@ export const MCP_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: { speakerId: { type: 'string' }, name: { type: 'string' } },
       required: ['speakerId', 'name']
+    }
+  },
+  {
+    name: 'rename_scene',
+    description: 'Rename an editorial scene heading or rewrite its summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: { type: 'string' },
+        title: { type: 'string' },
+        summary: { type: 'string' }
+      },
+      required: ['sceneId']
     }
   },
   {
@@ -587,11 +618,12 @@ export async function runTool(
           type: 'deleteRange',
           start: num(args.start),
           end: num(args.end),
+          lift: Boolean(args.lift),
           source: args.source === 'transcript' || args.source === 'repeat' || args.source === 'silence' || args.source === 'filler'
             ? args.source
             : 'model'
         },
-        'Cut range.'
+        args.lift ? 'Lifted range.' : 'Cut range.'
       )
     case 'toggle_words': {
       const wordIds = Array.isArray(args.wordIds) ? args.wordIds.map(String) : []
@@ -623,7 +655,14 @@ export async function runTool(
     case 'dismiss_suggestion':
       return apply({ type: 'dismissSuggestion', suggestionId: String(args.suggestionId) }, 'Dismissed suggestion.')
     case 'ripple_delete_marks':
-      return apply({ type: 'rippleDeleteMarks' }, 'Ripple deleted I/O.')
+      return apply({ type: 'rippleDeleteMarks' }, 'Cut the marked range.')
+    case 'lift_marks':
+      return apply({ type: 'liftMarks' }, 'Lifted the marked range.')
+    case 'insert_gap':
+      return apply(
+        { type: 'insertGap', time: num(args.time), duration: num(args.duration, 1) },
+        'Inserted a hold.'
+      )
     case 'apply_suggestion':
       return apply({ type: 'applySuggestion', suggestionId: String(args.suggestionId) }, 'Applied suggestion.')
     case 'revert_suggestion':
@@ -691,6 +730,16 @@ export async function runTool(
       return apply(
         { type: 'renameSpeaker', speakerId: String(args.speakerId), name: String(args.name ?? '') },
         'Renamed speaker.'
+      )
+    case 'rename_scene':
+      return apply(
+        {
+          type: 'renameScene',
+          sceneId: String(args.sceneId),
+          title: args.title == null ? undefined : String(args.title),
+          summary: args.summary == null ? undefined : String(args.summary)
+        },
+        'Renamed scene.'
       )
     case 'rebuild_suggestions':
       return apply({ type: 'rebuildSuggestions' }, 'Rebuilt suggestions.')

@@ -1,23 +1,36 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { analysisCachePath, peaksCachePath, readJsonCache, thumbsCachePath, writeJsonCache } from './mediaCache'
 import {
-  assertMixGraph,
-  buildJoinGraph,
-  buildMixGraph,
-  buildSegmentFilters,
+  assertProgramGraph,
+  buildProgramGraph,
+  encoderFallback,
+  programReadArgs,
   explainExportError,
   explainGraphBuildError,
-  jobDuration,
+  PROGRAM_GRAPH_SCRIPT,
   summarizeJob,
   validateExportJob,
   type GraphJob
 } from '../renderer/src/lib/exportGraph'
+import {
+  ANALYSIS_CACHE_VERSION,
+  LOOK_LANE_LIMIT,
+  WorkLane,
+  loudnessDetectArgs,
+  sceneDetectArgs,
+  silenceDetectArgs,
+  thumbPassArgs,
+  thumbSeekArgs,
+  thumbSeekTimes,
+  wantsSeekThumbs,
+  waveformLookArgs
+} from '../shared/importLooks'
 import { JobCancelled, isJobCancelled, throwIfAborted, type MediaJobKind } from '../shared/mediaJob'
 import { parseStreamRotation, transposeFilters, type QuarterTurn } from '../shared/mediaOrient'
-import { isVariableFrameRate } from '../shared/proxy'
+import { isVariableFrameRate, proxyCacheMatchesSource } from '../shared/proxy'
 import { killChild, runChild, withTempDir } from './childJob'
 import type { ModelEndpointOpts } from './transcribe'
 
@@ -30,72 +43,7 @@ export interface EncoderOption {
   hardware: boolean
 }
 
-export interface ProgramExportJob {
-  input: string
-  output: string
-  fps: number
-  width: number
-  height: number
-  volume: number
-  fadeIn: number
-  fadeOut: number
-  encoder?: string
-  inputRotation?: number
-  normalize?: boolean
-  eqLow?: number
-  eqMid?: number
-  eqHigh?: number
-  compress?: boolean
-  duck?: number
-  duckWindows?: { start: number; end: number }[]
-  duration?: number
-  beds?: {
-    path: string
-    start: number
-    duration: number
-    inPoint: number
-    volume: number
-    fadeIn: number
-    fadeOut: number
-    id?: string
-  }[]
-  segments: {
-    start: number
-    end: number
-    speed: number
-    scale: number
-    x: number
-    y: number
-    volume: number
-    fadeIn: number
-    fadeOut: number
-    overlapNext?: number
-    programStart?: number
-  }[]
-  layers: {
-    kind: 'caption' | 'overlay' | 'image' | 'blur'
-    start: number
-    end: number
-    text: string
-    fontSize: number
-    x: number
-    y: number
-    scale: number
-    opacity: number
-    path?: string
-    fadeIn?: number
-    fadeOut?: number
-    inPoint?: number
-    loop?: boolean
-    id?: string
-    speed?: number
-    align?: 'left' | 'center' | 'right'
-    fill?: string
-    stroke?: string
-    position?: 'lower' | 'center' | 'upper'
-    rotation?: number
-  }[]
-}
+export type ProgramExportJob = GraphJob
 
 export type ExportProgress = { ratio: number; stage: string }
 
@@ -118,6 +66,9 @@ export interface SilenceGap {
 }
 
 const FFMPEG_MISSING = 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
+
+/** Waveform, thumbs, silence, scenes, and loudness share this. Proxy and Whisper do not. */
+export const importLookLane = new WorkLane(LOOK_LANE_LIMIT)
 
 function toolMissing(cmd: string): string {
   if (cmd === 'ffmpeg' || cmd === 'ffprobe') return FFMPEG_MISSING
@@ -289,6 +240,10 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
   }
 }
 
+export function proxyPartialPath(output: string): string {
+  return `${output}.${process.pid}.partial.mp4`
+}
+
 export async function makeProxy(file: string, output: string, signal?: AbortSignal): Promise<string> {
   throwIfAborted(signal, 'import')
   if (!file) throw new Error('Pick a media file to import.')
@@ -296,11 +251,14 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
     throw new Error(`Can't open that recording:\n${file}\nPick a real media file.`)
   }
   await mkdir(dirname(output), { recursive: true })
+  const info = await probe(file, signal)
   if (existsSync(output)) {
     const cached = await probe(output, signal).catch(() => null)
-    if (cached?.hasVideo && cached.duration > 0.2) return output
+    if (cached?.hasVideo && proxyCacheMatchesSource(info.duration, cached.duration)) return output
+    await rm(output, { force: true }).catch(() => undefined)
   }
-  const info = await probe(file, signal)
+  const tmp = proxyPartialPath(output)
+  await rm(tmp, { force: true }).catch(() => undefined)
   const orient = transposeFilters(info.rotation)
   const args = [
     '-y',
@@ -325,9 +283,16 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
   ]
   if (info.hasAudio) args.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2')
   else args.push('-an')
-  args.push(output)
-  await runStrict('ffmpeg', args, signal, 'import')
-  return output
+  args.push('-f', 'mp4', tmp)
+  try {
+    await runStrict('ffmpeg', args, signal, 'import')
+    await rm(output, { force: true }).catch(() => undefined)
+    await rename(tmp, output)
+    return output
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
 }
 
 export async function waveform(file: string, samples = 1800, signal?: AbortSignal): Promise<number[]> {
@@ -337,8 +302,8 @@ export async function waveform(file: string, samples = 1800, signal?: AbortSigna
   if (hit?.v === 1 && hit.samples === samples && Array.isArray(hit.peaks) && hit.peaks.length) {
     return hit.peaks
   }
-  const args = ['-hide_banner', '-loglevel', 'error', '-i', file, '-ac', '1', '-ar', '8000', '-f', 'f32le', '-acodec', 'pcm_f32le', 'pipe:1']
-  return new Promise((resolve, reject) => {
+  const args = waveformLookArgs(file)
+  return importLookLane.run(() => new Promise((resolve, reject) => {
     const child = spawn('ffmpeg', args)
     const chunks: Buffer[] = []
     const onAbort = () => killChild(child)
@@ -381,7 +346,7 @@ export async function waveform(file: string, samples = 1800, signal?: AbortSigna
           .then(() => resolve(out))
       })
     })
-  })
+  }), signal, 'import')
 }
 
 export async function detectSilence(
@@ -390,9 +355,8 @@ export async function detectSilence(
   min = 0.35,
   signal?: AbortSignal
 ): Promise<SilenceGap[]> {
-  const text = await run(
-    'ffmpeg',
-    ['-i', file, '-af', `silencedetect=n=${threshold}:d=${min}`, '-f', 'null', '-'],
+  const text = await importLookLane.run(
+    () => run('ffmpeg', silenceDetectArgs(file, threshold, min), signal, 'import'),
     signal,
     'import'
   )
@@ -411,9 +375,10 @@ export async function detectScenes(
   file: string,
   signal?: AbortSignal
 ): Promise<{ times: number[]; staticRegions: SilenceGap[] }> {
-  const text = await run(
-    'ffmpeg',
-    ['-i', file, '-vf', "select='gt(scene,0.22)',showinfo", '-f', 'null', '-'],
+  const info = await probe(file, signal)
+  if (!info.hasVideo) return { times: [], staticRegions: [] }
+  const text = await importLookLane.run(
+    () => run('ffmpeg', sceneDetectArgs(file, info), signal, 'import'),
     signal,
     'import'
   )
@@ -422,7 +387,6 @@ export async function detectScenes(
     const hit = line.match(/pts_time:([\d.]+)/)
     if (hit) times.push(Number(hit[1]))
   }
-  const info = await probe(file, signal)
   const staticRegions: SilenceGap[] = []
   let cursor = 0
   const marks = [...times, info.duration]
@@ -437,7 +401,11 @@ export async function detectLoudness(
   file: string,
   signal?: AbortSignal
 ): Promise<{ start: number; end: number; lufs: number }[]> {
-  const text = await run('ffmpeg', ['-i', file, '-af', 'ebur128=peak=true', '-f', 'null', '-'], signal, 'import')
+  const text = await importLookLane.run(
+    () => run('ffmpeg', loudnessDetectArgs(file), signal, 'import'),
+    signal,
+    'import'
+  )
   const windows: { start: number; end: number; lufs: number }[] = []
   for (const line of text.split('\n')) {
     const m = line.match(/t:\s*([\d.]+).*I:\s*([-\d.]+)/)
@@ -463,76 +431,30 @@ export async function analyzeMedia(
   throwIfAborted(signal, 'import')
   const cache = analysisCachePath(file)
   const hit = await readJsonCache<{ v: number } & CachedAnalysis>(cache)
-  if (hit?.v === 1 && Array.isArray(hit.silence) && hit.scenes && Array.isArray(hit.loudness)) {
+  if (hit?.v === ANALYSIS_CACHE_VERSION && Array.isArray(hit.silence) && hit.scenes && Array.isArray(hit.loudness)) {
     onProgress?.({ stage: 'done', ratio: 1 })
     return { silence: hit.silence, scenes: hit.scenes, loudness: hit.loudness }
   }
-  onProgress?.({ stage: 'silence', ratio: 0.15 })
+  onProgress?.({ stage: 'analyze', ratio: 0.2 })
   const silence = await detectSilence(file, '-30dB', 0.35, signal)
-  onProgress?.({ stage: 'motion', ratio: 0.45 })
-  const scenes = await detectScenes(file, signal).catch((err) => {
-    if (isJobCancelled(err)) throw err
-    return { times: [], staticRegions: [] }
-  })
-  onProgress?.({ stage: 'loudness', ratio: 0.7 })
-  const loudness = await detectLoudness(file, signal).catch((err) => {
-    if (isJobCancelled(err)) throw err
-    return []
-  })
+  onProgress?.({ stage: 'analyze', ratio: 0.5 })
+  const [scenes, loudness] = await Promise.all([
+    detectScenes(file, signal).catch((err) => {
+      if (isJobCancelled(err)) throw err
+      return { times: [], staticRegions: [] }
+    }),
+    detectLoudness(file, signal).catch((err) => {
+      if (isJobCancelled(err)) throw err
+      return []
+    })
+  ])
   onProgress?.({ stage: 'done', ratio: 1 })
-  await writeJsonCache(cache, { v: 1, silence, scenes, loudness }).catch(() => undefined)
+  await writeJsonCache(cache, { v: ANALYSIS_CACHE_VERSION, silence, scenes, loudness }).catch(() => undefined)
   return { silence, scenes, loudness }
 }
 
 function asGraphJob(job: ProgramExportJob): GraphJob {
   return job
-}
-
-async function joinParts(
-  dir: string,
-  parts: string[],
-  job: ProgramExportJob,
-  encoder: string,
-  onProgress?: (info: ExportProgress) => void,
-  signal?: AbortSignal
-): Promise<string> {
-  const body = join(dir, 'body.mp4')
-  if (parts.length === 1) {
-    await runFfmpeg(['-y', '-i', parts[0], '-c', 'copy', body], undefined, signal)
-    return body
-  }
-  const joinGraph = buildJoinGraph(asGraphJob(job), parts.length)
-  if (!joinGraph) {
-    const concatList = join(dir, 'list.txt')
-    await writeFile(concatList, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'))
-    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concatList, '-c', 'copy', body], undefined, signal)
-    return body
-  }
-  const args = ['-y']
-  for (const part of parts) args.push('-i', part)
-  args.push(
-    '-filter_complex',
-    joinGraph.filterComplex,
-    '-map',
-    joinGraph.mapVideo,
-    '-map',
-    joinGraph.mapAudio,
-    ...videoEncodeArgs(encoder),
-    ...audioEncodeArgs(),
-    body
-  )
-  const total = jobDuration(asGraphJob(job))
-  await runFfmpeg(
-    args,
-    (seconds) => {
-      onProgress?.({
-        ratio: 0.72 + Math.min(0.1, (seconds / Math.max(0.01, total)) * 0.1),
-        stage: 'joining dissolves'
-      })
-    },
-    signal
-  )
-  return body
 }
 
 export async function exportProgram(
@@ -542,8 +464,17 @@ export async function exportProgram(
 ): Promise<void> {
   throwIfAborted(signal, 'export')
   if (!job.segments.length) throw new Error('Nothing to export — the timeline is empty.')
-  if (!existsSync(job.input)) {
-    throw new Error(`Recording is missing:\n${job.input}\nRe-import the media and export again.`)
+  const sourcePaths = [
+    job.input,
+    ...(job.inputs ?? []).map((row) => row.path)
+  ].filter((path, i, all) => path && all.indexOf(path) === i)
+  for (const path of sourcePaths) {
+    if (!existsSync(path)) {
+      throw new Error(`Recording is missing:\n${path}\nRelink the take and export again.`)
+    }
+  }
+  if (!sourcePaths.length) {
+    throw new Error('Recording is missing. Re-import the media and export again.')
   }
   const graphJob = asGraphJob(job)
   const invalid = validateExportJob(graphJob)
@@ -558,99 +489,82 @@ export async function exportProgram(
       throw new Error(`Overlay or still is missing:\n${layer.path}\nRelink it and export again.`)
     }
   }
-  let mix
+  const fontFile = findExportFont()
+  throwIfAborted(signal, 'export')
+  let encoder = await resolveEncoder(job.encoder)
+  throwIfAborted(signal, 'export')
+  let program
   try {
-    mix = buildMixGraph(graphJob, { fontFile: findExportFont() })
-    assertMixGraph(mix)
+    program = buildProgramGraph(graphJob, { fontFile })
+    assertProgramGraph(program)
   } catch (err) {
     throw new Error(explainGraphBuildError(err))
   }
-  throwIfAborted(signal, 'export')
-  onProgress?.({ ratio: 0, stage: summarizeJob(graphJob, mix) })
-  const encoder = await resolveEncoder(job.encoder)
-  throwIfAborted(signal, 'export')
-  const duration = jobDuration(graphJob)
+  const duration = program.duration
+  const stage = program.notes.length
+    ? `encoding program (${job.segments.length} keep${job.segments.length === 1 ? '' : 's'} · ${program.notes.join(', ')})`
+    : `encoding program (${job.segments.length} keep${job.segments.length === 1 ? '' : 's'})`
+  onProgress?.({ ratio: 0, stage: summarizeJob(graphJob, program) })
   let wroteOutput = false
   let completed = false
-  try {
-    await withTempDir('speechedit-', async (dir) => {
-      throwIfAborted(signal, 'export')
-      const parts: string[] = []
-      for (let i = 0; i < job.segments.length; i++) {
-        throwIfAborted(signal, 'export')
-        const seg = job.segments[i]
-        const part = join(dir, `p${i}.mp4`)
-        parts.push(part)
-        let filters
-        try {
-          filters = buildSegmentFilters(graphJob, seg, i)
-        } catch (err) {
-          throw new Error(explainGraphBuildError(err))
-        }
-        const stage = `encoding clip ${i + 1}/${job.segments.length}`
-        await runFfmpeg(
-          [
-            '-y',
-            '-noautorotate',
-            '-ss',
-            seg.start.toFixed(3),
-            '-to',
-            seg.end.toFixed(3),
-            '-i',
-            job.input,
-            '-vf',
-            filters.vf,
-            '-af',
-            filters.af,
-            '-t',
-            filters.duration.toFixed(3),
-            ...videoEncodeArgs(encoder),
-            ...audioEncodeArgs(),
-            part
-          ],
-          (seconds) => {
-            const inner = Math.min(1, seconds / Math.max(0.01, filters.duration))
-            onProgress?.({
-              ratio: ((i + inner) / (job.segments.length + 2)) * 0.72,
-              stage
-            })
-          },
-          signal
-        )
-        onProgress?.({ ratio: ((i + 1) / (job.segments.length + 2)) * 0.72, stage })
-      }
-      const body = await joinParts(dir, parts, job, encoder, onProgress, signal)
-      onProgress?.({ ratio: 0.82, stage: mix.notes.length ? `mixing ${mix.notes.join(', ')}` : 'writing program' })
 
-      const args = ['-y', '-i', body]
-      for (const input of mix.inputs) args.push(...input.args)
-      if (mix.filterComplex) {
-        args.push('-filter_complex', mix.filterComplex, '-map', mix.mapVideo, '-map', mix.mapAudio)
-        if (mix.encodeVideo) args.push(...videoEncodeArgs(encoder))
-        else args.push('-c:v', 'copy')
-        if (mix.encodeAudio) args.push(...audioEncodeArgs())
-        else args.push('-c:a', 'copy')
-      } else {
-        if (mix.simpleAudio) args.push('-af', mix.simpleAudio)
-        args.push('-c:v', 'copy')
-        if (mix.encodeAudio) args.push(...audioEncodeArgs())
-        else args.push('-c:a', 'copy')
+  const runEncoded = async (
+    argsFor: (enc: string) => string[],
+    onTime?: (seconds: number) => void
+  ) => {
+    try {
+      await runFfmpeg(argsFor(encoder), onTime, signal)
+    } catch (err) {
+      const next = encoderFallback(encoder, err instanceof Error ? err.message : String(err))
+      if (!next) throw err
+      encoder = next
+      onProgress?.({
+        ratio: 0.72,
+        stage: 'Hardware encoder failed. Finishing with x264 (CPU).'
+      })
+      await runFfmpeg(argsFor(encoder), onTime, signal)
+    }
+  }
+
+  const runProgram = async (graphArgs: string[]) => {
+    wroteOutput = true
+    onProgress?.({ ratio: 0.04, stage })
+    await runEncoded(
+      (enc) => [
+        '-y',
+        ...programReadArgs(graphJob, program.extraInputs),
+        ...graphArgs,
+        ...(job.audioOnly
+          ? ['-map', program.mapAudio, '-vn']
+          : ['-map', program.mapVideo, '-map', program.mapAudio, ...videoEncodeArgs(enc)]),
+        '-t',
+        duration.toFixed(3),
+        ...audioEncodeArgs(),
+        job.output
+      ],
+      (seconds) => {
+        onProgress?.({
+          ratio: 0.04 + Math.min(0.96, (seconds / Math.max(0.01, duration)) * 0.96),
+          stage
+        })
       }
-      args.push('-t', duration.toFixed(3), job.output)
-      wroteOutput = true
-      await runFfmpeg(
-        args,
-        (seconds) => {
-          onProgress?.({
-            ratio: 0.82 + Math.min(0.18, (seconds / Math.max(0.01, duration)) * 0.18),
-            stage: mix.notes.length ? `mixing ${mix.notes.join(', ')}` : 'writing program'
-          })
-        },
-        signal
-      )
-      completed = true
-      onProgress?.({ ratio: 1, stage: 'done' })
-    })
+    )
+  }
+
+  try {
+    if (program.filterComplex.length > PROGRAM_GRAPH_SCRIPT) {
+      await withTempDir('speechedit-', async (dir) => {
+        throwIfAborted(signal, 'export')
+        const script = join(dir, 'program.ff')
+        await writeFile(script, program.filterComplex, 'utf8')
+        await runProgram(['-filter_complex_script', script])
+      })
+    } else {
+      throwIfAborted(signal, 'export')
+      await runProgram(['-filter_complex', program.filterComplex])
+    }
+    completed = true
+    onProgress?.({ ratio: 1, stage: 'done' })
   } catch (err) {
     if (wroteOutput && !completed && job.output) {
       await rm(job.output, { force: true }).catch(() => undefined)
@@ -695,6 +609,16 @@ export async function exportCut(
   )
 }
 
+async function readThumbDataUrls(dir: string): Promise<string[]> {
+  const names = (await readdir(dir)).filter((n) => n.endsWith('.jpg')).sort()
+  const out: string[] = []
+  for (const name of names) {
+    const buf = await readFile(join(dir, name))
+    out.push(`data:image/jpeg;base64,${buf.toString('base64')}`)
+  }
+  return out
+}
+
 export async function thumbnails(file: string, count = 20, signal?: AbortSignal): Promise<string[]> {
   throwIfAborted(signal, 'import')
   const cache = thumbsCachePath(file)
@@ -710,31 +634,33 @@ export async function thumbnails(file: string, count = 20, signal?: AbortSignal)
   try {
     return await withTempDir('speechedit-thumbs-', async (dir) => {
       throwIfAborted(signal, 'import')
-      const fps = Math.max(0.05, count / Math.max(1, info.duration))
-      await runStrict(
-        'ffmpeg',
-        [
-          '-y',
-          '-noautorotate',
-          '-i',
-          file,
-          '-vf',
-          [...transposeFilters(info.rotation), `fps=${fps.toFixed(3)}`, 'scale=160:90:force_original_aspect_ratio=increase', 'crop=160:90'].join(','),
-          '-frames:v',
-          String(count),
-          '-q:v',
-          '6',
-          join(dir, 't%03d.jpg')
-        ],
+      const out = await importLookLane.run(
+        async () => {
+          if (wantsSeekThumbs(info.duration, count)) {
+            let i = 0
+            for (const time of thumbSeekTimes(info.duration, count)) {
+              throwIfAborted(signal, 'import')
+              try {
+                await runStrict(
+                  'ffmpeg',
+                  thumbSeekArgs(file, join(dir, `t${String(i).padStart(3, '0')}.jpg`), time, info.rotation),
+                  signal,
+                  'import'
+                )
+                i += 1
+              } catch (err) {
+                if (isJobCancelled(err)) throw err
+              }
+            }
+          } else {
+            const fps = Math.max(0.05, count / Math.max(1, info.duration))
+            await runStrict('ffmpeg', thumbPassArgs(file, join(dir, 't%03d.jpg'), fps, count, info.rotation), signal, 'import')
+          }
+          return readThumbDataUrls(dir)
+        },
         signal,
         'import'
       )
-      const names = (await readdir(dir)).filter((n) => n.endsWith('.jpg')).sort()
-      const out: string[] = []
-      for (const name of names) {
-        const buf = await readFile(join(dir, name))
-        out.push(`data:image/jpeg;base64,${buf.toString('base64')}`)
-      }
       if (out.length) await writeJsonCache(cache, { v: 1, count, thumbs: out }).catch(() => undefined)
       return out
     })

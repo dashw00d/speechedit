@@ -91,6 +91,106 @@ export class JobGate {
   }
 }
 
+export type ImportLingerKind = 'proxy' | 'whisper'
+
+/** Background import work (Whisper, preview proxy) that must not hold the ffmpeg job gate. */
+export class ImportLinger {
+  private controllers = new Map<AbortController, ImportLingerKind>()
+
+  get size(): number {
+    return this.controllers.size
+  }
+
+  sizeOf(kind: ImportLingerKind): number {
+    return [...this.controllers.values()].filter((row) => row === kind).length
+  }
+
+  begin(kind: ImportLingerKind = 'proxy'): AbortSignal {
+    const abort = new AbortController()
+    this.controllers.set(abort, kind)
+    abort.signal.addEventListener('abort', () => this.controllers.delete(abort), { once: true })
+    return abort.signal
+  }
+
+  finish(signal: AbortSignal): void {
+    for (const abort of this.controllers.keys()) {
+      if (abort.signal === signal) {
+        this.controllers.delete(abort)
+        break
+      }
+    }
+  }
+
+  abort(kind?: ImportLingerKind): void {
+    for (const [abort, row] of [...this.controllers]) {
+      if (kind && row !== kind) continue
+      this.controllers.delete(abort)
+      abort.abort()
+    }
+  }
+
+  abortAll(): void {
+    this.abort()
+  }
+}
+
+export function beginExportExclusive(jobs: JobGate, lingers: ImportLinger): AbortSignal {
+  const signal = jobs.start('export')
+  lingers.abort('proxy')
+  return signal
+}
+
+export function waitWhileExporting(jobs: JobGate, signal: AbortSignal, intervalMs = 25): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setInterval> | undefined
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      if (timer) clearInterval(timer)
+      signal.removeEventListener('abort', onAbort)
+      fn()
+    }
+    const onAbort = () => finish(() => reject(new JobCancelled('import')))
+    if (signal.aborted) {
+      reject(new JobCancelled('import'))
+      return
+    }
+    if (jobs.kind !== 'export') {
+      resolve()
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    timer = setInterval(() => {
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      if (jobs.kind !== 'export') finish(() => resolve())
+    }, intervalMs)
+  })
+}
+
+/** Preview proxy waits for export, and retries if export preempts the encode. */
+export async function runWhenExportIdle<T>(
+  jobs: JobGate,
+  lingers: ImportLinger,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  for (;;) {
+    const signal = lingers.begin('proxy')
+    try {
+      await waitWhileExporting(jobs, signal)
+      return await work(signal)
+    } catch (err) {
+      if (isJobCancelled(err) && jobs.kind === 'export') continue
+      throw err
+    } finally {
+      lingers.finish(signal)
+    }
+  }
+}
+
 export function explainImportError(err: unknown): string {
   if (isJobCancelled(err)) return err instanceof Error ? err.message : 'Import cancelled.'
   if (isJobBusy(err)) return err instanceof Error ? err.message : busyMessage('import')

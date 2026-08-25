@@ -60,12 +60,125 @@ describe('command bus', () => {
     expect(resolveSegments(next).some((s) => Math.abs(s.inPoint - word!.start) < 0.01)).toBe(true)
   })
 
+  test('setTranscript stamps existing cuts onto the new words', () => {
+    const base = {
+      ...createEmptyProject('late-asr'),
+      sourceDuration: 2,
+      transcript: {
+        words: [{ id: 'island', text: 'Speech 1', start: 0, end: 2, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      }
+    }
+    const cut = applyCommand(base, { type: 'deleteRange', start: 0.8, end: 1.2, source: 'manual' })
+    const filled = applyCommand(cut, {
+      type: 'setTranscript',
+      words: [
+        { id: 'a', text: 'hello', start: 0.1, end: 0.4, speaker: 'ryan', deleted: false },
+        { id: 'b', text: 'cut', start: 0.85, end: 1.15, speaker: 'ryan', deleted: false },
+        { id: 'c', text: 'world', start: 1.4, end: 1.8, speaker: 'ryan', deleted: false }
+      ]
+    })
+    expect(filled.cuts).toHaveLength(1)
+    expect(filled.transcript.words.find((w) => w.text === 'cut')?.deleted).toBe(true)
+    expect(filled.transcript.words.find((w) => w.text === 'hello')?.deleted).toBeFalsy()
+    expect(filled.transcript.words.find((w) => w.text === 'world')?.deleted).toBeFalsy()
+  })
+
+  test('attachTakeIntel fills take 2 without replacing take 1 words', () => {
+    const first = {
+      ...createEmptyProject('two'),
+      sourceDuration: 2,
+      assets: {
+        a: {
+          id: 'a',
+          path: '/tmp/a.mp4',
+          name: 'a.mp4',
+          kind: 'video' as const,
+          duration: 2,
+          waveform: [],
+          sourceOffset: 0
+        }
+      },
+      transcript: {
+        words: [{ id: 'hello', text: 'hello', start: 0.1, end: 0.4, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      }
+    }
+    const appended = applyCommand(first, {
+      type: 'appendTake',
+      asset: {
+        id: 'b',
+        path: '/tmp/b.mp4',
+        name: 'b.mp4',
+        kind: 'video',
+        duration: 2,
+        waveform: []
+      },
+      words: []
+    })
+    const filled = applyCommand(appended, {
+      type: 'attachTakeIntel',
+      assetId: 'b',
+      words: [{ id: 'world', text: 'world', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false }],
+      analysis: { silence: [{ start: 1, end: 1.4 }], staticRegions: [], loudness: [] }
+    })
+    expect(filled.transcript.words.map((w) => w.text)).toEqual(['hello', 'world'])
+    expect(filled.transcript.words[1].start).toBeCloseTo(2.2, 5)
+    expect(filled.analysis.silence.some((row) => Math.abs(row.start - 3) < 0.01)).toBe(true)
+  })
+
+  test('setAssetLooks and setAnalysis ride the command bus', () => {
+    const withSrc = {
+      ...createEmptyProject('looks'),
+      sourceDuration: 2,
+      assets: {
+        src: {
+          id: 'src',
+          path: '/tmp/se-src.mp4',
+          name: 'src.mp4',
+          kind: 'video' as const,
+          duration: 2,
+          waveform: []
+        }
+      }
+    }
+    const looks = applyCommand(withSrc, {
+      type: 'setAssetLooks',
+      assetId: 'src',
+      waveform: [0.2, 0.8],
+      thumbnails: ['data:image/jpeg;base64,xx']
+    })
+    expect(looks.assets.src.waveform).toEqual([0.2, 0.8])
+    expect(looks.assets.src.thumbnails).toEqual(['data:image/jpeg;base64,xx'])
+    const analyzed = applyCommand(looks, {
+      type: 'setAnalysis',
+      silence: [{ start: 1.2, end: 1.8 }]
+    })
+    expect(analyzed.analysis.silence).toEqual([{ start: 1.2, end: 1.8 }])
+    expect(analyzed.suggestions.some((s) => s.type === 'silence')).toBe(true)
+    const withProxy = applyCommand(looks, { type: 'setAssetProxy', assetId: 'src', proxyPath: '/tmp/se.proxy.mp4' })
+    const keepProxy = applyCommand(withProxy, { type: 'setAssetLooks', assetId: 'src', waveform: [0.3] })
+    expect(keepProxy.assets.src.proxyPath).toBe('/tmp/se.proxy.mp4')
+    expect(keepProxy.assets.src.waveform).toEqual([0.3])
+  })
+
   test('word edit does not cut', () => {
     const p = createDemoProject()
     const word = p.transcript.words[0]
     const next = applyCommand(p, { type: 'setWordText', wordId: word.id, text: 'Hello' })
     expect(next.transcript.words[0].text).toBe('Hello')
     expect(next.transcript.words[0].deleted).toBe(false)
+  })
+
+  test('renameScene updates title and summary without touching words', () => {
+    const p = createDemoProject()
+    const next = applyCommand(p, { type: 'renameScene', sceneId: 'sc_intro', title: 'The pitch', summary: 'Open on the idea.' })
+    const scene = next.scenes.find((s) => s.id === 'sc_intro')
+    expect(scene?.title).toBe('The pitch')
+    expect(scene?.summary).toBe('Open on the idea.')
+    expect(next.transcript.words[0].text).toBe(p.transcript.words[0].text)
+    const same = applyCommand(p, { type: 'renameScene', sceneId: 'sc_intro', title: 'Thesis' })
+    expect(same.scenes.find((s) => s.id === 'sc_intro')?.summary).toBe(p.scenes.find((s) => s.id === 'sc_intro')?.summary)
   })
 })
 
@@ -86,7 +199,47 @@ describe('nle graphics', () => {
     })
     const clip = next.tracks.find((t) => t.type === 'overlay')?.clips.find((c) => c.assetId === 'img1')
     expect(clip?.start).toBe(4)
+    expect(clip?.inPoint).toBe(0)
     expect(next.assets.img1.kind).toBe('image')
+  })
+
+  test('addBroll and addAudio keep a slipped in-point', () => {
+    const next = applyCommand(
+      applyCommand(createDemoProject(), {
+        type: 'addBroll',
+        start: 1,
+        duration: 2,
+        inPoint: 1.5,
+        asset: {
+          id: 'b1',
+          path: '/tmp/broll.mp4',
+          name: 'broll.mp4',
+          kind: 'video',
+          duration: 8,
+          waveform: []
+        }
+      }),
+      {
+        type: 'addAudio',
+        start: 0,
+        duration: 4,
+        inPoint: 0.8,
+        asset: {
+          id: 'm1',
+          path: '/tmp/bed.wav',
+          name: 'bed.wav',
+          kind: 'audio',
+          duration: 10,
+          waveform: []
+        }
+      }
+    )
+    const broll = next.tracks.find((t) => t.type === 'overlay')?.clips.find((c) => c.assetId === 'b1')
+    const bed = next.tracks.find((t) => t.type === 'audio' && t.id !== 'a1')?.clips.find((c) => c.assetId === 'm1')
+    expect(broll?.inPoint).toBeCloseTo(1.5, 5)
+    expect(broll?.outPoint).toBeCloseTo(3.5, 5)
+    expect(bed?.inPoint).toBeCloseTo(0.8, 5)
+    expect(bed?.outPoint).toBeCloseTo(4.8, 5)
   })
 
   test('fade writes onto a primary segment', () => {
@@ -635,6 +788,175 @@ describe('timeline snap and Q/W', () => {
     expect(pieces).toHaveLength(2)
     expect(withBed.tracks.find((t) => t.id === 'v1')?.clips).toHaveLength(0)
     expect(withBed.tracks.find((t) => t.id === 'a1')?.clips).toHaveLength(0)
+  })
+})
+
+describe('inventory convenience commands', () => {
+  test('replaceWords rewrites several tokens in one undo', () => {
+    const demo = createDemoProject()
+    const um = demo.transcript.words.find((w) => w.text === 'um')
+    expect(um).toBeTruthy()
+    const next = applyCommand(demo, { type: 'replaceWords', pairs: [{ wordId: um!.id, text: 'and' }] })
+    expect(next.transcript.words.find((w) => w.id === um!.id)?.text).toBe('and')
+  })
+
+  test('duplicateClip places a copy after the original', () => {
+    const demo = createDemoProject()
+    const clip = demo.tracks.flatMap((t) => t.clips)[0]
+    expect(clip).toBeTruthy()
+    const next = applyCommand(demo, { type: 'duplicateClip', clipId: clip.id })
+    const copies = next.tracks.flatMap((t) => t.clips).filter((c) => c.start === clip.start + clip.duration)
+    expect(copies.length).toBe(1)
+    expect(copies[0].id).not.toBe(clip.id)
+    expect(copies[0].text).toBe(clip.text)
+  })
+
+  test('dismissPendingSuggestions keeps applied cuts', () => {
+    const cut = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const next = applyCommand(cut, { type: 'dismissPendingSuggestions' })
+    expect(next.suggestions.every((s) => s.applied)).toBe(true)
+    expect(next.suggestions.length).toBe(cut.suggestions.filter((s) => s.applied).length)
+  })
+
+  test('splitScene and mergeScenes keep the chapter span', () => {
+    const demo = createDemoProject()
+    const scene = demo.scenes[0]
+    const mid = (scene.start + scene.end) / 2
+    const split = applyCommand(demo, { type: 'splitScene', sceneId: scene.id, time: mid })
+    expect(split.scenes.length).toBe(demo.scenes.length + 1)
+    const left = split.scenes.find((s) => s.id === scene.id)
+    const right = split.scenes.find((s) => s.start === mid)
+    expect(left?.end).toBeCloseTo(mid, 5)
+    expect(right?.title).toMatch(/cont/)
+    const merged = applyCommand(split, { type: 'mergeScenes', sceneId: scene.id, otherId: right!.id })
+    expect(merged.scenes.find((s) => s.id === scene.id)?.end).toBeCloseTo(scene.end, 5)
+  })
+
+  test('applySuggestionsByType cuts fillers in one pass', () => {
+    const demo = createDemoProject()
+    const pending = demo.suggestions.filter((s) => s.type === 'filler' && !s.applied)
+    expect(pending.length).toBeGreaterThan(0)
+    const next = applyCommand(demo, { type: 'applySuggestionsByType', suggestionType: 'filler' })
+    expect(next.suggestions.filter((s) => s.type === 'filler' && !s.applied && !s.blockedBy)).toHaveLength(0)
+  })
+
+  test('setPicture patches the master transform', () => {
+    const next = applyCommand(createDemoProject(), { type: 'setPicture', transform: { scale: 1.2 } })
+    expect(next.picture.scale).toBe(1.2)
+  })
+
+  test('slip, paste at playhead, canvas, and note hop stay on the command bus', () => {
+    const demo = createDemoProject()
+    const withBed = applyCommand(demo, {
+      type: 'addAudio',
+      start: 4,
+      duration: 6,
+      asset: bedAsset()
+    })
+    const clip = withBed.tracks.flatMap((t) => t.clips).find((c) => c.assetId === 'mus1')
+    expect(clip).toBeTruthy()
+    const slipped = applyCommand(withBed, { type: 'slipClip', clipId: clip!.id, delta: 0.4 })
+    const afterSlip = slipped.tracks.flatMap((t) => t.clips).find((c) => c.id === clip!.id)
+    expect(afterSlip?.inPoint).toBeCloseTo(clip!.inPoint + 0.4, 3)
+    expect(afterSlip?.start).toBeCloseTo(clip!.start, 3)
+    expect(afterSlip?.duration).toBeCloseTo(clip!.duration, 3)
+
+    const pasted = applyCommand(slipped, { type: 'pasteClip', clip: afterSlip!, start: 20 })
+    const copies = pasted.tracks.flatMap((t) => t.clips).filter((c) => c.assetId === 'mus1')
+    expect(copies.length).toBe(2)
+    expect(copies.some((c) => Math.abs(c.start - 20) < 0.01)).toBe(true)
+
+    const nudged = applyCommand(pasted, { type: 'nudgeClips', clipIds: [clip!.id], delta: 1 })
+    expect(nudged.tracks.flatMap((t) => t.clips).find((c) => c.id === clip!.id)?.start).toBeCloseTo(clip!.start + 1, 3)
+
+    const framed = applyCommand(demo, { type: 'setCanvas', width: 1080, height: 1920 })
+    expect(framed.width).toBe(1080)
+    expect(framed.height).toBe(1920)
+  })
+
+  test('lift keeps program length and parks a hold', () => {
+    const island = {
+      ...createEmptyProject('lift'),
+      sourceDuration: 2,
+      transcript: {
+        words: [{ id: 'w1', text: 'Speech 1', start: 0, end: 2, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      }
+    }
+    const lifted = applyCommand(island, { type: 'deleteRange', start: 1.0, end: 1.4, lift: true })
+    expect(programLength(lifted)).toBeCloseTo(2, 1)
+    expect(lifted.inserts?.some((row) => Math.abs(row.duration - 0.4) < 0.05)).toBe(true)
+    expect(resolveSegments(lifted).some((seg) => seg.kind === 'slug')).toBe(true)
+    const bed = applyCommand(lifted, {
+      type: 'addAudio',
+      start: 1.6,
+      duration: 0.4,
+      asset: {
+        id: 'bed-lift',
+        path: '/tmp/se-bed.wav',
+        name: 'bed.wav',
+        kind: 'audio',
+        duration: 2,
+        waveform: []
+      }
+    })
+    const clip = bed.tracks.flatMap((t) => t.clips).find((c) => c.assetId === 'bed-lift')
+    expect(clip?.start).toBeCloseTo(1.6, 2)
+    const back = applyCommand(lifted, { type: 'restoreRange', start: 1.0, end: 1.4 })
+    expect(programLength(back)).toBeCloseTo(2, 1)
+    expect(back.inserts?.length ?? 0).toBe(0)
+    expect(back.transcript.words.every((w) => !w.deleted)).toBe(true)
+  })
+
+  test('insertGap lengthens the reel and close gap undoes it', () => {
+    const island = {
+      ...createEmptyProject('gap'),
+      sourceDuration: 2,
+      transcript: {
+        words: [{ id: 'w1', text: 'Speech 1', start: 0, end: 2, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      }
+    }
+    const gapped = applyCommand(island, { type: 'insertGap', time: 1, duration: 1 })
+    expect(programLength(gapped)).toBeCloseTo(3, 1)
+    const slug = resolveSegments(gapped).find((seg) => seg.kind === 'slug')
+    expect(slug?.duration).toBeCloseTo(1, 2)
+    const closed = applyCommand(gapped, { type: 'removeInsert', insertId: gapped.inserts![0].id })
+    expect(programLength(closed)).toBeCloseTo(2, 1)
+  })
+
+  test('replaceClipMedia and setPan stay on the same clip', () => {
+    const withBed = applyCommand(createDemoProject(), {
+      type: 'addAudio',
+      start: 2,
+      duration: 3,
+      asset: {
+        id: 'old-bed',
+        path: '/tmp/old.wav',
+        name: 'old.wav',
+        kind: 'audio',
+        duration: 4,
+        waveform: []
+      }
+    })
+    const clip = withBed.tracks.flatMap((t) => t.clips).find((c) => c.assetId === 'old-bed')!
+    const swapped = applyCommand(withBed, {
+      type: 'replaceClipMedia',
+      clipId: clip.id,
+      asset: {
+        id: 'new-bed',
+        path: '/tmp/new.wav',
+        name: 'new.wav',
+        kind: 'audio',
+        duration: 8,
+        waveform: []
+      }
+    })
+    const next = swapped.tracks.flatMap((t) => t.clips).find((c) => c.id === clip.id)
+    expect(next?.assetId).toBe('new-bed')
+    expect(next?.start).toBeCloseTo(clip.start, 3)
+    const panned = applyCommand(swapped, { type: 'setPan', clipId: clip.id, pan: -0.6 })
+    expect(panned.tracks.flatMap((t) => t.clips).find((c) => c.id === clip.id)?.pan).toBeCloseTo(-0.6, 3)
   })
 })
 

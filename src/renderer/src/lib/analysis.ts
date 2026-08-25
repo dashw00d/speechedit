@@ -443,7 +443,7 @@ export function blockedByLabel(tags: RangeTag[], blockedBy?: string): string | u
   const tag = tags.find((t) => t.id === blockedBy)
   if (!tag) return 'protected'
   if (tag.label?.trim()) return tag.label
-  return tag.kind === 'demo' ? 'Silent demo' : 'Keep'
+  return tag.kind === 'demo' ? 'Silent demo' : 'Protected'
 }
 
 export function appliedSuggestionAt(

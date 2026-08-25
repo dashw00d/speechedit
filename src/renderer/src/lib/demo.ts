@@ -58,6 +58,7 @@ export function createEmptyProject(name = 'Untitled'): Project {
     suggestions: [],
     scenes: [],
     tags: [],
+    inserts: [],
     picture: { ...DEFAULT_TRANSFORM },
     audioMaster: { ...DEFAULT_AUDIO_MASTER },
     cutMargin: 0.12,

@@ -1,6 +1,12 @@
 import { existsSync, unlinkSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
-import { isVariableFrameRate, needsProxy, playbackPath, previewUnsafeCodec } from '../../../shared/proxy'
+import {
+  isVariableFrameRate,
+  needsProxy,
+  playbackPath,
+  previewUnsafeCodec,
+  proxyCacheMatchesSource
+} from '../../../shared/proxy'
 import { host } from '../host'
 import { useEditor } from '../store'
 import { applyCommand } from './commands'
@@ -24,6 +30,9 @@ describe('preview proxy vs export original', () => {
     expect(isVariableFrameRate('30/1', '30/1')).toBe(false)
     expect(isVariableFrameRate('24000/1001', '30000/1001')).toBe(true)
     expect(isVariableFrameRate('24.5/1', '30/1')).toBe(true)
+    expect(proxyCacheMatchesSource(120, 119.8)).toBe(true)
+    expect(proxyCacheMatchesSource(120, 8)).toBe(false)
+    expect(proxyCacheMatchesSource(8, 0.3)).toBe(false)
   })
 
   test('importRecording attaches a proxy for SD HEVC so the monitor can play it', async () => {
@@ -469,4 +478,44 @@ describe('preview proxy vs export original', () => {
       Object.assign(host, prev)
     }
   })
+
+  test('aborted makeProxy does not leave a playable cache', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for proxy abort smoke')
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=1920x1080:rate=30 -t 8 -pix_fmt yuv420p /tmp/se-proxy-abort-src.mp4`.quiet()
+    const { makeProxy, proxyPartialPath } = await import('../../../main/ffmpeg.ts')
+    const out = '/tmp/se-proxy-abort.proxy.mp4'
+    const partial = proxyPartialPath(out)
+    try {
+      unlinkSync(out)
+    } catch {
+      /* missing */
+    }
+    try {
+      unlinkSync(partial)
+    } catch {
+      /* missing */
+    }
+    const ac = new AbortController()
+    const done = makeProxy('/tmp/se-proxy-abort-src.mp4', out, ac.signal)
+    await Bun.sleep(40)
+    ac.abort()
+    await expect(done).rejects.toThrow(/cancelled/i)
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(partial)).toBe(false)
+  }, 60000)
+
+  test('makeProxy remakes a truncated cache instead of trusting it', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for stale proxy smoke')
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=1920x1080:rate=30 -t 2 -pix_fmt yuv420p /tmp/se-proxy-stale-src.mp4`.quiet()
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=320x240:rate=30 -t 0.4 -pix_fmt yuv420p /tmp/se-proxy-stale.proxy.mp4`.quiet()
+    const { makeProxy, probe } = await import('../../../main/ffmpeg.ts')
+    const proxy = await makeProxy('/tmp/se-proxy-stale-src.mp4', '/tmp/se-proxy-stale.proxy.mp4')
+    const preview = await probe(proxy)
+    expect(preview.duration).toBeGreaterThan(1.5)
+    expect(preview.width).toBeLessThanOrEqual(960)
+  }, 60000)
 })

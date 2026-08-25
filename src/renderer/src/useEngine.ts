@@ -3,14 +3,19 @@ import { programLength } from './lib/commands'
 import { projectToExportJob, type ProgramExportJob } from './lib/exportJob'
 import { projectForPlayback } from './lib/playbackProject'
 import { nextProgramAfterCut, sampleProgram, type ProgramLook } from './lib/programLook'
-import { sourceToProgramOf } from './lib/resolver'
+import { programToSourceOf, segmentAtProgram, sourceToProgramOf } from './lib/resolver'
 import { advancePlayhead, boundPlayhead, readMediaClock, shouldHardSeek, shouldSeek } from './lib/seek'
+import { primaryAssetAt, sourceOffsetOf } from './lib/takes'
 import { useEditor, usePlayback } from './store'
 
 function applyGain(video: HTMLVideoElement | null, gain: number) {
   if (!video) return
   video.muted = gain <= 0.0001
   video.volume = Math.min(1, Math.max(0, gain))
+}
+
+function reviewRateOf() {
+  return usePlayback.getState().reviewRate || 1
 }
 
 function syncVideo(
@@ -23,7 +28,7 @@ function syncVideo(
   hard = false
 ) {
   if (!video?.src) return
-  video.playbackRate = speed
+  video.playbackRate = speed * reviewRateOf()
   applyGain(video, gain)
   if (shouldSeek(video.currentTime, sourceTime, playing && !hard, fps)) video.currentTime = sourceTime
   if (playing && video.paused) void video.play().catch(() => undefined)
@@ -37,6 +42,7 @@ function syncBeds(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
     if (!el) continue
     el.muted = item.gain <= 0.0001
     el.volume = Math.min(1, Math.max(0, item.gain))
+    el.playbackRate = reviewRateOf()
     if (!item.active || !playing) {
       if (!el.paused) el.pause()
       continue
@@ -55,7 +61,7 @@ function syncOverlays(look: ProgramLook, playing: boolean, fps = 30, hard = fals
       if (!el.paused) el.pause()
       continue
     }
-    el.playbackRate = item.layer.speed || 1
+    el.playbackRate = (item.layer.speed || 1) * reviewRateOf()
     if (shouldSeek(el.currentTime, item.sourceTime, playing && !hard, fps)) el.currentTime = item.sourceTime
     if (el.paused) void el.play().catch(() => undefined)
   }
@@ -85,6 +91,7 @@ export function useEngine(
 ) {
   const playing = usePlayback((s) => s.playing)
   const programTime = usePlayback((s) => s.programTime)
+  const reviewRate = usePlayback((s) => s.reviewRate)
   const project = useEditor((s) => s.project)
   const previewSafeCuts = useEditor((s) => s.previewSafeCuts)
   const playbackProject = useMemo(
@@ -112,10 +119,28 @@ export function useEngine(
   }, [videoRef])
 
   useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const onLoaded = () => {
+      const look = sampleProgram(projectToExportJob(projectRef.current), usePlayback.getState().programTime)
+      syncProgram(
+        video,
+        underRef?.current ?? null,
+        look,
+        usePlayback.getState().playing,
+        projectRef.current.fps || 30,
+        true
+      )
+    }
+    video.addEventListener('loadeddata', onLoaded)
+    return () => video.removeEventListener('loadeddata', onLoaded)
+  }, [videoRef, underRef])
+
+  useEffect(() => {
     if (playing) return
     const look = sampleProgram(projectToExportJob(projectRef.current), programTime)
     syncProgram(videoRef.current, underRef?.current ?? null, look, false, projectRef.current.fps || 30)
-  }, [playing, programTime, videoRef, underRef, previewSafeCuts])
+  }, [playing, programTime, videoRef, underRef, previewSafeCuts, project])
 
   useEffect(() => {
     if (!playing) {
@@ -142,6 +167,7 @@ export function useEngine(
     let raf = 0
     let last = performance.now()
     let lastSource: number | null = null
+    let lastInput: string | undefined
     let lastProgram = nowPlay.programTime
     const video = videoRef.current
     if (video && video.src && video.paused) {
@@ -164,21 +190,31 @@ export function useEngine(
     }
 
     const step = (now: number) => {
-      const dt = Math.min(0.08, (now - last) / 1000)
+      const wall = Math.min(0.08, (now - last) / 1000)
       last = now
       const proj = projectRef.current
       const job = projectToExportJob(proj)
       const duration = job.duration && job.duration > 0 ? job.duration : programLength(proj)
       const state = usePlayback.getState()
       const fps = proj.fps || 30
-      const clockRead = readMediaClock(videoRef.current)
+      const rate = state.reviewRate || 1
+      const take = primaryAssetAt(proj, programToSourceOf(proj, state.programTime))
+      const offset = sourceOffsetOf(take)
+      const video = videoRef.current
+      const moreProgram = state.programTime < duration - 1 / Math.max(12, fps)
+      const onSlug = segmentAtProgram(proj, state.programTime)?.kind === 'slug'
+      const clockRead =
+        onSlug || (video?.ended && moreProgram)
+          ? { source: null, present: false }
+          : readMediaClock(video)
+      const dt = clockRead.source == null ? wall * rate : wall
       const advanced = advancePlayhead({
         lastProgram,
         requestedProgram: state.programTime,
         dt,
         mediaSource: clockRead.source,
         mediaPresent: clockRead.present,
-        sourceToProgram: (source) => sourceToProgramOf(proj, source),
+        sourceToProgram: (local) => sourceToProgramOf(proj, local + offset),
         fps
       })
       const bounded = boundPlayhead(advanced.program, {
@@ -200,17 +236,21 @@ export function useEngine(
         program = Math.max(lastProgram, program)
       }
       const look = sampleProgram(job, program)
-      const hard = shouldHardSeek({
-        lastSource,
-        nextSource: look.incomingSource,
-        dt,
-        speed: look.incomingSpeed,
-        fps,
-        clock: advanced.clock,
-        looped: bounded.looped,
-        cut: skipped != null
-      })
+      const switched = lastInput != null && look.incomingInput != null && lastInput !== look.incomingInput
+      const hard =
+        switched ||
+        shouldHardSeek({
+          lastSource: switched ? null : lastSource,
+          nextSource: look.incomingSource,
+          dt,
+          speed: look.incomingSpeed * rate,
+          fps,
+          clock: advanced.clock,
+          looped: bounded.looped,
+          cut: skipped != null
+        })
       lastSource = look.incomingSource
+      lastInput = look.incomingInput
       lastProgram = program
       syncProgram(videoRef.current, underRef?.current ?? null, look, true, fps, hard)
       usePlayback.setState({ programTime: program })
@@ -219,5 +259,5 @@ export function useEngine(
 
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [playing, videoRef, underRef, previewSafeCuts])
+  }, [playing, videoRef, underRef, previewSafeCuts, reviewRate])
 }

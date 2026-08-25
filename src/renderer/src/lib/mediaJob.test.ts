@@ -4,11 +4,17 @@ import {
   JobBusy,
   JobCancelled,
   JobGate,
+  ImportLinger,
+  beginExportExclusive,
   busyMessage,
   explainImportError,
+  ffmpegImportBusy,
   isJobCancelled,
   isWhisperUnavailable,
+  importBusyToast,
   mediaBusyToast,
+  runWhenExportIdle,
+  throwIfAborted,
   whisperMissingMessage
 } from './mediaJobs'
 import { host } from '../host'
@@ -37,6 +43,14 @@ describe('job gate + errors', () => {
     expect(busyMessage('export')).toMatch(/Cancel it first/)
     expect(mediaBusyToast(true, null)).toMatch(/export is already running/)
     expect(mediaBusyToast(false, 'probe')).toMatch(/Import is still running/)
+    expect(mediaBusyToast(false, 'looks')).toMatch(/Import is still running/)
+    expect(mediaBusyToast(false, 'proxy')).toMatch(/Import is still running/)
+    expect(mediaBusyToast(false, 'transcript')).toBeNull()
+    expect(mediaBusyToast(false, 'preview')).toBeNull()
+    expect(ffmpegImportBusy('preview')).toBe(false)
+    expect(ffmpegImportBusy('proxy')).toBe(true)
+    expect(importBusyToast(false, 'preview')).toMatch(/Import is still running/)
+    expect(importBusyToast(false, 'transcript')).toMatch(/Import is still running/)
     expect(mediaBusyToast(false, null)).toBeNull()
     expect(explainImportError(new Error('spawn ffprobe ENOENT'))).toMatch(/Install ffmpeg 4\.4/)
     expect(explainImportError(new Error('ffmpeg did not start (spawn ffmpeg ENOENT)'))).toMatch(/PATH/)
@@ -56,6 +70,75 @@ describe('job gate + errors', () => {
     }
     await host.beginJob('import')
     await host.endJob('import')
+  })
+
+  test('ImportLinger cancel does not hold the job gate', () => {
+    const linger = new ImportLinger()
+    const whisper = linger.begin('whisper')
+    const proxy = linger.begin('proxy')
+    expect(linger.size).toBe(2)
+    expect(whisper.aborted).toBe(false)
+    linger.finish(whisper)
+    expect(linger.size).toBe(1)
+    linger.abortAll()
+    expect(proxy.aborted).toBe(true)
+    expect(linger.size).toBe(0)
+    const next = linger.begin()
+    expect(next.aborted).toBe(false)
+    linger.finish(next)
+    expect(linger.size).toBe(0)
+  })
+
+  test('export preempts the preview proxy linger, not Whisper', () => {
+    const jobs = new JobGate()
+    const linger = new ImportLinger()
+    const whisper = linger.begin('whisper')
+    const proxy = linger.begin('proxy')
+    const exportSignal = beginExportExclusive(jobs, linger)
+    expect(exportSignal.aborted).toBe(false)
+    expect(jobs.kind).toBe('export')
+    expect(proxy.aborted).toBe(true)
+    expect(whisper.aborted).toBe(false)
+    expect(linger.sizeOf('whisper')).toBe(1)
+    expect(linger.sizeOf('proxy')).toBe(0)
+    linger.finish(whisper)
+    jobs.finish('export')
+  })
+
+  test('runWhenExportIdle waits until export finishes', async () => {
+    const jobs = new JobGate()
+    const linger = new ImportLinger()
+    jobs.start('export')
+    let ran = false
+    const done = runWhenExportIdle(jobs, linger, async () => {
+      ran = true
+      return 'ok'
+    })
+    await Bun.sleep(40)
+    expect(ran).toBe(false)
+    jobs.finish('export')
+    expect(await done).toBe('ok')
+    expect(ran).toBe(true)
+    expect(linger.size).toBe(0)
+  })
+
+  test('runWhenExportIdle retries after export preempts the proxy', async () => {
+    const jobs = new JobGate()
+    const linger = new ImportLinger()
+    let attempts = 0
+    const done = runWhenExportIdle(jobs, linger, async (signal) => {
+      attempts += 1
+      if (attempts === 1) {
+        beginExportExclusive(jobs, linger)
+        throwIfAborted(signal, 'import')
+      }
+      return 'proxy-ready'
+    })
+    await Bun.sleep(20)
+    jobs.finish('export')
+    expect(await done).toBe('proxy-ready')
+    expect(attempts).toBe(2)
+    expect(linger.size).toBe(0)
   })
 })
 

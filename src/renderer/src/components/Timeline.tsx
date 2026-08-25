@@ -1,27 +1,33 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { isPrimaryLane, primarySegments, programLength } from '../lib/commands'
-import { wordsInRange } from '../lib/edl'
+import { currentWord, wordsInRange } from '../lib/edl'
 import { programToSourceOf, snapSourceTime, snapTime, sourceToProgramOf } from '../lib/resolver'
+import { stitchPrimaryThumbs, stitchPrimaryWaveform } from '../lib/takes'
 import { buildEditBlocks, editBlockCounts, filterEditBlocks, type EditBlock, type EditBlockFilter } from '../lib/timelineEdits'
-import { findRevealableStackTrack } from '../lib/timelineTracks'
+import { hopNote } from '../lib/clipEdit'
+import { findRevealableStackTrack, trackLaneName } from '../lib/timelineTracks'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { Asset, Clip, TagKind, Track, Word } from '../types'
 
 const PPS_MIN = 18
 const PPS_MAX = 280
-const LABEL_WIDTH = 112
+const LABEL_WIDTH = 132
 
 export function Timeline() {
   const project = useEditor((s) => s.project)
   const selectedClipId = useEditor((s) => s.selectedClipId)
+  const selectedClipIds = useEditor((s) => s.selectedClipIds)
   const selectClip = useEditor((s) => s.selectClip)
+  const selectClips = useEditor((s) => s.selectClips)
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const selectGap = useEditor((s) => s.selectGap)
-  const selectWords = useEditor((s) => s.selectWords)
+  const selectScene = useEditor((s) => s.selectScene)
   const dispatch = useEditor((s) => s.dispatch)
   const snap = useEditor((s) => s.snap)
   const setSnap = useEditor((s) => s.setSnap)
+  const ripple = useEditor((s) => s.ripple)
+  const setRipple = useEditor((s) => s.setRipple)
   const tool = useEditor((s) => s.tool)
   const guardKind = useEditor((s) => s.guardKind)
   const setTool = useEditor((s) => s.setTool)
@@ -33,11 +39,13 @@ export function Timeline() {
   const pps = usePlayback((s) => s.pixelsPerSecond)
   const seekProgram = usePlayback((s) => s.seekProgram)
   const setPps = usePlayback((s) => s.setPixelsPerSecond)
+  const setFitPpsStore = usePlayback((s) => s.setFitPixelsPerSecond)
 
   const duration = Math.max(programLength(project), 8)
   const width = Math.max(duration * pps + 80, 800)
   const segments = primarySegments(project)
-  const asset = Object.values(project.assets)[0]
+  const primaryWaveform = stitchPrimaryWaveform(project)
+  const primaryThumbs = stitchPrimaryThumbs(project)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pendingZoomRef = useRef<
     { mode: 'anchor'; viewX: number } | { mode: 'center' } | null
@@ -48,7 +56,7 @@ export function Timeline() {
   const editBlocks = useMemo(() => buildEditBlocks(project), [project])
   const editCounts = useMemo(() => editBlockCounts(editBlocks), [editBlocks])
   const filteredEditBlocks = useMemo(() => filterEditBlocks(editBlocks, editFilter), [editBlocks, editFilter])
-  const showEditFilters = editBlocks.length > 8
+  const showEditFilters = editBlocks.length > 0
   const showEditSummary = editBlocks.length > 10
   const visibleTracks = useMemo(() => project.tracks.filter((track) => !track.hidden), [project.tracks])
 
@@ -76,12 +84,13 @@ export function Timeline() {
         Math.max(PPS_MIN, (scroll.clientWidth - LABEL_WIDTH - 48) / Math.max(duration, 0.5))
       )
       setFitPps(next)
+      setFitPpsStore(next)
     }
     updateFit()
     const ro = new ResizeObserver(updateFit)
     ro.observe(scroll)
     return () => ro.disconnect()
-  }, [duration])
+  }, [duration, setFitPpsStore])
 
   useEffect(() => {
     const scroll = scrollRef.current
@@ -135,7 +144,7 @@ export function Timeline() {
 
   function startPaint(clientX: number, opts: { erase: boolean; shift: boolean }) {
     const t0 = timeAt(clientX)
-    const kind: TagKind = opts.shift || guardKind === 'demo' ? 'demo' : 'keep'
+    const kind: TagKind = opts.shift ? 'demo' : guardKind
     setStroke({ start: t0, end: t0, erase: opts.erase, kind })
     const move = (ev: MouseEvent) => {
       setStroke((s) => (s ? { ...s, end: timeAt(ev.clientX) } : s))
@@ -184,10 +193,8 @@ export function Timeline() {
     if (block.sceneId) {
       const scene = project.scenes?.find((s) => s.id === block.sceneId)
       if (!scene) return
-      const ids = project.transcript.words
-        .filter((w) => w.start >= scene.start && w.end <= scene.end)
-        .map((w) => w.id)
-      if (ids.length) selectWords(ids)
+      selectScene(scene.id)
+      seekProgram(sourceToProgramOf(project, scene.start))
     }
   }
 
@@ -206,14 +213,21 @@ export function Timeline() {
             min={PPS_MIN}
             max={PPS_MAX}
             value={pps}
+            aria-label={`Zoom ${zoomPct}% · Fit is 100%`}
             onChange={(e) => zoomAroundPlayhead(Number(e.target.value))}
-            title={`Zoom ${zoomPct}%`}
+            title={`Zoom ${zoomPct}% · Fit is 100%`}
           />
           <button className="timeline-btn" type="button" title="Zoom in" onClick={() => zoomAroundPlayhead(pps + 12)}>
             +
           </button>
           <span className="timeline-zoom-label">{zoomPct}%</span>
-          <button className="timeline-btn" type="button" onClick={fitTape}>
+          <button
+            className="timeline-btn"
+            type="button"
+            data-active={Math.abs(pps - fitPps) < 1 || undefined}
+            title="Fit the whole reel in view (\\)"
+            onClick={fitTape}
+          >
             Fit
           </button>
         </div>
@@ -223,18 +237,93 @@ export function Timeline() {
             type="button"
             data-active={snap}
             onClick={() => setSnap(!snap)}
-            title="Snap playhead and trims to words and clip edges"
+            title={snap ? 'Snap on — playhead and trims stick to words and clip edges' : 'Snap off — free placement'}
           >
-            Snap
+            {snap ? 'Snap on' : 'Snap'}
           </button>
+          <button
+            className="timeline-btn"
+            type="button"
+            data-active={ripple}
+            title={
+              ripple
+                ? 'Ripple on — Delete closes the gap. Click to lift instead (leave a hold).'
+                : 'Ripple off — Delete leaves a black hold so later clips stay put.'
+            }
+            onClick={() => setRipple(!ripple)}
+          >
+            {ripple ? 'Ripple on' : 'Lift'}
+          </button>
+          <button
+            className="timeline-btn"
+            type="button"
+            title="Insert a 1s hold at the playhead. Later clips slide right."
+            onClick={() => dispatch({ type: 'insertGap', time: programTime, duration: 1 })}
+          >
+            Gap
+          </button>
+          <button
+            className="timeline-btn"
+            type="button"
+            title="Split the clip at the playhead (S)"
+            onClick={() =>
+              dispatch({ type: 'splitAt', time: programToSourceOf(project, programTime) })
+            }
+          >
+            Split
+          </button>
+          <button
+            className="timeline-btn"
+            type="button"
+            title="Drop a note at the playhead. Auto Edit ignores notes."
+            onClick={() => {
+              const source = programToSourceOf(project, programTime)
+              const word = currentWord(project.transcript.words, source)
+              dispatch({
+                type: 'addTag',
+                start: word?.start ?? source,
+                end: word?.end ?? source + 1,
+                kind: 'note',
+                label: 'Note'
+              })
+            }}
+          >
+            Note
+          </button>
+          {project.tags.some((tag) => tag.kind === 'note') && (
+            <>
+              <button
+                className="timeline-btn"
+                type="button"
+                title="Previous note (Shift+N)"
+                onClick={() => {
+                  const note = hopNote(project, programToSourceOf(project, programTime), -1)
+                  if (note) seekProgram(sourceToProgramOf(project, note.start))
+                }}
+              >
+                ‹ Note
+              </button>
+              <button
+                className="timeline-btn"
+                type="button"
+                title="Next note (N)"
+                onClick={() => {
+                  const note = hopNote(project, programToSourceOf(project, programTime), 1)
+                  if (note) seekProgram(sourceToProgramOf(project, note.start))
+                }}
+              >
+                Note ›
+              </button>
+            </>
+          )}
           <button
             className="timeline-btn"
             type="button"
             data-active={tool === 'guard'}
             onClick={() => setTool(tool === 'guard' ? 'select' : 'guard')}
-            title="Paint keep/demo guards on the Edits lane"
+            title="Protect words so Auto Edit skips them (G)"
           >
-            Guard
+            Protect
           </button>
           {tool === 'guard' && (
             <>
@@ -242,6 +331,7 @@ export function Timeline() {
                 className="timeline-btn"
                 type="button"
                 data-active={guardKind === 'keep'}
+                title="Keep this speech. Auto Edit will not cut it."
                 onClick={() => setGuardKind('keep')}
               >
                 Keep
@@ -250,9 +340,37 @@ export function Timeline() {
                 className="timeline-btn"
                 type="button"
                 data-active={guardKind === 'demo'}
+                title="Silent product walkthrough. Auto Edit will skip pauses here."
                 onClick={() => setGuardKind('demo')}
               >
-                Demo
+                Silent demo
+              </button>
+              <button
+                className="timeline-btn"
+                type="button"
+                data-active={guardKind === 'note'}
+                title="Paint a note on words. Auto Edit ignores notes."
+                onClick={() => setGuardKind('note')}
+              >
+                Note
+              </button>
+              <button
+                className="timeline-btn"
+                type="button"
+                data-active={guardKind === 'hook'}
+                title="Mark the opening hook."
+                onClick={() => setGuardKind('hook')}
+              >
+                Hook
+              </button>
+              <button
+                className="timeline-btn"
+                type="button"
+                data-active={guardKind === 'cta'}
+                title="Mark the call to action."
+                onClick={() => setGuardKind('cta')}
+              >
+                CTA
               </button>
             </>
           )}
@@ -260,7 +378,7 @@ export function Timeline() {
         {showEditSummary && (
           <div className="timeline-toolbar-group edit-summary" title="Edits lane totals">
             {editCounts.pending} open · {editCounts.applied} applied · {editCounts.scenes} scenes · {editCounts.guards}{' '}
-            guards
+            protected
           </div>
         )}
         {showEditFilters && (
@@ -271,7 +389,8 @@ export function Timeline() {
                 ['pending', 'Open'],
                 ['applied', 'Applied'],
                 ['scenes', 'Scenes'],
-                ['guards', 'Guards']
+                ['guards', 'Protected'],
+                ['notes', 'Notes']
               ] as const
             ).map(([id, label]) => (
               <button
@@ -279,7 +398,19 @@ export function Timeline() {
                 type="button"
                 className="edit-filter"
                 data-active={editFilter === id}
-                title={`Show ${label.toLowerCase()} markers on the Edits lane`}
+                title={
+                  id === 'notes'
+                    ? 'Show only note markers'
+                    : id === 'guards'
+                    ? 'Show only protected / silent-demo ranges'
+                    : id === 'scenes'
+                      ? 'Show only chapter markers'
+                      : id === 'pending'
+                        ? 'Show edits that still need a decision'
+                        : id === 'applied'
+                          ? 'Show cuts already applied'
+                          : 'Show every marker on the Edits lane'
+                }
                 onClick={() => setEditFilter(id)}
               >
                 {label}
@@ -292,6 +423,7 @@ export function Timeline() {
           <button
             className="timeline-btn"
             type="button"
+            title="Show or add a graphics / title lane above the picture"
             onClick={() => revealOrAddTrack('overlay')}
           >
             + Overlay
@@ -299,6 +431,7 @@ export function Timeline() {
           <button
             className="timeline-btn"
             type="button"
+            title="Add a music or sound-effects lane"
             onClick={() => dispatch({ type: 'addTrack', trackType: 'audio' })}
           >
             + Audio
@@ -306,19 +439,68 @@ export function Timeline() {
           <button
             className="timeline-btn"
             type="button"
+            title="Show or add a captions lane"
             onClick={() => revealOrAddTrack('caption')}
           >
             + Captions
           </button>
           {io && (
-            <button
-              className="timeline-btn"
-              type="button"
-              title="Ripple-delete the I/O range"
-              onClick={() => dispatch({ type: 'rippleDeleteMarks' })}
-            >
-              Ripple I/O
-            </button>
+            <>
+              <button
+                className="timeline-btn"
+                type="button"
+                title={
+                  ripple
+                    ? 'Remove everything between In and Out and close the gap'
+                    : 'Remove the marked words but leave a hold so later clips stay put'
+                }
+                onClick={() => dispatch({ type: ripple ? 'rippleDeleteMarks' : 'liftMarks' })}
+              >
+                {ripple ? 'Cut marked' : 'Lift marked'}
+              </button>
+              {!ripple && (
+                <button
+                  className="timeline-btn"
+                  type="button"
+                  title="Remove the marked range and close the gap"
+                  onClick={() => dispatch({ type: 'rippleDeleteMarks' })}
+                >
+                  Extract
+                </button>
+              )}
+              {ripple && (
+                <button
+                  className="timeline-btn"
+                  type="button"
+                  title="Remove the marked words but leave a hold"
+                  onClick={() => dispatch({ type: 'liftMarks' })}
+                >
+                  Lift marked
+                </button>
+              )}
+              <button
+                className="timeline-btn"
+                type="button"
+                title="Shorten pauses inside the marked range. Protected demo stays."
+                onClick={() =>
+                  dispatch({
+                    type: 'tightenRange',
+                    start: programToSourceOf(project, io.start),
+                    end: programToSourceOf(project, io.end)
+                  })
+                }
+              >
+                Tighten marked
+              </button>
+              <button
+                className="timeline-btn"
+                type="button"
+                title="Clear In and Out without cutting"
+                onClick={() => dispatch({ type: 'setMarks', markIn: null, markOut: null })}
+              >
+                Clear marks
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -363,7 +545,7 @@ export function Timeline() {
                 <div
                   className="io-range"
                   style={{ left: io.start * pps, width: Math.max(6, (io.end - io.start) * pps) }}
-                  title="I/O · Delete ripples this range"
+                  title="Marked range · Cut marked removes this and closes the gap"
                 />
               )}
             </div>
@@ -378,8 +560,16 @@ export function Timeline() {
                 pps={pps}
                 blocks={filteredEditBlocks}
                 totalCount={editBlocks.length}
+                filter={editFilter}
                 stroke={stroke}
                 onBlockClick={onEditBlockClick}
+                onSceneEdge={(sceneId, edge, sourceTime) =>
+                  dispatch(
+                    edge === 'in'
+                      ? { type: 'setSceneBounds', sceneId, start: sourceTime }
+                      : { type: 'setSceneBounds', sceneId, end: sourceTime }
+                  )
+                }
               />
             </div>
           </div>
@@ -392,24 +582,43 @@ export function Timeline() {
                 onFlag={(patch) => dispatch({ type: 'setTrackFlag', trackId: track.id, patch })}
                 onRename={(name) => dispatch({ type: 'setTrackFlag', trackId: track.id, patch: { name } })}
                 onRemove={() => dispatch({ type: 'removeTrack', trackId: track.id })}
+                onSelectAll={() =>
+                  selectClips(isPrimaryLane(track) ? segments.map((clip) => clip.id) : track.clips.map((clip) => clip.id))
+                }
               />
               <div className="timeline-lane-col" style={{ width }}>
                 <Lane
                   track={track}
                   segments={segments}
                   pps={pps}
-                  selectedClipId={selectedClipId}
-                  waveform={asset?.waveform}
+                  selectedClipIds={selectedClipIds.length ? selectedClipIds : selectedClipId ? [selectedClipId] : []}
+                  waveform={primaryWaveform}
                   assets={project.assets}
-                  thumbnails={asset?.thumbnails}
+                  thumbnails={primaryThumbs}
                   sourceDuration={project.sourceDuration}
                   words={project.transcript.words}
-                  onSelect={selectClip}
+                  onSelect={(id, additive) => selectClip(id, { additive })}
                   onMove={(clipId, start) =>
                     dispatch({
                       type: 'moveClip',
                       clipId,
                       start: snap ? snapTime(project, start, [programTime]) : start
+                    })
+                  }
+                  onSlip={(clipId, delta) => dispatch({ type: 'slipClip', clipId, delta })}
+                  onSlide={(clipId, start) =>
+                    dispatch({
+                      type: 'slideClip',
+                      clipId,
+                      start: snap ? snapTime(project, start, [programTime]) : start
+                    })
+                  }
+                  onRoll={(clipId, edge, time) =>
+                    dispatch({
+                      type: 'rollClip',
+                      clipId,
+                      edge,
+                      time: snap ? snapTime(project, time, [programTime]) : time
                     })
                   }
                   onTrim={(clipId, edge, time) =>
@@ -460,13 +669,15 @@ function TrackLabel({
   primary,
   onFlag,
   onRename,
-  onRemove
+  onRemove,
+  onSelectAll
 }: {
   track: Track
   primary: boolean
-  onFlag: (patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked'>>) => void
+  onFlag: (patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked' | 'solo'>>) => void
   onRename: (name: string) => void
   onRemove: () => void
+  onSelectAll: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const canRemove = !primary && track.clips.length === 0
@@ -493,10 +704,29 @@ function TrackLabel({
           title={`${track.name} · double-click to rename`}
           onDoubleClick={() => setEditing(true)}
         >
-          {track.name}
+          {trackLaneName(track)}
         </span>
       )}
       <span className="track-label-actions">
+        <button
+          className="track-flag"
+          type="button"
+          title="Select every clip on this track"
+          aria-label="Select all clips on track"
+          onClick={onSelectAll}
+        >
+          All
+        </button>
+        <button
+          className="track-flag"
+          type="button"
+          data-active={track.solo}
+          title={track.solo ? 'Unsolo — hear every lane again' : 'Solo — hear only this lane'}
+          aria-label={track.solo ? 'Unsolo track' : 'Solo track'}
+          onClick={() => onFlag({ solo: !track.solo })}
+        >
+          Solo
+        </button>
         <button
           className="track-flag"
           type="button"
@@ -505,7 +735,7 @@ function TrackLabel({
           aria-label={track.muted ? 'Unmute track' : 'Mute track'}
           onClick={() => onFlag({ muted: !track.muted })}
         >
-          M
+          Mute
         </button>
         <button
           className="track-flag"
@@ -515,7 +745,7 @@ function TrackLabel({
           aria-label={track.hidden ? 'Show track' : 'Hide track'}
           onClick={() => onFlag({ hidden: !track.hidden })}
         >
-          H
+          Hide
         </button>
         <button
           className="track-flag"
@@ -525,7 +755,7 @@ function TrackLabel({
           aria-label={track.locked ? 'Unlock track' : 'Lock track'}
           onClick={() => onFlag({ locked: !track.locked })}
         >
-          L
+          Lock
         </button>
         {canRemove && (
           <button className="track-flag track-remove" type="button" title="Remove empty track" onClick={onRemove}>
@@ -541,26 +771,42 @@ function EditsLane({
   pps,
   blocks,
   totalCount,
+  filter,
   stroke,
-  onBlockClick
+  onBlockClick,
+  onSceneEdge
 }: {
   pps: number
   blocks: EditBlock[]
   totalCount: number
+  filter: EditBlockFilter
   stroke: { start: number; end: number; erase: boolean; kind: TagKind } | null
   onBlockClick: (block: EditBlock, e: ReactMouseEvent) => void
+  onSceneEdge: (sceneId: string, edge: 'in' | 'out', sourceTime: number) => void
 }) {
   const left = stroke ? Math.min(stroke.start, stroke.end) * pps : 0
   const width = stroke ? Math.max(4, Math.abs(stroke.end - stroke.start) * pps) : 0
+  const emptyFilter =
+    filter === 'applied'
+      ? 'No cuts applied yet. Open shows what still needs a decision.'
+      : filter === 'pending'
+        ? 'Nothing waiting. Applied shows cuts already made.'
+        : filter === 'scenes'
+          ? 'No chapter markers yet. Find retakes on the bar below.'
+          : filter === 'guards'
+            ? 'Nothing protected. Select words and click Protect.'
+            : filter === 'notes'
+              ? 'No notes yet. Click Note on the tape or press N after you add one.'
+            : 'No markers match this filter'
 
   return (
     <div
       className="lane edits-lane"
-      title="Guards, pending edits, and applied cuts · drag to paint keep/demo · Alt-drag erases"
+      title="Protected ranges, pending edits, and applied cuts · drag to protect · Alt-drag erases"
     >
-      {totalCount === 0 && !stroke && <div className="edits-hint">Guards · suggestions · scenes</div>}
+      {totalCount === 0 && !stroke && <div className="edits-hint">Protected ranges · suggestions · scenes</div>}
       {totalCount > 0 && blocks.length === 0 && !stroke && (
-        <div className="edits-hint">No markers match this filter</div>
+        <div className="edits-hint">{emptyFilter}</div>
       )}
       {blocks.map((block) => {
         const w = Math.max(block.kind === 'scene' ? 2 : 6, (block.end - block.start) * pps)
@@ -585,6 +831,48 @@ function EditsLane({
             onClick={(e) => onBlockClick(block, e)}
           >
             {block.kind !== 'scene' && w > 28 ? block.label : ''}
+            {block.kind === 'scene' && block.sceneId && (
+              <>
+                <i
+                  className="handle in"
+                  onMouseDown={(e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    const startX = e.clientX
+                    const origin = block.start
+                    const move = (ev: MouseEvent) => {
+                      const dt = (ev.clientX - startX) / pps
+                      onSceneEdge(block.sceneId!, 'in', programToSourceOf(useEditor.getState().project, origin + dt))
+                    }
+                    const up = () => {
+                      window.removeEventListener('mousemove', move)
+                      window.removeEventListener('mouseup', up)
+                    }
+                    window.addEventListener('mousemove', move)
+                    window.addEventListener('mouseup', up)
+                  }}
+                />
+                <i
+                  className="handle out"
+                  onMouseDown={(e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    const startX = e.clientX
+                    const origin = block.end
+                    const move = (ev: MouseEvent) => {
+                      const dt = (ev.clientX - startX) / pps
+                      onSceneEdge(block.sceneId!, 'out', programToSourceOf(useEditor.getState().project, origin + dt))
+                    }
+                    const up = () => {
+                      window.removeEventListener('mousemove', move)
+                      window.removeEventListener('mouseup', up)
+                    }
+                    window.addEventListener('mousemove', move)
+                    window.addEventListener('mouseup', up)
+                  }}
+                />
+              </>
+            )}
           </button>
         )
       })}
@@ -603,6 +891,7 @@ function EditsLane({
 }
 
 function clipLabel(clip: Clip, track: Track, assets: Record<string, Asset>, words: Word[]): string {
+  if (clip.kind === 'slug') return `Hold ${clip.duration.toFixed(1)}s`
   if (clip.effect === 'blur') return 'REDACT'
   if (clip.text?.trim()) return clip.text
   const assetName = clip.assetId ? assets[clip.assetId]?.name.replace(/\.[^.]+$/, '') : undefined
@@ -624,7 +913,7 @@ function Lane({
   track,
   segments,
   pps,
-  selectedClipId,
+  selectedClipIds,
   waveform,
   assets,
   thumbnails,
@@ -632,20 +921,26 @@ function Lane({
   words,
   onSelect,
   onMove,
+  onSlip,
+  onSlide,
+  onRoll,
   onTrim,
   onTrimPrimary
 }: {
   track: Track
   segments: Clip[]
   pps: number
-  selectedClipId: string | null
+  selectedClipIds: string[]
   waveform?: number[]
   assets: Record<string, Asset>
   thumbnails?: string[]
   sourceDuration: number
   words: Word[]
-  onSelect: (id: string) => void
+  onSelect: (id: string, additive?: boolean) => void
   onMove: (clipId: string, start: number) => void
+  onSlip: (clipId: string, delta: number) => void
+  onSlide: (clipId: string, start: number) => void
+  onRoll: (clipId: string, edge: 'in' | 'out', time: number) => void
   onTrim: (clipId: string, edge: 'in' | 'out', time: number) => void
   onTrimPrimary: (segmentId: string, edge: 'in' | 'out', sourceTime: number) => void
 }) {
@@ -665,20 +960,31 @@ function Lane({
           data-kind={track.type}
           data-primary={primary}
           data-bed={!primary && track.type === 'audio'}
-          data-sel={selectedClipId === clip.id}
+          data-sel={selectedClipIds.includes(clip.id)}
           data-speed={clip.speed !== 1}
           data-effect={clip.effect ?? 'none'}
+          data-slug={clip.kind === 'slug' || undefined}
           title={clipLabel(clip, track, assets, words)}
           style={{ left: clip.start * pps, width: Math.max(8, clip.duration * pps) }}
           onMouseDown={(e) => {
             if ((e.target as HTMLElement).classList.contains('handle')) return
-            onSelect(clip.id)
+            onSelect(clip.id, e.shiftKey || e.metaKey || e.ctrlKey)
             if (primary || track.locked) return
             const origin = clip.start
+            const originIn = clip.inPoint
             const startX = e.clientX
+            const slip = e.altKey
+            const slide = e.shiftKey && !e.altKey
             const move = (ev: MouseEvent) => {
               const dt = (ev.clientX - startX) / pps
-              onMove(clip.id, Math.max(0, origin + dt))
+              if (slip) {
+                const live = useEditor
+                  .getState()
+                  .project.tracks.flatMap((row) => row.clips)
+                  .find((row) => row.id === clip.id)
+                onSlip(clip.id, originIn + dt * (clip.speed || 1) - (live?.inPoint ?? originIn))
+              } else if (slide) onSlide(clip.id, Math.max(0, origin + dt))
+              else onMove(clip.id, Math.max(0, origin + dt))
             }
             const up = () => {
               window.removeEventListener('mousemove', move)
@@ -714,9 +1020,11 @@ function Lane({
                   e.stopPropagation()
                   const startX = e.clientX
                   const origin = primary ? clip.inPoint : clip.start
+                  const roll = e.shiftKey && !primary
                   const move = (ev: MouseEvent) => {
                     const dt = (ev.clientX - startX) / pps
                     if (primary) onTrimPrimary(clip.id, 'in', origin + dt * clip.speed)
+                    else if (roll) onRoll(clip.id, 'in', origin + dt)
                     else onTrim(clip.id, 'in', origin + dt)
                   }
                   const up = () => {
@@ -733,9 +1041,11 @@ function Lane({
                   e.stopPropagation()
                   const startX = e.clientX
                   const origin = primary ? clip.outPoint : clip.start + clip.duration
+                  const roll = e.shiftKey && !primary
                   const move = (ev: MouseEvent) => {
                     const dt = (ev.clientX - startX) / pps
                     if (primary) onTrimPrimary(clip.id, 'out', origin + dt * clip.speed)
+                    else if (roll) onRoll(clip.id, 'out', origin + dt)
                     else onTrim(clip.id, 'out', origin + dt)
                   }
                   const up = () => {

@@ -59,6 +59,23 @@ export function fileName(path: string | null | undefined): string {
   return idx >= 0 ? path.slice(idx + 1) : path
 }
 
+/** After the user finds one offline file, guess the rest in that same folder. */
+export function siblingRelinkGuesses(
+  pickedPath: string,
+  missing: MediaRef[]
+): { id: string; path: string }[] {
+  const dir = parentDir(pickedPath)
+  if (!dir) return []
+  const pickedName = fileName(pickedPath).toLowerCase()
+  return missing.flatMap((ref) => {
+    const name = fileName(ref.path) || ref.name
+    if (!name || name.toLowerCase() === pickedName) return []
+    const guess = joinMediaPath(dir, name)
+    if (!guess || guess === ref.path) return []
+    return [{ id: ref.id, path: guess }]
+  })
+}
+
 function splitPath(path: string): { drive: string; parts: string[] } {
   const unix = path.replace(/\\/g, '/')
   const drive = /^[a-zA-Z]:/.test(unix) ? unix.slice(0, 2).toLowerCase() : ''

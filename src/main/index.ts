@@ -5,7 +5,14 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { asMediaJobKind, JobBusy, JobGate } from '../shared/mediaJob'
+import {
+  asMediaJobKind,
+  beginExportExclusive,
+  ImportLinger,
+  JobBusy,
+  JobGate,
+  runWhenExportIdle
+} from '../shared/mediaJob'
 import {
   analyzeMedia,
   detectEncoders,
@@ -74,11 +81,17 @@ function createWindow(): BrowserWindow {
   win.on('closed', () => {
     jobs.cancel()
     jobs.finish()
+    importLingers.abortAll()
   })
   return win
 }
 
 const jobs = new JobGate()
+const importLingers = new ImportLinger()
+
+function beginImportLinger(kind: 'proxy' | 'whisper' = 'proxy'): AbortSignal {
+  return importLingers.begin(kind)
+}
 
 function ipcError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
@@ -268,7 +281,9 @@ ipcMain.handle('media:job-end', (_e, kind?: unknown) => {
   jobs.finish(asMediaJobKind(kind) ?? undefined)
 })
 ipcMain.handle('media:job-cancel', (_e, kind?: unknown) => {
-  jobs.cancel(asMediaJobKind(kind) ?? undefined)
+  const job = asMediaJobKind(kind) ?? undefined
+  jobs.cancel(job)
+  if (!job || job === 'import') importLingers.abortAll()
 })
 ipcMain.handle('media:job-busy', () => jobs.kind)
 
@@ -277,8 +292,13 @@ ipcMain.handle('media:probe', async (_e, file: string) => {
   return probe(file, jobs.signal)
 })
 ipcMain.handle('media:proxy', async (_e, file: string) => {
-  refuseIfExporting()
-  return makeProxy(file, proxyCachePath(file), jobs.signal)
+  try {
+    return await runWhenExportIdle(jobs, importLingers, (signal) =>
+      makeProxy(file, proxyCachePath(file), signal)
+    )
+  } catch (err) {
+    throw ipcError(err)
+  }
 })
 ipcMain.handle('media:waveform', async (_e, file: string) => {
   refuseIfExporting()
@@ -304,12 +324,15 @@ ipcMain.handle(
     opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean; skipInstall?: boolean }
   ) => {
   refuseIfExporting()
+  const signal = beginImportLinger('whisper')
   try {
     return await transcribeMedia(file, opts, (info) => {
       e.sender.send('media:transcribe-progress', info)
-    }, jobs.signal)
+    }, signal)
   } catch (err) {
     throw ipcError(err)
+  } finally {
+    importLingers.finish(signal)
   }
 })
 ipcMain.handle('media:asrPath', async () => listAsrPath())
@@ -357,7 +380,7 @@ ipcMain.handle('media:thumbnails', async (_e, file: string) => {
 ipcMain.handle('media:encoders', async () => detectEncoders())
 
 ipcMain.handle('media:export', async (e, job) => {
-  const signal = jobs.start('export')
+  const signal = beginExportExclusive(jobs, importLingers)
   try {
     await exportProgram(job, (info) => {
       e.sender.send('media:export-progress', info)

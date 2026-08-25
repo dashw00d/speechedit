@@ -4,11 +4,15 @@ import { createEmptyProject } from './demo'
 import {
   buildJoinGraph,
   buildMixGraph,
+  buildProgramGraph,
   buildSegmentFilters,
+  encoderFallback,
   explainExportError,
   explainGraphBuildError,
+  programReadArgs,
   programmedSegments,
   summarizeJob,
+  takeInputCount,
   validateExportJob,
   voiceAudioFilters
 } from './exportGraph'
@@ -194,8 +198,10 @@ describe('export graph (ffmpeg 4.4, no process)', () => {
     const job = buildExportJob(sped, '/tmp/se-out.mp4')!
     const first = job.segments[0]
     const filters = buildSegmentFilters(job, first)
+    expect(filters.vf).toContain(`trim=start=${first.start.toFixed(3)}:end=${first.end.toFixed(3)}`)
     expect(filters.vf).toContain('setpts=PTS/2.000')
     expect(filters.vf).toContain('format=yuv420p')
+    expect(filters.af).toContain(`atrim=start=${first.start.toFixed(3)}:end=${first.end.toFixed(3)}`)
     expect(filters.af).toContain('atempo=2.000')
     expect(filters.af).toContain('sample_rates=48000')
 
@@ -270,6 +276,100 @@ describe('export graph (ffmpeg 4.4, no process)', () => {
     expect(explainGraphBuildError(new Error('Video map label is missing from the filter graph.'))).toMatch(
       /export graph/
     )
+    expect(encoderFallback('h264_nvenc', explainExportError('Unknown encoder h264_nvenc'))).toBe('libx264')
+    expect(encoderFallback('libx264', explainExportError('Unknown encoder h264_nvenc'))).toBeNull()
+    expect(encoderFallback('h264_nvenc', 'A media file is missing. Re-link the recording.')).toBeNull()
+  })
+
+  test('program graph encodes every keep once, not once per cut', () => {
+    const job = buildExportJob(fixtureProject(), '/tmp/se-out.mp4')!
+    const program = buildProgramGraph(job)
+    expect(program.encodes).toBe(1)
+    expect(program.filterComplex.match(/\[0:v\]/g)?.length).toBe(job.segments.length)
+    expect(program.filterComplex).toContain(`concat=n=${job.segments.length}:v=1:a=0`)
+    expect(program.filterComplex).toContain(`concat=n=${job.segments.length}:v=0:a=1`)
+    expect(program.mapVideo).toBe('[vout]')
+    expect(program.mapAudio).toBe('[aout]')
+    const first = job.segments[0]
+    expect(program.filterComplex).toContain(`trim=start=${first.start.toFixed(3)}:end=${first.end.toFixed(3)}`)
+  })
+
+  test('program graph folds captions, stills, and beds into the same encode', () => {
+    const job = buildExportJob(fixtureProject(), '/tmp/se-out.mp4')!
+    const program = buildProgramGraph(job, {
+      fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    })
+    expect(program.encodes).toBe(1)
+    expect(takeInputCount(job)).toBe(1)
+    expect(program.filterComplex).toContain("drawtext=text='Never Shotcut'")
+    expect(program.filterComplex).toContain('fontfile=')
+    expect(program.filterComplex).toContain('amix=inputs=2:duration=first:dropout_transition=0:normalize=0')
+    expect(program.filterComplex).toContain('[vprog]')
+    expect(program.filterComplex).toContain('[aprog]')
+    expect(program.filterComplex).toContain('[1:v]')
+    expect(program.filterComplex).toContain('[2:a]')
+    expect(program.extraInputs.some((input) => input.role === 'image' && input.path === '/tmp/se-still.png')).toBe(
+      true
+    )
+    expect(program.extraInputs.some((input) => input.role === 'bed' && input.path === '/tmp/se-bed.wav')).toBe(true)
+    const args = programReadArgs(job, program.extraInputs)
+    expect(args.filter((arg) => arg === '-i')).toHaveLength(1 + program.extraInputs.length)
+    expect(args).toContain('/tmp/se-src.mp4')
+    expect(args).toContain('/tmp/se-still.png')
+    expect(args).toContain('/tmp/se-bed.wav')
+    expect(program.notes.join(' ')).toMatch(/caption/)
+    expect(program.notes.join(' ')).toMatch(/bed/)
+  })
+
+  test('voice-only EQ rides the program graph instead of a second -af pass', () => {
+    const project = createEmptyProject('eq-only')
+    const withSrc: Project = {
+      ...project,
+      sourceDuration: 2,
+      assets: {
+        src: {
+          id: 'src',
+          path: '/tmp/se-src.mp4',
+          name: 'src.mp4',
+          kind: 'video',
+          duration: 2,
+          waveform: []
+        }
+      },
+      audioMaster: { ...project.audioMaster, eqLow: 3, duck: 0 }
+    }
+    const job = buildExportJob(withSrc, '/tmp/se-out.mp4')!
+    const program = buildProgramGraph(job)
+    expect(program.encodes).toBe(1)
+    expect(program.extraInputs).toEqual([])
+    expect(program.filterComplex).toContain('equalizer=f=120')
+    expect(program.filterComplex).toContain('[vprog]')
+    expect(program.mapVideo).toBe('[vprog]')
+    expect(program.mapAudio).toBe('[aout]')
+  })
+
+  test('program graph keeps dissolves on labeled pads in the same encode', () => {
+    const job = buildExportJob(fixtureProject(), '/tmp/se-out.mp4')!
+    job.segments[0] = { ...job.segments[0], overlapNext: 0.2, fadeOut: 0.2 }
+    job.segments[1] = { ...job.segments[1], fadeIn: 0.2 }
+    const program = buildProgramGraph(job)
+    expect(program.encodes).toBe(1)
+    expect(program.filterComplex).toContain('[v0][v1]xfade=transition=fade')
+    expect(program.filterComplex).toContain('[a0][a1]acrossfade=')
+    expect(program.filterComplex).not.toContain('[0:v][1:v]xfade')
+  })
+
+  test('lifted holds render as black + silence pads', () => {
+    const project = applyCommand(fixtureProject(), { type: 'insertGap', time: 0.4, duration: 0.5 })
+    const job = projectToExportJob(project, '/tmp/se-out.mp4')
+    expect(job.segments.some((seg) => seg.kind === 'slug')).toBe(true)
+    const program = buildProgramGraph(job)
+    expect(program.filterComplex).toContain('color=c=black')
+    expect(program.filterComplex).toContain('anullsrc=')
+    const look = sampleProgram(job, 0.55)
+    expect(look.incoming?.kind).toBe('slug')
+    expect(look.incomingOpacity).toBe(0)
+    expect(look.voice.incomingGain).toBe(0)
   })
 })
 
@@ -404,7 +504,10 @@ describe('lavfi smoke', () => {
     expect(info.hasAudio).toBe(true)
     expect(info.duration).toBeGreaterThan(1.1)
     expect(info.duration).toBeLessThan(2.05)
-    expect(stages.some((s) => /clip|mixing|bed|caption/i.test(s))).toBe(true)
+    expect(stages.some((s) => /encoding program/.test(s))).toBe(true)
+    expect(stages.some((s) => /caption|bed|still/i.test(s))).toBe(true)
+    expect(stages.some((s) => /^mixing /.test(s))).toBe(false)
+    expect(stages.some((s) => /encoding clip \d+\//i.test(s))).toBe(false)
   }, 60000)
 
   test('dissolve + speed + caption + duck encode and probe', async () => {
@@ -433,7 +536,10 @@ describe('lavfi smoke', () => {
     expect(info.hasAudio).toBe(true)
     expect(info.duration).toBeGreaterThan(0.6)
     expect(info.duration).toBeLessThan(2.2)
-    expect(stages.some((s) => /clip|mixing|joining|caption|duck/i.test(s))).toBe(true)
+    expect(stages.some((s) => /encoding program/.test(s))).toBe(true)
+    expect(stages.some((s) => /caption|duck/i.test(s))).toBe(true)
+    expect(stages.some((s) => /^mixing /.test(s))).toBe(false)
+    expect(stages.some((s) => /encoding clip \d+\//i.test(s))).toBe(false)
   }, 60000)
 
   test('importRecording + applyCommand + exportProgram writes a program', async () => {
@@ -567,5 +673,55 @@ describe('lavfi smoke', () => {
     expect(info.hasAudio).toBe(true)
     expect(info.duration).toBeGreaterThan(1.4)
     expect(info.duration).toBeLessThan(2.05)
+  }, 90000)
+
+  test('many Auto-Edit holes encode in one program pass', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for multi-cut smoke')
+
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=320x240:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 4 -pix_fmt yuv420p /tmp/se-many-cuts.mp4`.quiet()
+    let project = createEmptyProject('many-cuts')
+    project = {
+      ...project,
+      sourceDuration: 4,
+      width: 320,
+      height: 240,
+      fps: 30,
+      assets: {
+        src: {
+          id: 'src',
+          path: '/tmp/se-many-cuts.mp4',
+          name: 'many.mp4',
+          kind: 'video',
+          duration: 4,
+          waveform: []
+        }
+      }
+    }
+    for (const [start, end] of [
+      [0.4, 0.5],
+      [1.0, 1.1],
+      [1.6, 1.7],
+      [2.2, 2.3],
+      [2.8, 2.9]
+    ] as const) {
+      project = applyCommand(project, { type: 'deleteRange', start, end, source: 'auto' })
+    }
+    const job = buildExportJob(project, '/tmp/se-many-cuts-out.mp4')!
+    expect(job.segments.length).toBeGreaterThanOrEqual(6)
+    expect(buildProgramGraph(job).encodes).toBe(1)
+    job.encoder = 'libx264'
+    job.normalize = false
+    const stages: string[] = []
+    const { exportProgram, probe } = await import('../../../main/ffmpeg.ts')
+    await exportProgram(job, (info) => stages.push(info.stage))
+    const info = await probe('/tmp/se-many-cuts-out.mp4')
+    expect(info.hasVideo).toBe(true)
+    expect(info.duration).toBeGreaterThan(3.2)
+    expect(info.duration).toBeLessThan(3.8)
+    expect(stages.some((s) => /encoding program \(6 keeps\)/.test(s))).toBe(true)
+    expect(stages.filter((s) => /encoding program/.test(s)).length).toBeGreaterThan(0)
+    expect(stages.some((s) => /encoding clip \d+\//.test(s))).toBe(false)
   }, 90000)
 })

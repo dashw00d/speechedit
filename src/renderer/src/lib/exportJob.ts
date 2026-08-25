@@ -1,8 +1,38 @@
 import { DEFAULT_CAPTION_STYLE, type Clip, type Project } from '../types'
+import { applyCommand } from './commands'
 import type { GraphJob, GraphLayer } from './exportGraph'
 import { normalizeProject } from './normalize'
 import { bedGain, duckAt, voiceLook } from './programLook'
-import { programLengthOf, resolveSegments } from './resolver'
+import { programLengthOf, programToSourceOf, resolveSegments } from './resolver'
+import { primaryAssetAt, primaryTakes, sourceOffsetOf } from './takes'
+import { withSoloApplied } from './timelineTracks'
+
+export type ExportVideoOpts = {
+  markedOnly?: boolean
+  audioOnly?: boolean
+  burnCaptions?: boolean
+}
+
+export function projectForExport(project: Project, opts: ExportVideoOpts = {}): Project {
+  let next = withSoloApplied(normalizeProject(project))
+  if (opts.markedOnly && next.markIn != null && next.markOut != null) {
+    const a = Math.min(next.markIn, next.markOut)
+    const b = Math.max(next.markIn, next.markOut)
+    const srcA = programToSourceOf(next, a)
+    const srcB = programToSourceOf(next, b)
+    const dur = next.sourceDuration
+    if (srcB < dur - 0.01) next = applyCommand(next, { type: 'deleteRange', start: srcB, end: dur })
+    if (srcA > 0.01) next = applyCommand(next, { type: 'deleteRange', start: 0, end: srcA })
+    next = { ...next, markIn: null, markOut: null }
+  }
+  if (opts.burnCaptions === false) {
+    next = {
+      ...next,
+      tracks: next.tracks.map((track) => (track.type === 'caption' ? { ...track, hidden: true } : track))
+    }
+  }
+  return next
+}
 
 export type ExportLayer = GraphLayer
 
@@ -38,12 +68,22 @@ export function overlayDuckWindows(project: Project): { start: number; end: numb
     .map((c) => ({ start: c.start, end: c.start + c.duration }))
 }
 
-export function projectToExportJob(project: Project, output = ''): ProgramExportJob {
-  const current = normalizeProject(project)
-  const asset = Object.values(current.assets).find((a) => a.path)
+export function projectToExportJob(project: Project, output = '', opts: ExportVideoOpts = {}): ProgramExportJob {
+  const current = projectForExport(project, opts)
+  const takes = primaryTakes(current)
+  const asset = takes[0] ?? Object.values(current.assets).find((a) => a.path)
   const segs = resolveSegments(current)
+  const inputs = takes
+    .filter((take) => take.path)
+    .map((take) => ({
+      path: take.path,
+      sourceOffset: sourceOffsetOf(take),
+      duration: take.duration,
+      rotation: take.displayRotation
+    }))
   return {
     input: asset?.path ?? '',
+    inputs,
     output,
     fps: current.fps,
     width: current.width,
@@ -61,22 +101,34 @@ export function projectToExportJob(project: Project, output = ''): ProgramExport
     duck: current.audioMaster.duck,
     duckWindows: overlayDuckWindows(current),
     duration: programLengthOf(current),
+    audioOnly: Boolean(opts.audioOnly),
     beds: audioBeds(current),
-    segments: segs.map((s) => ({
-      start: s.inPoint,
-      end: s.outPoint,
-      speed: s.speed,
-      scale: s.transform.scale,
-      x: s.transform.x,
-      y: s.transform.y,
-      volume: s.volume,
-      fadeIn: s.fadeIn,
-      fadeOut: s.fadeOut,
-      overlapNext: s.overlapNext,
-      programStart: s.start,
-      opacity: s.transform.opacity,
-      rotation: s.transform.rotation
-    })),
+    segments: segs.map((s) => {
+      const take = primaryAssetAt(current, s.inPoint)
+      const offset = sourceOffsetOf(take)
+      return {
+        start: s.inPoint,
+        end: s.outPoint,
+        sourceOffset: offset,
+        input: take?.path ?? asset?.path,
+        inputIndex: Math.max(0, takes.findIndex((row) => row.id === take?.id)),
+        inputRotation: take?.displayRotation ?? asset?.displayRotation,
+        speed: s.speed,
+        scale: s.transform.scale,
+        x: s.transform.x,
+        y: s.transform.y,
+        volume: s.volume,
+        fadeIn: s.fadeIn,
+        fadeOut: s.fadeOut,
+        overlapNext: s.overlapNext,
+        programStart: s.start,
+        kind: s.kind,
+        duration: s.duration,
+        pan: s.pan,
+        opacity: s.transform.opacity,
+        rotation: s.transform.rotation
+      }
+    }),
     layers: current.tracks
       .filter((t) => (t.type === 'caption' || t.type === 'overlay') && !t.hidden && !t.muted)
       .flatMap((t) =>
@@ -158,8 +210,12 @@ export function programVolume(project: Project, programTime: number) {
   return voiceLook(projectToExportJob(project), programTime)
 }
 
-export function buildExportJob(project: Project, output: string): ProgramExportJob | null {
-  const job = projectToExportJob(project, output)
+export function buildExportJob(
+  project: Project,
+  output: string,
+  opts: ExportVideoOpts = {}
+): ProgramExportJob | null {
+  const job = projectToExportJob(project, output, opts)
   return job.input ? job : null
 }
 
