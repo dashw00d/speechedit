@@ -46,7 +46,10 @@ const api = {
   silence: (file: string) => ipcRenderer.invoke('media:silence', file),
   scenes: (file: string) => ipcRenderer.invoke('media:scenes', file),
   loudness: (file: string) => ipcRenderer.invoke('media:loudness', file),
-  transcribe: (file: string, opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+  transcribe: (
+    file: string,
+    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean }
+  ) =>
     ipcRenderer.invoke('media:transcribe', file, opts),
   asrPath: () => ipcRenderer.invoke('media:asrPath'),
   complete: (req: {

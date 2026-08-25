@@ -31,6 +31,11 @@ export interface Asset {
   thumbnails?: string[]
   /** Preview-only file. Playback uses this when set; export always uses path. */
   proxyPath?: string
+  /** Camera display rotation in quarter turns. Coded width/height may be swapped. */
+  displayRotation?: 0 | 90 | 180 | 270
+  /** Source codec from probe. Used to remake a preview proxy after reopen or relink. */
+  codec?: string
+  vfr?: boolean
 }
 
 export interface Crop {
@@ -285,6 +290,7 @@ export type Command =
   | { type: 'addAudio'; start: number; duration: number; asset: Asset }
   | { type: 'addRedaction'; start: number; duration: number }
   | { type: 'addTrack'; trackType: TrackType; name?: string }
+  | { type: 'removeTrack'; trackId: string }
   | { type: 'setFade'; targetId: string; edge: 'in' | 'out'; duration: number }
   | { type: 'setCutMargin'; margin: number }
   | { type: 'dissolveAtPlayhead'; duration: number; time: number }
@@ -319,7 +325,7 @@ export type Command =
   | { type: 'collapseRetakes' }
   | { type: 'keepTake'; sceneId: string }
   | { type: 'applyModelSuggestions' }
-  | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked'>> }
+  | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked' | 'name'>> }
   | { type: 'relinkAsset'; assetId: string; path: string }
   | { type: 'setAssetProxy'; assetId: string; proxyPath: string | null }
 

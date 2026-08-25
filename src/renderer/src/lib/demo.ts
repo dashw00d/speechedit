@@ -8,6 +8,7 @@ import {
   type Project,
   type Word
 } from '../types'
+import { DEFAULT_SPEAKER_COLOR } from './theme'
 import { detectRepeats, suggestionsFromSilence } from './analysis'
 import { parseTranscriptJson } from './transcript'
 import { uid } from './time'
@@ -42,14 +43,14 @@ export function createEmptyProject(name = 'Untitled'): Project {
     sourceDuration: 0,
     assets: {},
     tracks: [
-      { id: 'v3', type: 'caption', name: 'V3 Captions', locked: false, muted: false, hidden: false, clips: [] },
-      { id: 'v2', type: 'overlay', name: 'V2 Overlay', locked: false, muted: false, hidden: false, clips: [] },
+      { id: 'v3', type: 'caption', name: 'V3 Captions', locked: false, muted: false, hidden: true, clips: [] },
+      { id: 'v2', type: 'overlay', name: 'V2 Overlay', locked: false, muted: false, hidden: true, clips: [] },
       { id: 'v1', type: 'video', name: 'V1 Picture', locked: false, muted: false, hidden: false, clips: [] },
       { id: 'a1', type: 'audio', name: 'A1 Voice', locked: false, muted: false, hidden: false, clips: [] }
     ],
     transcript: {
       words: [],
-      speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      speakers: [{ id: 'ryan', name: 'Speaker 1', color: DEFAULT_SPEAKER_COLOR }]
     },
     cuts: [],
     splits: [],
@@ -163,7 +164,7 @@ export function createDemoProject(): Project {
     },
     transcript: {
       speakers: [
-        { id: 'ryan', name: 'Ryan', color: '#C4452D' }
+        { id: 'ryan', name: 'Ryan', color: DEFAULT_SPEAKER_COLOR }
       ],
       words
     },
@@ -267,6 +268,7 @@ export function createDemoProject(): Project {
       if (track.id === 'v3') {
         return {
           ...track,
+          hidden: false,
           clips: [
             {
               id: uid('clip'),
@@ -289,6 +291,7 @@ export function createDemoProject(): Project {
       if (track.id === 'v2') {
         return {
           ...track,
+          hidden: false,
           clips: [
             {
               id: uid('clip'),

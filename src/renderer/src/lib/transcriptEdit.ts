@@ -65,6 +65,21 @@ export function tagAt(tags: RangeTag[], time: number): RangeTag | undefined {
 }
 
 export function wordsMatchingPhrase(words: Word[], phrase: string): Word[] {
+  const ids = allWordsMatchingPhrase(words, phrase)
+  if (!ids.length) return []
+  const first = ids[0]
+  const tokens = phrase
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[.,!?]/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+  const start = words.findIndex((w) => w.id === first)
+  if (start < 0) return []
+  return words.slice(start, start + Math.max(1, tokens.length))
+}
+
+export function allWordsMatchingPhrase(words: Word[], phrase: string): string[] {
   const tokens = phrase
     .toLowerCase()
     .replace(/[“”]/g, '"')
@@ -73,13 +88,27 @@ export function wordsMatchingPhrase(words: Word[], phrase: string): Word[] {
     .filter(Boolean)
   if (!tokens.length) return []
   const keys = words.map((w) => w.text.toLowerCase().replace(/[.,!?]/g, ''))
+  const ids: string[] = []
   for (let i = 0; i <= keys.length - tokens.length; i++) {
-    if (tokens.every((token, k) => keys[i + k] === token)) return words.slice(i, i + tokens.length)
+    if (tokens.every((token, k) => keys[i + k] === token)) {
+      ids.push(...words.slice(i, i + tokens.length).map((w) => w.id))
+    }
   }
-  if (tokens.length === 1) {
-    return words.filter((_, i) => keys[i].includes(tokens[0]))
+  if (!ids.length && tokens.length === 1) {
+    return words.filter((_, i) => keys[i].includes(tokens[0])).map((w) => w.id)
   }
-  return []
+  return [...new Set(ids)]
+}
+
+export function wordIdsInRange(words: Word[], lo: number, hi: number): string[] {
+  const start = Math.max(0, Math.min(lo, hi))
+  const end = Math.min(words.length - 1, Math.max(lo, hi))
+  return words.slice(start, end + 1).map((w) => w.id)
+}
+
+export function sortWordIds(words: Word[], ids: string[]): string[] {
+  const order = new Map(words.map((w, i) => [w.id, i]))
+  return [...ids].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
 }
 
 export function paragraphIds(words: Word[], index: number): string[] {

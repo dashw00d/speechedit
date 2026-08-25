@@ -1,11 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import { applyCommand } from './commands'
 import {
+  hasUncollapsedRetakes,
   inspectorFocus,
+  nextPendingSuggestionAfter,
   paceFromMargin,
+  projectInspectorDetail,
   rankPalette,
+  sceneInspectorDetail,
   suggestTask,
-  transcriptChoices
+  suggestionInspectorDetail,
+  transcriptChoices,
+  wordsInspectorDetail
 } from './contextActions'
 import { createDemoProject } from './demo'
 
@@ -31,8 +37,12 @@ describe('transcript context choices', () => {
     const project = createDemoProject()
     const um = project.transcript.words.find((w) => w.text === 'um')
     expect(um).toBeTruthy()
-    const { choices } = transcriptChoices(project, [um!.id])
+    const { choices, summary } = transcriptChoices(project, [um!.id])
+    expect(summary).toMatch(/1 word/)
     expect(choices[0]?.label).toBe('Remove filler')
+    expect(choices.some((c) => c.id === 'all-fillers')).toBe(true)
+    const all = choices.find((c) => c.id === 'all-fillers')
+    expect(all?.command.type).toBe('toggleWords')
     const next = applyCommand(project, choices[0]!.command)
     expect(next.transcript.words.find((w) => w.id === um!.id)?.deleted).toBe(true)
   })
@@ -47,7 +57,7 @@ describe('transcript context choices', () => {
     expect(restored.transcript.words.find((w) => w.id === um.id)?.deleted).toBe(false)
   })
 
-  test('the demo false take offers Use another take / Keep this take', () => {
+  test('the demo false take offers Use final take / Keep this take', () => {
     const project = createDemoProject()
     const take = project.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7)
     const { choices } = transcriptChoices(
@@ -56,6 +66,7 @@ describe('transcript context choices', () => {
     )
     expect(choices.some((c) => c.id === 'use-take')).toBe(true)
     const use = choices.find((c) => c.id === 'use-take')
+    expect(use?.label).toBe('Use final take')
     const next = applyCommand(project, use!.command)
     expect(next.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7).every((w) => w.deleted)).toBe(true)
     const keep = choices.find((c) => c.id === 'keep-take')
@@ -73,12 +84,70 @@ describe('suggest task copy', () => {
     expect(task.safeCount).toBeGreaterThan(0)
     expect(task.applyLabel).toMatch(/Clean \d+ pauses/)
     expect(task.reviewLabel).toMatch(/Review/)
+    expect(task.showPace).toBe(true)
   })
 
   test('after safe edits the bar asks to review leftovers', () => {
     const next = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
     const task = suggestTask(next)
     expect(task.headline).toMatch(/First edit done|Edit applied/)
+    expect(task.showPace).toBe(false)
+    expect(task.showWatch).toBe(true)
+    expect(task.applyLabel).toBeNull()
+    expect(task.reviewCount).toBeGreaterThan(0)
+  })
+})
+
+describe('inspector helper detail', () => {
+  test('words inspector exposes actions and deeper context for a filler', () => {
+    const project = createDemoProject()
+    const um = project.transcript.words.find((w) => w.text === 'um')!
+    const detail = wordsInspectorDetail(project, [um.id])
+    expect(detail?.title).toBe('Filler')
+    expect(detail?.actions.some((a) => a.id === 'remove')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'all-fillers')).toBe(true)
+    expect(detail?.excerpt).toContain('um')
+    expect(detail?.speakerId).toBeTruthy()
+  })
+
+  test('suggestion inspector explains pauses and offers apply', () => {
+    const project = createDemoProject()
+    const pause = project.suggestions.find((s) => s.type === 'silence' && !s.applied)
+    expect(pause).toBeTruthy()
+    const detail = suggestionInspectorDetail(project, pause!.id)
+    expect(detail?.title).toBe('Pause')
+    expect(detail?.explanation).toMatch(/Dead air/)
+    expect(detail?.actions.some((a) => a.id === 'apply')).toBe(true)
+    expect(detail?.next?.label).toBe('Review next →')
+  })
+
+  test('scene inspector prioritizes retake actions for the false take', () => {
+    const project = createDemoProject()
+    const detail = sceneInspectorDetail(project, 'sc_false')
+    expect(detail?.title).toBe('Retake')
+    expect(detail?.actions[0]?.label).toBe('Use final take')
+    expect(detail?.actions.some((a) => a.id === 'compare')).toBe(true)
+  })
+
+  test('demo offers collapse retakes when a false take is still live', () => {
+    const project = createDemoProject()
+    expect(hasUncollapsedRetakes(project)).toBe(true)
+    expect(suggestTask(project).collapseRetakes).toBe(true)
+  })
+
+  test('review next walks pending suggestions in timeline order', () => {
+    const project = createDemoProject()
+    const ordered = project.suggestions.filter((s) => !s.applied).sort((a, b) => a.start - b.start)
+    const first = ordered[0]!
+    const second = nextPendingSuggestionAfter(project, first.id)
+    expect(second?.id).toBe(ordered[1]?.id)
+  })
+
+  test('project inspector summarizes pending work', () => {
+    const detail = projectInspectorDetail(createDemoProject())
+    expect(detail.headline).toMatch(/Transcript ready/)
+    expect(detail.pendingByType.length).toBeGreaterThan(0)
+    expect(detail.nextHint).toMatch(/Click a word/)
   })
 })
 
@@ -89,14 +158,16 @@ describe('pace and inspector focus', () => {
     expect(paceFromMargin(0.22)).toBe('natural')
   })
 
-  test('inspector follows job, words, caption, then project', () => {
+  test('inspector follows job, scene, words, caption, then project', () => {
     expect(
       inspectorFocus({
         exporting: true,
         analyzing: null,
         selectedWordIds: ['w'],
+        selectedSceneId: null,
         selectedClipId: null,
-        selectedSuggestionId: null
+        selectedSuggestionId: null,
+        selectedGap: null
       })
     ).toBe('job')
     expect(
@@ -104,8 +175,21 @@ describe('pace and inspector focus', () => {
         exporting: false,
         analyzing: null,
         selectedWordIds: ['w'],
+        selectedSceneId: 'sc_false',
         selectedClipId: 'c',
-        selectedSuggestionId: null
+        selectedSuggestionId: null,
+        selectedGap: null
+      })
+    ).toBe('scene')
+    expect(
+      inspectorFocus({
+        exporting: false,
+        analyzing: null,
+        selectedWordIds: ['w'],
+        selectedSceneId: null,
+        selectedClipId: 'c',
+        selectedSuggestionId: null,
+        selectedGap: null
       })
     ).toBe('words')
     expect(
@@ -113,8 +197,10 @@ describe('pace and inspector focus', () => {
         exporting: false,
         analyzing: null,
         selectedWordIds: [],
+        selectedSceneId: null,
         selectedClipId: 'c',
         selectedSuggestionId: null,
+        selectedGap: null,
         clipKind: 'caption'
       })
     ).toBe('caption')
@@ -123,8 +209,10 @@ describe('pace and inspector focus', () => {
         exporting: false,
         analyzing: null,
         selectedWordIds: [],
+        selectedSceneId: null,
         selectedClipId: null,
-        selectedSuggestionId: null
+        selectedSuggestionId: null,
+        selectedGap: null
       })
     ).toBe('project')
   })

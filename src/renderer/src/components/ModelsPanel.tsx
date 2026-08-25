@@ -54,7 +54,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
     setAnalyzing('transcript')
     try {
       await host.beginJob('import')
-      const cues = await host.transcribe(asset.path, settings.transcript)
+      const cues = await host.transcribe(asset.path, { ...settings.transcript, force: true })
       const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
       if (!words.length) throw new Error(`${whisperMissingMessage()} Or use speech islands.`)
       useEditor.getState().loadTranscript(words)

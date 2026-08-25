@@ -647,6 +647,8 @@ describe('document media', () => {
     })
     expect(next.assets.demo_src.path).toBe('/data/reel/take.mp4')
     expect(next.assets.demo_src.proxyPath).toBeUndefined()
+    expect(next.assets.demo_src.waveform).toEqual([])
+    expect(next.assets.demo_src.thumbnails).toBeUndefined()
     const skipped = applyCommand(next, { type: 'relinkAsset', assetId: 'missing', path: '/x' })
     expect(skipped.assets.demo_src.path).toBe('/data/reel/take.mp4')
     expect(skipped.updatedAt).toBe(next.updatedAt)

@@ -30,6 +30,8 @@ export interface SpeechHost {
     hasVideo: boolean
     hasAudio: boolean
     codec?: string
+    rotation?: 0 | 90 | 180 | 270
+    vfr?: boolean
   }>
   makeProxy: (file: string) => Promise<string>
   waveform: (file: string) => Promise<number[]>
@@ -39,7 +41,7 @@ export interface SpeechHost {
   loudness: (file: string) => Promise<{ start: number; end: number; lufs: number }[]>
   transcribe: (
     file: string,
-    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }
+    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean }
   ) => Promise<{ text: string; start: number; end: number; speaker?: string }[] | null>
   asrPath: () => Promise<
     { kind: string; binaries: string[]; found: string[]; available: boolean }[]

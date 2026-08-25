@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ContextMenuHost, useContextMenu } from './components/ContextMenu'
 import { AgentPanel } from './components/AgentPanel'
 import { Inspector } from './components/Inspector'
 import { MenuBar } from './components/MenuBar'
@@ -23,12 +24,15 @@ import { summarizeJob, validateExportJob } from './lib/exportGraph'
 import { buildExportJob } from './lib/exportJob'
 import { programToSourceOf, snapTime, sourceToProgramOf } from './lib/resolver'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
-import { extendSelection, wordRange } from './lib/transcriptEdit'
+import { extendSelection, sentenceIds, wordRange } from './lib/transcriptEdit'
 import { cancelExport, cancelImport, isJobCancelled, mediaBusyToast } from './lib/mediaJobs'
 import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
+import { useClearSelection } from './useClearSelection'
 
 export function App() {
   const [toast, setToast] = useState<string | null>(null)
+  const { menu: contextMenu, closeMenu: closeContextMenu } = useContextMenu()
+  useClearSelection()
   const exporting = useEditor((s) => s.exporting)
   const agentOpen = useEditor((s) => s.agentOpen)
   const recoveryOffer = useEditor((s) => s.recoveryOffer)
@@ -114,6 +118,14 @@ export function App() {
     }
   }
 
+  useEffect(() => {
+    const onExportEvent = () => {
+      void onExport()
+    }
+    window.addEventListener('speechedit:export', onExportEvent)
+    return () => window.removeEventListener('speechedit:export', onExportEvent)
+  }, [])
+
   return (
     <div className="app">
       <MenuBar onToast={setToast} onExport={onExport} exporting={exporting} />
@@ -176,6 +188,7 @@ export function App() {
       <Palette />
       {agentOpen && <AgentPanel variant="dock" onToast={setToast} />}
       {toast && <div className="toast">{toast}</div>}
+      <ContextMenuHost menu={contextMenu} onClose={closeContextMenu} />
     </div>
   )
 }
@@ -207,6 +220,22 @@ function useHotkeys(setToast: (msg: string) => void) {
       }
       if (e.code === 'Space' && !typing) {
         e.preventDefault()
+        if (playback.playing || (playback.loopFrom != null && playback.playUntil != null)) {
+          playback.toggle()
+          return
+        }
+        const ids = editor.selectedWordIds
+        const index = editor.project.transcript.words.findIndex((w) => w.id === ids[0])
+        if (index >= 0) {
+          const range = wordRange(editor.project.transcript.words, sentenceIds(editor.project.transcript.words, index))
+          if (range) {
+            playback.playLoop(
+              sourceToProgramOf(editor.project, range.start),
+              sourceToProgramOf(editor.project, range.end)
+            )
+            return
+          }
+        }
         playback.toggle()
         return
       }

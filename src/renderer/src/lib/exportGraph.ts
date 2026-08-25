@@ -1,3 +1,5 @@
+import { transposeFilters } from '../../../shared/mediaOrient'
+
 /** FFmpeg 4.4-safe filter graph. Command-bus jobs from exportJob.ts are the render truth. */
 
 export interface GraphSegment {
@@ -66,6 +68,7 @@ export interface GraphJob {
   fadeIn: number
   fadeOut: number
   encoder?: string
+  inputRotation?: number
   normalize?: boolean
   eqLow?: number
   eqMid?: number
@@ -295,6 +298,7 @@ export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: nu
     afade.push(`afade=t=out:st=${st}:d=${seg.fadeOut.toFixed(2)}`)
   }
   const vf = [
+    ...transposeFilters(job.inputRotation),
     `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase`,
     `crop=${even(job.width)}:${even(job.height)}:${x}:${y}`,
     seg.speed !== 1 ? `setpts=PTS/${seg.speed.toFixed(3)}` : '',

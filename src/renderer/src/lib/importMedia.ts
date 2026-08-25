@@ -1,4 +1,5 @@
 import { host } from '../host'
+import { displaySize, quarterTurn } from '../../../shared/mediaOrient'
 import { needsProxy } from '../../../shared/proxy'
 import type { Asset, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
@@ -113,26 +114,31 @@ export async function importRecording(
   throwIfAborted(signal, 'import')
 
   const name = file.split(/[\\/]/).pop() ?? 'Recording'
+  const shown = displaySize(info.width, info.height, info.rotation)
+  const displayRotation = quarterTurn(info.rotation)
   const asset: Asset = {
     id: uid('asset'),
     path: file,
     name,
     kind: info.hasVideo ? 'video' : 'audio',
     duration: info.duration,
-    width: info.width,
-    height: info.height,
+    width: shown.width,
+    height: shown.height,
     fps: info.fps,
     sampleRate: info.sampleRate,
     waveform: peaks,
     thumbnails: thumbs,
-    ...(proxyPath ? { proxyPath } : {})
+    ...(proxyPath ? { proxyPath } : {}),
+    ...(displayRotation ? { displayRotation } : {}),
+    ...(info.codec ? { codec: info.codec } : {}),
+    ...(info.vfr ? { vfr: true } : {})
   }
   const base = createEmptyProject(name.replace(/\.[^.]+$/, ''))
   const draft = {
     ...base,
     sourceDuration: info.duration,
-    width: info.width ?? 1920,
-    height: info.height ?? 1080,
+    width: shown.width ?? 1920,
+    height: shown.height ?? 1080,
     fps: info.fps && info.fps < 120 ? Math.round(info.fps) : 30,
     assets: { [asset.id]: asset },
     transcript: { ...base.transcript, words },

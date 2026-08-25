@@ -52,6 +52,7 @@ export function projectToExportJob(project: Project, output = ''): ProgramExport
     fadeIn: current.audioMaster.fadeIn,
     fadeOut: current.audioMaster.fadeOut,
     encoder: current.encoder ?? 'auto',
+    inputRotation: asset?.displayRotation,
     normalize: current.audioMaster.normalize,
     eqLow: current.audioMaster.eqLow,
     eqMid: current.audioMaster.eqMid,

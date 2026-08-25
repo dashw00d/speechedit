@@ -19,12 +19,14 @@ import {
   whisperSpawnEnv
 } from './asrLocal'
 import { runChild, withTempDir } from './childJob'
+import { asrCachePath, readJsonCache, writeJsonCache } from './mediaCache'
 
 export interface ModelEndpointOpts {
   kind?: string
   baseUrl?: string
   model?: string
   apiKey?: string
+  force?: boolean
 }
 
 export interface TranscribeProgress {
@@ -278,6 +280,66 @@ function flatten(result: AsrResult | null): AsrCue[] | null {
   return result.cues
 }
 
+type AsrCacheDoc = { v: number; kind: string; model: string; cues: AsrCue[] }
+
+function asrExtra(kind: TranscriptKind, opts?: ModelEndpointOpts): string {
+  return kind === 'openai-compatible' ? opts?.baseUrl?.trim() || '' : ''
+}
+
+async function loadAsrCache(
+  file: string,
+  kind: string,
+  model: string,
+  extra = ''
+): Promise<AsrCue[] | null> {
+  const hit = await readJsonCache<AsrCacheDoc>(asrCachePath(file, kind, model, extra))
+  if (hit?.v === 1 && Array.isArray(hit.cues) && hit.cues.length) return hit.cues
+  return null
+}
+
+async function saveAsrCache(
+  file: string,
+  kind: string,
+  model: string,
+  extra: string,
+  cues: AsrCue[]
+): Promise<void> {
+  if (!cues.length) return
+  await writeJsonCache(asrCachePath(file, kind, model, extra), { v: 1, kind, model, cues }).catch(
+    () => undefined
+  )
+}
+
+async function readAsrCacheHit(
+  file: string,
+  kind: TranscriptKind,
+  model: string,
+  extra: string
+): Promise<AsrCue[] | null> {
+  const hit = await loadAsrCache(file, kind, model, extra)
+  if (hit) return hit
+  const fallbacks: TranscriptKind[] =
+    kind === 'whisper-cli' ? ['whisper-cpp', 'faster-whisper', 'mlx-whisper'] : []
+  for (const next of fallbacks) {
+    const cached = await loadAsrCache(file, next, model, extra)
+    if (cached) {
+      await saveAsrCache(file, kind, model, extra, cached)
+      return cached
+    }
+    if (next === 'whisper-cpp') {
+      const ggml = ggmlModelPath(model)
+      if (ggml && ggml !== model) {
+        const ggmlHit = await loadAsrCache(file, 'whisper-cpp', ggml, extra)
+        if (ggmlHit) {
+          await saveAsrCache(file, kind, model, extra, ggmlHit)
+          return ggmlHit
+        }
+      }
+    }
+  }
+  return null
+}
+
 export async function transcribe(
   file: string,
   prefer?: string[]
@@ -301,6 +363,9 @@ export async function transcribeMedia(
   signal?: AbortSignal
 ): Promise<AsrCue[] | null> {
   const kind = coerceTranscriptKind(opts?.kind)
+  const model = opts?.model ?? ''
+  const extra = asrExtra(kind, opts)
+  const force = Boolean(opts?.force)
   const note = (stage: TranscribeProgress['stage'], ratio: number) => onProgress?.({ stage, ratio })
 
   if (kind === 'off') {
@@ -310,6 +375,13 @@ export async function transcribeMedia(
 
   note('prepare', 0.05)
   throwIfAborted(signal, 'import')
+  if (!force) {
+    const hit = await readAsrCacheHit(file, kind, model, extra)
+    if (hit) {
+      note('done', 1)
+      return hit
+    }
+  }
   try {
     if (kind === 'openai-compatible') {
       note('audio', 0.2)
@@ -317,7 +389,9 @@ export async function transcribeMedia(
       const result = await transcribeHttp(file, opts ?? {}, signal)
       note('parse', 0.9)
       note('done', 1)
-      return flatten(result)
+      const cues = flatten(result)
+      if (cues) await saveAsrCache(file, kind, model, extra, cues)
+      return cues
     }
 
     note('audio', 0.2)
@@ -334,10 +408,14 @@ export async function transcribeMedia(
       try {
         note('run', 0.35)
         const result = await transcribeCli(next, file, opts?.model, signal)
-        if (result?.cues.length) {
+        const cues = flatten(result)
+        if (cues?.length) {
           note('parse', 0.9)
           note('done', 1)
-          return flatten(result)
+          const actualModel = next === 'whisper-cpp' ? ggmlModelPath(model) || model : model
+          await saveAsrCache(file, next, actualModel, extra, cues)
+          if (kind !== next || actualModel !== model) await saveAsrCache(file, kind, model, extra, cues)
+          return cues
         }
       } catch (err) {
         if (isJobCancelled(err)) throw err

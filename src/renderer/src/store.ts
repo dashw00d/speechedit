@@ -36,8 +36,10 @@ export interface EditorState {
   past: Project[]
   future: Project[]
   selectedWordIds: string[]
+  selectedSceneId: string | null
   selectedClipId: string | null
   selectedSuggestionId: string | null
+  selectedGap: { start: number; end: number } | null
   inspectorTab: 'transform' | 'audio' | 'caption' | 'project' | 'agent'
   reviewing: boolean
   palette: boolean
@@ -57,8 +59,11 @@ export interface EditorState {
   undo: () => void
   redo: () => void
   selectWords: (ids: string[], additive?: boolean) => void
+  selectScene: (id: string | null) => void
   selectClip: (id: string | null) => void
   selectSuggestion: (id: string | null) => void
+  selectGap: (gap: { start: number; end: number } | null) => void
+  clearSelection: () => void
   setInspectorTab: (tab: EditorState['inspectorTab']) => void
   setReviewing: (value: boolean) => void
   setPalette: (value: boolean) => void
@@ -80,6 +85,7 @@ export interface EditorState {
   bindDocument: (path: string | null, savedAt?: number | null) => void
   setRecoveryOffer: (offer: RecoveryRecord | null) => void
   setMissingAssets: (assets: MediaRef[]) => void
+  hydrateLooks: (assets: Project['assets']) => void
 }
 
 export interface PersistMeta {
@@ -227,8 +233,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   past: [],
   future: [],
   selectedWordIds: [],
+  selectedSceneId: null,
   selectedClipId: null,
   selectedSuggestionId: null,
+  selectedGap: null,
   inspectorTab: 'project',
   reviewing: false,
   palette: false,
@@ -290,17 +298,70 @@ export const useEditor = create<EditorState>((set, get) => ({
     })
   },
   selectWords: (ids, additive) =>
-    set((state) => ({
-      selectedWordIds: additive ? Array.from(new Set([...state.selectedWordIds, ...ids])) : ids,
+    set((state) => {
+      const order = new Map(state.project.transcript.words.map((w, i) => [w.id, i]))
+      const merged = additive ? Array.from(new Set([...state.selectedWordIds, ...ids])) : ids
+      const sorted = [...merged].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0))
+      return {
+        selectedWordIds: sorted,
+        selectedSceneId: null,
+        selectedClipId: null,
+        selectedSuggestionId: null,
+        selectedGap: null
+      }
+    }),
+  selectScene: (id) => {
+    const scene = id ? get().project.scenes?.find((s) => s.id === id) : undefined
+    const wordIds = scene
+      ? get()
+          .project.transcript.words.filter((w) => w.start >= scene.start && w.end <= scene.end)
+          .map((w) => w.id)
+      : []
+    set({
+      selectedSceneId: id,
+      selectedWordIds: wordIds,
       selectedClipId: null,
-      selectedSuggestionId: null
-    })),
+      selectedSuggestionId: null,
+      selectedGap: null,
+      inspectorTab: 'project'
+    })
+  },
   selectClip: (id) => {
     const clip = get().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)
     const tab = clip?.text ? 'caption' : id ? 'transform' : 'project'
-    set({ selectedClipId: id, selectedWordIds: [], selectedSuggestionId: null, inspectorTab: tab })
+    set({
+      selectedClipId: id,
+      selectedWordIds: [],
+      selectedSceneId: null,
+      selectedSuggestionId: null,
+      selectedGap: null,
+      inspectorTab: tab
+    })
   },
-  selectSuggestion: (id) => set({ selectedSuggestionId: id }),
+  selectSuggestion: (id) =>
+    set({
+      selectedSuggestionId: id,
+      selectedWordIds: [],
+      selectedSceneId: null,
+      selectedClipId: null,
+      selectedGap: null
+    }),
+  selectGap: (gap) =>
+    set({
+      selectedGap: gap,
+      selectedWordIds: [],
+      selectedSceneId: null,
+      selectedClipId: null,
+      selectedSuggestionId: null
+    }),
+  clearSelection: () =>
+    set({
+      selectedWordIds: [],
+      selectedSceneId: null,
+      selectedClipId: null,
+      selectedSuggestionId: null,
+      selectedGap: null
+    }),
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
   setReviewing: (value) => set({ reviewing: value }),
   setPalette: (value) => set({ palette: value }),
@@ -361,7 +422,11 @@ export const useEditor = create<EditorState>((set, get) => ({
     persist(get().project, { documentPath: path, lastSavedAt, dirty: get().dirty }, true)
   },
   setRecoveryOffer: (offer) => set({ recoveryOffer: offer }),
-  setMissingAssets: (assets) => set({ missingAssets: assets })
+  setMissingAssets: (assets) => set({ missingAssets: assets }),
+  hydrateLooks: (assets) => {
+    const project = get().project
+    set({ project: { ...project, assets } })
+  }
 }))
 
 export interface PlaybackState {
@@ -369,6 +434,7 @@ export interface PlaybackState {
   programTime: number
   loop: boolean
   playUntil: number | null
+  loopFrom: number | null
   pixelsPerSecond: number
   play: () => void
   pause: () => void
@@ -377,6 +443,7 @@ export interface PlaybackState {
   seekSource: (time: number) => void
   playFromSource: (time: number) => void
   playRange: (start: number, end: number) => void
+  playLoop: (start: number, end: number) => void
   playSelectionOrMarks: () => void
   setPixelsPerSecond: (value: number) => void
   tickTo: (time: number) => void
@@ -387,23 +454,51 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
   programTime: 0,
   loop: false,
   playUntil: null,
+  loopFrom: null,
   pixelsPerSecond: 72,
   play: () => set({ playing: true }),
-  pause: () => set({ playing: false, playUntil: null }),
-  toggle: () => set((s) => ({ playing: !s.playing, playUntil: s.playing ? null : s.playUntil })),
-  seekProgram: (time) => set({ programTime: Math.max(0, time), playing: false, playUntil: null }),
+  pause: () => set({ playing: false }),
+  toggle: () => {
+    const s = get()
+    if (s.playing) {
+      set({ playing: false })
+      return
+    }
+    if (s.loopFrom != null && s.playUntil != null) {
+      set({ playing: true, programTime: s.loopFrom })
+      return
+    }
+    set({ playing: true })
+  },
+  seekProgram: (time) =>
+    set({ programTime: Math.max(0, time), playing: false, playUntil: null, loopFrom: null }),
   seekSource: (time) => {
     const project = useEditor.getState().project
-    set({ programTime: sourceToProgramOf(project, time), playing: false, playUntil: null })
+    set({
+      programTime: sourceToProgramOf(project, time),
+      playing: false,
+      playUntil: null,
+      loopFrom: null
+    })
   },
   playFromSource: (time) => {
     const project = useEditor.getState().project
-    set({ programTime: sourceToProgramOf(project, time), playing: true, playUntil: null })
+    set({
+      programTime: sourceToProgramOf(project, time),
+      playing: true,
+      playUntil: null,
+      loopFrom: null
+    })
   },
   playRange: (start, end) => {
     const a = Math.min(start, end)
     const b = Math.max(start, end)
-    set({ programTime: a, playing: true, playUntil: b })
+    set({ programTime: a, playing: true, playUntil: b, loopFrom: null })
+  },
+  playLoop: (start, end) => {
+    const a = Math.min(start, end)
+    const b = Math.max(start, end)
+    set({ programTime: a, playing: true, playUntil: b, loopFrom: a })
   },
   playSelectionOrMarks: () => {
     const project = useEditor.getState().project

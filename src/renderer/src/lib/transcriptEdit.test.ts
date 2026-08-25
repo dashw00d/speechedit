@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { applyCommand } from './commands'
 import { createDemoProject } from './demo'
 import { snapTime, sourceToProgramOf } from './resolver'
-import { coveringAppliedSuggestion, PARAGRAPH_GAP, paragraphIds } from './transcriptEdit'
+import { allWordsMatchingPhrase, coveringAppliedSuggestion, PARAGRAPH_GAP, paragraphIds } from './transcriptEdit'
 import type { Word } from '../types'
 
 function w(id: string, text: string, start: number, end: number): Word {
@@ -48,6 +48,22 @@ describe('snapTime word edges', () => {
     const start = sourceToProgramOf(cut, first!.start)
     expect(snapTime(cut, start + 0.08)).toBeCloseTo(start, 2)
     expect(snapTime(cut, start + 0.4)).not.toBeCloseTo(start, 2)
+  })
+})
+
+describe('phrase search', () => {
+  test('allWordsMatchingPhrase finds every occurrence', () => {
+    const words = [
+      w('a', 'cut', 0, 0.2),
+      w('b', 'speech', 0.3, 0.6),
+      w('c', 'like', 0.7, 0.9),
+      w('d', 'text', 1, 1.2),
+      w('e', 'cut', 2, 2.2),
+      w('f', 'again', 2.3, 2.6)
+    ]
+    expect(allWordsMatchingPhrase(words, 'cut')).toEqual(['a', 'e'])
+    expect(allWordsMatchingPhrase(words, 'cut speech')).toEqual(['a', 'b'])
+    expect(allWordsMatchingPhrase(words, 'missing')).toEqual([])
   })
 })
 

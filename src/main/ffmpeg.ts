@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { analysisCachePath, peaksCachePath, readJsonCache, thumbsCachePath, writeJsonCache } from './mediaCache'
 import {
   assertMixGraph,
   buildJoinGraph,
@@ -15,6 +16,8 @@ import {
   type GraphJob
 } from '../renderer/src/lib/exportGraph'
 import { JobCancelled, isJobCancelled, throwIfAborted, type MediaJobKind } from '../shared/mediaJob'
+import { parseStreamRotation, transposeFilters, type QuarterTurn } from '../shared/mediaOrient'
+import { isVariableFrameRate } from '../shared/proxy'
 import { killChild, runChild, withTempDir } from './childJob'
 import type { ModelEndpointOpts } from './transcribe'
 
@@ -37,6 +40,7 @@ export interface ProgramExportJob {
   fadeIn: number
   fadeOut: number
   encoder?: string
+  inputRotation?: number
   normalize?: boolean
   eqLow?: number
   eqMid?: number
@@ -104,6 +108,8 @@ export interface ProbeResult {
   hasVideo: boolean
   hasAudio: boolean
   codec?: string
+  rotation?: QuarterTurn
+  vfr?: boolean
 }
 
 export interface SilenceGap {
@@ -258,12 +264,17 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
       width?: number
       height?: number
       avg_frame_rate?: string
+      r_frame_rate?: string
       sample_rate?: string
+      tags?: Record<string, string>
+      side_data_list?: Array<{ side_data_type?: string; rotation?: number | string }>
     }>
   }
   const video = json.streams?.find((s) => s.codec_type === 'video')
   const audio = json.streams?.find((s) => s.codec_type === 'audio')
   const [num, den] = (video?.avg_frame_rate ?? '0/1').split('/').map(Number)
+  const rotation = video ? parseStreamRotation(video) : 0
+  const vfr = video ? isVariableFrameRate(video.avg_frame_rate, video.r_frame_rate) : false
   return {
     duration: Number(json.format?.duration ?? 0),
     width: video?.width,
@@ -272,7 +283,9 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
     sampleRate: audio?.sample_rate ? Number(audio.sample_rate) : undefined,
     hasVideo: Boolean(video),
     hasAudio: Boolean(audio),
-    codec: video?.codec_name ?? audio?.codec_name
+    codec: video?.codec_name ?? audio?.codec_name,
+    ...(rotation ? { rotation } : {}),
+    ...(vfr ? { vfr } : {})
   }
 }
 
@@ -288,15 +301,17 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
     if (cached?.hasVideo && cached.duration > 0.2) return output
   }
   const info = await probe(file, signal)
+  const orient = transposeFilters(info.rotation)
   const args = [
     '-y',
     '-hide_banner',
     '-loglevel',
     'error',
+    '-noautorotate',
     '-i',
     file,
     '-vf',
-    "scale='min(960,iw)':-2",
+    [...orient, "scale='min(960,iw)':-2"].join(','),
     '-c:v',
     'libx264',
     '-preset',
@@ -317,6 +332,11 @@ export async function makeProxy(file: string, output: string, signal?: AbortSign
 
 export async function waveform(file: string, samples = 1800, signal?: AbortSignal): Promise<number[]> {
   throwIfAborted(signal, 'import')
+  const cache = peaksCachePath(file)
+  const hit = await readJsonCache<{ v: number; samples: number; peaks: number[] }>(cache)
+  if (hit?.v === 1 && hit.samples === samples && Array.isArray(hit.peaks) && hit.peaks.length) {
+    return hit.peaks
+  }
   const args = ['-hide_banner', '-loglevel', 'error', '-i', file, '-ac', '1', '-ar', '8000', '-f', 'f32le', '-acodec', 'pcm_f32le', 'pipe:1']
   return new Promise((resolve, reject) => {
     const child = spawn('ffmpeg', args)
@@ -356,7 +376,9 @@ export async function waveform(file: string, samples = 1800, signal?: AbortSigna
           }
           out.push(Math.min(1, peak))
         }
-        resolve(out)
+        void writeJsonCache(cache, { v: 1, samples, peaks: out })
+          .catch(() => undefined)
+          .then(() => resolve(out))
       })
     })
   })
@@ -425,6 +447,41 @@ export async function detectLoudness(
     }
   }
   return windows.filter((w) => w.lufs > -14)
+}
+
+export interface CachedAnalysis {
+  silence: SilenceGap[]
+  scenes: { times: number[]; staticRegions: SilenceGap[] }
+  loudness: { start: number; end: number; lufs: number }[]
+}
+
+export async function analyzeMedia(
+  file: string,
+  signal?: AbortSignal,
+  onProgress?: (info: { stage: string; ratio: number }) => void
+): Promise<CachedAnalysis> {
+  throwIfAborted(signal, 'import')
+  const cache = analysisCachePath(file)
+  const hit = await readJsonCache<{ v: number } & CachedAnalysis>(cache)
+  if (hit?.v === 1 && Array.isArray(hit.silence) && hit.scenes && Array.isArray(hit.loudness)) {
+    onProgress?.({ stage: 'done', ratio: 1 })
+    return { silence: hit.silence, scenes: hit.scenes, loudness: hit.loudness }
+  }
+  onProgress?.({ stage: 'silence', ratio: 0.15 })
+  const silence = await detectSilence(file, '-30dB', 0.35, signal)
+  onProgress?.({ stage: 'motion', ratio: 0.45 })
+  const scenes = await detectScenes(file, signal).catch((err) => {
+    if (isJobCancelled(err)) throw err
+    return { times: [], staticRegions: [] }
+  })
+  onProgress?.({ stage: 'loudness', ratio: 0.7 })
+  const loudness = await detectLoudness(file, signal).catch((err) => {
+    if (isJobCancelled(err)) throw err
+    return []
+  })
+  onProgress?.({ stage: 'done', ratio: 1 })
+  await writeJsonCache(cache, { v: 1, silence, scenes, loudness }).catch(() => undefined)
+  return { silence, scenes, loudness }
 }
 
 function asGraphJob(job: ProgramExportJob): GraphJob {
@@ -534,6 +591,7 @@ export async function exportProgram(
         await runFfmpeg(
           [
             '-y',
+            '-noautorotate',
             '-ss',
             seg.start.toFixed(3),
             '-to',
@@ -639,8 +697,16 @@ export async function exportCut(
 
 export async function thumbnails(file: string, count = 20, signal?: AbortSignal): Promise<string[]> {
   throwIfAborted(signal, 'import')
+  const cache = thumbsCachePath(file)
+  const hit = await readJsonCache<{ v: number; count: number; thumbs: string[] }>(cache)
+  if (hit?.v === 1 && hit.count === count && Array.isArray(hit.thumbs)) {
+    return hit.thumbs
+  }
   const info = await probe(file, signal)
-  if (!info.hasVideo || info.duration < 0.2) return []
+  if (!info.hasVideo || info.duration < 0.2) {
+    void writeJsonCache(cache, { v: 1, count, thumbs: [] }).catch(() => undefined)
+    return []
+  }
   try {
     return await withTempDir('speechedit-thumbs-', async (dir) => {
       throwIfAborted(signal, 'import')
@@ -649,10 +715,11 @@ export async function thumbnails(file: string, count = 20, signal?: AbortSignal)
         'ffmpeg',
         [
           '-y',
+          '-noautorotate',
           '-i',
           file,
           '-vf',
-          `fps=${fps.toFixed(3)},scale=160:90:force_original_aspect_ratio=increase,crop=160:90`,
+          [...transposeFilters(info.rotation), `fps=${fps.toFixed(3)}`, 'scale=160:90:force_original_aspect_ratio=increase', 'crop=160:90'].join(','),
           '-frames:v',
           String(count),
           '-q:v',
@@ -668,6 +735,7 @@ export async function thumbnails(file: string, count = 20, signal?: AbortSignal)
         const buf = await readFile(join(dir, name))
         out.push(`data:image/jpeg;base64,${buf.toString('base64')}`)
       }
+      if (out.length) await writeJsonCache(cache, { v: 1, count, thumbs: out }).catch(() => undefined)
       return out
     })
   } catch (err) {

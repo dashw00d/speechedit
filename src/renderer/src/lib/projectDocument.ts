@@ -110,10 +110,22 @@ export function withResolvedAssets(project: Project, projectDir: string): Projec
 }
 
 export function slimProjectForCache(project: Project): Project {
+  return slimMediaForDisk(project)
+}
+
+function canRefillLooks(asset: Asset): boolean {
+  return Boolean(asset.path && !isExternalMediaPath(asset.path))
+}
+
+export function slimMediaForDisk(project: Project): Project {
   return mapAssets(project, (asset) => {
-    if (!asset.thumbnails?.length) return asset
-    const { thumbnails: _thumbs, ...rest } = asset
-    return rest
+    let next = asset
+    if (next.thumbnails?.length) {
+      const { thumbnails: _thumbs, ...rest } = next
+      next = rest
+    }
+    if (next.waveform?.length && canRefillLooks(next)) next = { ...next, waveform: [] }
+    return next
   })
 }
 
@@ -151,7 +163,7 @@ export function serializeDocument(project: Project, documentPath?: string | null
     kind: DOCUMENT_KIND,
     version: DOCUMENT_VERSION,
     savedAt: Date.now(),
-    project: dir ? withRelativizedAssets(normalized, dir) : normalized
+    project: slimMediaForDisk(dir ? withRelativizedAssets(normalized, dir) : normalized)
   }
 }
 
@@ -178,7 +190,7 @@ export function makeRecovery(
     documentPath: meta.documentPath,
     lastSavedAt: meta.lastSavedAt,
     dirty: meta.dirty,
-    project
+    project: slimMediaForDisk(project)
   }
 }
 

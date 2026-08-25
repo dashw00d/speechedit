@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 import { host, isElectron } from '../host'
 import { importRecording } from '../lib/importMedia'
 import { applyInterchange, pickInterchange } from '../lib/interchange'
@@ -46,8 +47,6 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
   const documentPath = useEditor((s) => s.documentPath)
   const setAnalyzing = useEditor((s) => s.setAnalyzing)
   const setPalette = useEditor((s) => s.setPalette)
-  const snap = useEditor((s) => s.snap)
-  const ripple = useEditor((s) => s.ripple)
 
   async function importMedia() {
     const busy = mediaBusyToast(exporting, analyzing)
@@ -161,6 +160,14 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
     }
   }
 
+  useEffect(() => {
+    const onOpenMedia = () => {
+      void importMedia()
+    }
+    window.addEventListener('speechedit:open-media', onOpenMedia)
+    return () => window.removeEventListener('speechedit:open-media', onOpenMedia)
+  }, [])
+
   return (
     <header className="menubar">
       <div className="brand">
@@ -232,10 +239,10 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
         </Menu>
         <Menu label="Edit">
           <Item disabled={!past} onClick={undo}>
-            Undo
+            Undo ⌘Z
           </Item>
           <Item disabled={!future} onClick={redo}>
-            Redo
+            Redo ⌘⇧Z
           </Item>
           <Item onClick={() => setPalette(true)}>Command palette</Item>
           <Item
@@ -355,14 +362,6 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             Add overlay track
           </Item>
         </Menu>
-        <Menu label="Export">
-          <Item
-            disabled={Boolean(analyzing) && !exporting}
-            onClick={exporting ? () => void cancelExport() : onExport}
-          >
-            {exporting ? 'Cancel export' : 'Program MP4…'}
-          </Item>
-        </Menu>
         <Menu label="Auto Edit">
           <Item
             onClick={() => {
@@ -437,16 +436,6 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             Normalize to -16 LUFS
           </Item>
         </Menu>
-        <button className="menu-btn" data-active={snap} onClick={() => useEditor.getState().setSnap(!snap)}>
-          Snap
-        </button>
-        <button
-          className="menu-btn"
-          data-active={ripple}
-          onClick={() => useEditor.getState().setRipple(!ripple)}
-        >
-          Ripple
-        </button>
       </nav>
       <div className="menubar-right">
         <span

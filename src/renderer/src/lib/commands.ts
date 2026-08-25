@@ -23,6 +23,8 @@ import {
   withGeneratedCaptions,
   withLowerThirds
 } from './captions'
+import { autoHideEmptyStackTrack, revealStackTrack } from './timelineTracks'
+import { SPEAKER_PALETTE } from './theme'
 import { prettySpeakerName, speakerSlug } from './diarize'
 import {
   commandForScene,
@@ -464,7 +466,7 @@ function applyDiarization(
   project: Project,
   assignments?: { start: number; end: number; speaker: string }[]
 ): Project {
-  const colors = ['#C4452D', '#2F6F8F', '#3d7a52', '#8a5a32', '#6b4c9a', '#b4532a']
+  const colors = [...SPEAKER_PALETTE]
   const speakers = [...project.transcript.speakers]
   const resolve = (label: string): string => {
     const existing = speakers.find(
@@ -523,7 +525,9 @@ function newGraphic(
   }
   return touch({
     ...project,
-    tracks: project.tracks.map((t) => (t.id === track.id ? { ...t, clips: [...t.clips, clip] } : t))
+    tracks: project.tracks.map((t) =>
+      t.id === track.id ? revealStackTrack({ ...t, clips: [...t.clips, clip] }) : t
+    )
   })
 }
 
@@ -591,8 +595,8 @@ export function applyCommand(project: Project, command: Command): Project {
         ...current,
         tracks: current.tracks.map((track) => {
           const without = track.clips.filter((c) => c.id !== command.clipId)
-          if (track.id !== destTrack) return { ...track, clips: without }
-          return { ...track, clips: [...without, moved] }
+          if (track.id !== destTrack) return autoHideEmptyStackTrack({ ...track, clips: without })
+          return revealStackTrack({ ...track, clips: [...without, moved] })
         })
       })
     }
@@ -817,6 +821,11 @@ export function applyCommand(project: Project, command: Command): Project {
           : [...current.tracks, track]
       return touch({ ...current, tracks })
     }
+    case 'removeTrack': {
+      const track = current.tracks.find((t) => t.id === command.trackId)
+      if (!track || isPrimaryLane(track)) return current
+      return touch({ ...current, tracks: current.tracks.filter((t) => t.id !== command.trackId) })
+    }
     case 'setCutMargin': {
       const margin = clamp(command.margin, 0, 0.45)
       const silence = suggestionsFromGaps({
@@ -874,10 +883,9 @@ export function applyCommand(project: Project, command: Command): Project {
     case 'removeClip':
       return touch({
         ...current,
-        tracks: current.tracks.map((track) => ({
-          ...track,
-          clips: track.clips.filter((c) => c.id !== command.clipId)
-        }))
+        tracks: current.tracks.map((track) =>
+          autoHideEmptyStackTrack({ ...track, clips: track.clips.filter((c) => c.id !== command.clipId) })
+        )
       })
     case 'applySuggestion':
       return applySuggestion(current, command.suggestionId)
@@ -934,7 +942,7 @@ export function applyCommand(project: Project, command: Command): Project {
         }
       })
     case 'addSpeaker': {
-      const colors = ['#C4452D', '#2F6F8F', '#3d7a52', '#8a5a32', '#6b4c9a', '#b4532a']
+      const colors = [...SPEAKER_PALETTE]
       const id = uid('spk')
       const speaker = {
         id,
@@ -1077,7 +1085,15 @@ export function applyCommand(project: Project, command: Command): Project {
         ...current,
         assets: {
           ...current.assets,
-          [command.assetId]: { ...asset, path: command.path, proxyPath: undefined }
+          [command.assetId]: {
+            ...asset,
+            path: command.path,
+            proxyPath: undefined,
+            waveform: [],
+            thumbnails: undefined,
+            codec: undefined,
+            vfr: undefined
+          }
         }
       })
     }

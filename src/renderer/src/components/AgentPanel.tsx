@@ -58,6 +58,12 @@ export function AgentPanel({
 
   const body = (
     <div className="agent-panel">
+      {project.suggestions.filter((s) => !s.applied).length > 0 && (
+        <p className="help agent-hint">
+          {project.suggestions.filter((s) => !s.applied).length} open edits — try Auto-cut or ask why a suggestion is
+          guarded.
+        </p>
+      )}
       <p className="help">
         Same command bus as the mouse. Every tool call is an <code>applyCommand</code>. Undo (⌘Z) reverts the
         whole turn.

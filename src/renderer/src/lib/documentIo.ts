@@ -1,7 +1,9 @@
 import { host, isElectron } from '../host'
+import { assetNeedsProxy } from '../../../shared/proxy'
 import { flushWorkspace, useEditor } from '../store'
 import {
   documentLabel,
+  isExternalMediaPath,
   localMediaRefs,
   makeRecovery,
   missingMedia,
@@ -18,6 +20,89 @@ export function confirmLoseWork(message = 'This reel has unsaved edits. Discard 
   if (!useEditor.getState().dirty) return true
   if (typeof window === 'undefined') return true
   return window.confirm(message)
+}
+
+export async function hydrateAssetLooks(): Promise<void> {
+  if (useEditor.getState().exporting) return
+  const project = useEditor.getState().project
+  const missing = new Set(useEditor.getState().missingAssets.map((ref) => ref.id))
+  const assets = { ...project.assets }
+  let changed = false
+  for (const asset of Object.values(assets)) {
+    if (!asset.path || isExternalMediaPath(asset.path) || missing.has(asset.id)) continue
+    const needPeaks = !asset.waveform?.length
+    const needThumbs = !asset.thumbnails?.length
+    if (!needPeaks && !needThumbs) continue
+    const waveform = needPeaks
+      ? await host.waveform(asset.path).catch(() => asset.waveform ?? [])
+      : asset.waveform
+    const thumbnails = needThumbs
+      ? await host.thumbnails(asset.path).catch(() => asset.thumbnails ?? [])
+      : asset.thumbnails
+    const waveChanged = needPeaks && waveform.length > 0
+    const thumbsChanged = needThumbs && (thumbnails?.length ?? 0) > 0
+    if (!waveChanged && !thumbsChanged) continue
+    assets[asset.id] = {
+      ...asset,
+      waveform: waveChanged ? waveform : asset.waveform,
+      ...(thumbsChanged ? { thumbnails } : {})
+    }
+    changed = true
+  }
+  if (changed) useEditor.getState().hydrateLooks(assets)
+}
+
+/** Remake or drop a saved preview proxy that is no longer on disk. Does not mark dirty. */
+export async function hydrateAssetProxies(): Promise<void> {
+  if (useEditor.getState().exporting) return
+  const project = useEditor.getState().project
+  const missing = new Set(useEditor.getState().missingAssets.map((ref) => ref.id))
+  const assets = { ...project.assets }
+  const candidates = Object.values(assets).filter(
+    (asset) =>
+      asset.kind === 'video' &&
+      asset.path &&
+      !isExternalMediaPath(asset.path) &&
+      !missing.has(asset.id)
+  )
+  if (!candidates.length) return
+  const proxyPaths = candidates.map((asset) => asset.proxyPath).filter((path): path is string => Boolean(path))
+  const checks = proxyPaths.length ? await host.mediaExists(proxyPaths) : []
+  const present: Record<string, boolean> = {}
+  for (const row of checks) present[row.path] = row.exists
+  let changed = false
+  for (const asset of candidates) {
+    if (asset.proxyPath && present[asset.proxyPath]) continue
+    let next = asset
+    let want = Boolean(asset.proxyPath) || assetNeedsProxy(asset)
+    if (!want && !asset.codec) {
+      const probed = await host.probe(asset.path).catch(() => null)
+      if (probed) {
+        next = {
+          ...asset,
+          ...(probed.codec ? { codec: probed.codec } : {}),
+          ...(probed.vfr ? { vfr: true } : {})
+        }
+        want = assetNeedsProxy(next)
+      }
+    }
+    if (!want) {
+      if (next !== asset) {
+        assets[asset.id] = next
+        changed = true
+      }
+      continue
+    }
+    const made = await host.makeProxy(next.path).catch(() => '')
+    assets[asset.id] = made ? { ...next, proxyPath: made } : { ...next, proxyPath: undefined }
+    changed = true
+  }
+  if (changed) useEditor.getState().hydrateLooks(assets)
+}
+
+export async function hydrateMedia(): Promise<void> {
+  await hydrateAssetProxies()
+  await hydrateAssetLooks()
 }
 
 export async function refreshMissingAssets(): Promise<void> {
@@ -62,6 +147,7 @@ export async function hydrateWorkspace(): Promise<{ source: string; recovery: bo
     })
     useEditor.getState().setRecoveryOffer(recovery)
     await refreshMissingAssets()
+    await hydrateMedia()
     return { source: 'saved', recovery: true }
   }
 
@@ -72,6 +158,7 @@ export async function hydrateWorkspace(): Promise<{ source: string; recovery: bo
       lastSavedAt: saved.savedAt
     })
     await refreshMissingAssets()
+    await hydrateMedia()
     return { source: 'document', recovery: false }
   }
 
@@ -82,10 +169,12 @@ export async function hydrateWorkspace(): Promise<{ source: string; recovery: bo
       lastSavedAt: recovery.lastSavedAt
     })
     await refreshMissingAssets()
+    await hydrateMedia()
     return { source: 'recovery', recovery: false }
   }
 
   await refreshMissingAssets()
+  await hydrateMedia()
   return { source: 'cache', recovery: false }
 }
 
@@ -99,6 +188,7 @@ export async function restoreRecovery(): Promise<void> {
   })
   useEditor.getState().setRecoveryOffer(null)
   await refreshMissingAssets()
+  await hydrateMedia()
 }
 
 export async function discardRecovery(): Promise<void> {
@@ -133,6 +223,7 @@ export async function openCurrentDocument(): Promise<string> {
     lastSavedAt: opened.savedAt
   })
   await refreshMissingAssets()
+  await hydrateMedia()
   return result.path
 }
 
@@ -141,6 +232,7 @@ export async function relinkAssetInteractive(assetId: string): Promise<string | 
   if (!file) return null
   useEditor.getState().dispatch({ type: 'relinkAsset', assetId, path: file })
   await refreshMissingAssets()
+  await hydrateMedia()
   return file
 }
 

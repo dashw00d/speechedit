@@ -6,6 +6,7 @@ import {
   fileName,
   joinMediaPath,
   localMediaRefs,
+  makeRecovery,
   missingMedia,
   openDocumentFromRaw,
   parseProjectDocument,
@@ -49,6 +50,8 @@ describe('project document portability', () => {
     expect(doc.kind).toBe(DOCUMENT_KIND)
     expect(doc.project.assets.src.path).toBe('take.mp4')
     expect(doc.project.assets.src.proxyPath).toBe('take.proxy.mp4')
+    expect(doc.project.assets.src.waveform).toEqual([])
+    expect(doc.project.assets.src.thumbnails).toBeUndefined()
     const opened = openDocumentFromRaw(doc, '/data/reel/talk.speechedit.json')
     expect(opened.project.assets.src.path).toBe('/data/reel/take.mp4')
     expect(opened.project.assets.src.proxyPath).toBe('/data/reel/take.proxy.mp4')
@@ -59,18 +62,35 @@ describe('project document portability', () => {
     expect(() => parseProjectDocument({ nope: true })).toThrow(/Not a SpeechEdit project/)
   })
 
-  test('slim cache drops thumbnails but keeps waveform', () => {
+  test('slim cache drops file-backed looks and keeps demo waveforms', () => {
     const demo = createDemoProject()
     const fat = {
       ...demo,
       assets: {
         ...demo.assets,
-        demo_src: { ...demo.assets.demo_src, thumbnails: ['data:image/jpeg;base64,abc'] }
+        demo_src: { ...demo.assets.demo_src, thumbnails: ['data:image/jpeg;base64,abc'] },
+        take: {
+          id: 'take',
+          path: '/data/reel/take.mp4',
+          name: 'take.mp4',
+          kind: 'video' as const,
+          duration: 8,
+          waveform: Array.from({ length: 1800 }, (_, i) => (i % 10) / 10),
+          thumbnails: ['data:image/jpeg;base64,xxx']
+        }
       }
     }
     const slim = slimProjectForCache(fat)
     expect(slim.assets.demo_src.thumbnails).toBeUndefined()
     expect(slim.assets.demo_src.waveform.length).toBeGreaterThan(10)
+    expect(slim.assets.take.thumbnails).toBeUndefined()
+    expect(slim.assets.take.waveform).toEqual([])
+    const recovery = makeRecovery(fat, { documentPath: null, lastSavedAt: null, dirty: true })
+    expect(recovery.project.assets.demo_src.thumbnails).toBeUndefined()
+    expect(recovery.project.assets.demo_src.waveform.length).toBeGreaterThan(10)
+    expect(recovery.project.assets.take.waveform).toEqual([])
+    const doc = serializeDocument(fat, '/data/reel/talk.speechedit.json')
+    expect(JSON.stringify(doc).length).toBeLessThan(JSON.stringify(fat).length / 2)
   })
 
   test('recovery is offered only when unsaved work is newer than the last save', () => {

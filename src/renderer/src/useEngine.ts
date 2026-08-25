@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { programLength } from './lib/commands'
 import { projectToExportJob } from './lib/exportJob'
 import { nextProgramAfterCut, sampleProgram, type ProgramLook } from './lib/programLook'
+import { shouldSeek } from './lib/seek'
 import { useEditor, usePlayback } from './store'
 
 function applyGain(video: HTMLVideoElement | null, gain: number) {
@@ -15,17 +16,18 @@ function syncVideo(
   sourceTime: number,
   speed: number,
   playing: boolean,
-  gain: number
+  gain: number,
+  fps = 30
 ) {
   if (!video?.src) return
   video.playbackRate = speed
   applyGain(video, gain)
-  if (Math.abs(video.currentTime - sourceTime) > 0.16) video.currentTime = sourceTime
+  if (shouldSeek(video.currentTime, sourceTime, playing, fps)) video.currentTime = sourceTime
   if (playing && video.paused) void video.play().catch(() => undefined)
   if (!playing && !video.paused) video.pause()
 }
 
-function syncBeds(look: ProgramLook, playing: boolean) {
+function syncBeds(look: ProgramLook, playing: boolean, fps = 30) {
   for (const item of look.beds) {
     const id = item.bed.id ?? item.bed.path
     const el = document.querySelector(`audio[data-bed="${id}"]`) as HTMLAudioElement | null
@@ -36,12 +38,12 @@ function syncBeds(look: ProgramLook, playing: boolean) {
       if (!el.paused) el.pause()
       continue
     }
-    if (Math.abs(el.currentTime - item.sourceTime) > 0.16) el.currentTime = item.sourceTime
+    if (shouldSeek(el.currentTime, item.sourceTime, playing, fps)) el.currentTime = item.sourceTime
     if (el.paused) void el.play().catch(() => undefined)
   }
 }
 
-function syncOverlays(look: ProgramLook, playing: boolean) {
+function syncOverlays(look: ProgramLook, playing: boolean, fps = 30) {
   const active = new Map(look.layers.filter((l) => l.layer.id && l.layer.kind === 'image' && !l.layer.loop).map((l) => [l.layer.id!, l]))
   for (const node of document.querySelectorAll('video[data-overlay]')) {
     const el = node as HTMLVideoElement
@@ -51,7 +53,7 @@ function syncOverlays(look: ProgramLook, playing: boolean) {
       continue
     }
     el.playbackRate = item.layer.speed || 1
-    if (Math.abs(el.currentTime - item.sourceTime) > 0.16) el.currentTime = item.sourceTime
+    if (shouldSeek(el.currentTime, item.sourceTime, playing, fps)) el.currentTime = item.sourceTime
     if (el.paused) void el.play().catch(() => undefined)
   }
 }
@@ -60,16 +62,17 @@ function syncProgram(
   video: HTMLVideoElement | null,
   under: HTMLVideoElement | null,
   look: ProgramLook,
-  playing: boolean
+  playing: boolean,
+  fps = 30
 ) {
-  syncVideo(video, look.incomingSource, look.incomingSpeed, playing, look.voice.incomingGain)
+  syncVideo(video, look.incomingSource, look.incomingSpeed, playing, look.voice.incomingGain, fps)
   if (look.outgoing && under) {
-    syncVideo(under, look.outgoingSource ?? look.incomingSource, look.outgoingSpeed, playing, look.voice.outgoingGain)
+    syncVideo(under, look.outgoingSource ?? look.incomingSource, look.outgoingSpeed, playing, look.voice.outgoingGain, fps)
   } else if (under && !under.paused) {
     under.pause()
   }
-  syncBeds(look, playing)
-  syncOverlays(look, playing)
+  syncBeds(look, playing, fps)
+  syncOverlays(look, playing, fps)
 }
 
 export function useEngine(
@@ -102,7 +105,7 @@ export function useEngine(
   useEffect(() => {
     if (playing) return
     const look = sampleProgram(projectToExportJob(projectRef.current), programTime)
-    syncProgram(videoRef.current, underRef?.current ?? null, look, false)
+    syncProgram(videoRef.current, underRef?.current ?? null, look, false, projectRef.current.fps || 30)
   }, [playing, programTime, videoRef, underRef])
 
   useEffect(() => {
@@ -112,8 +115,8 @@ export function useEngine(
       const under = underRef?.current
       if (under && !under.paused) under.pause()
       const look = sampleProgram(projectToExportJob(projectRef.current), usePlayback.getState().programTime)
-      syncBeds(look, false)
-      syncOverlays(look, false)
+      syncBeds(look, false, projectRef.current.fps || 30)
+      syncOverlays(look, false, projectRef.current.fps || 30)
       return
     }
 
@@ -150,13 +153,17 @@ export function useEngine(
       const markB =
         proj.markIn != null && proj.markOut != null ? Math.max(proj.markIn, proj.markOut) : duration
       if (state.playUntil != null && program >= state.playUntil) {
-        usePlayback.setState({ playing: false, programTime: state.playUntil, playUntil: null })
-        video?.pause()
-        underRef?.current?.pause()
-        const look = sampleProgram(job, state.playUntil)
-        syncBeds(look, false)
-        syncOverlays(look, false)
-        return
+        if (state.loopFrom != null) {
+          program = state.loopFrom
+        } else {
+          usePlayback.setState({ playing: false, programTime: state.playUntil, playUntil: null })
+          video?.pause()
+          underRef?.current?.pause()
+          const look = sampleProgram(job, state.playUntil)
+          syncBeds(look, false, proj.fps || 30)
+          syncOverlays(look, false, proj.fps || 30)
+          return
+        }
       }
       if (state.loop && proj.markIn != null && proj.markOut != null && program >= markB) {
         program = markA
@@ -167,8 +174,8 @@ export function useEngine(
           video?.pause()
           underRef?.current?.pause()
           const look = sampleProgram(job, duration)
-          syncBeds(look, false)
-          syncOverlays(look, false)
+          syncBeds(look, false, proj.fps || 30)
+          syncOverlays(look, false, proj.fps || 30)
           return
         }
       }
@@ -176,7 +183,7 @@ export function useEngine(
       const skipped = nextProgramAfterCut(job, program)
       if (skipped != null) program = skipped
       const look = sampleProgram(job, program)
-      syncProgram(videoRef.current, underRef?.current ?? null, look, true)
+      syncProgram(videoRef.current, underRef?.current ?? null, look, true, proj.fps || 30)
       usePlayback.setState({ programTime: program })
       raf = requestAnimationFrame(step)
     }

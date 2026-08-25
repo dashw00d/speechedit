@@ -8,6 +8,7 @@ import {
   type Transform
 } from '../types'
 import { annotateProtected } from './analysis'
+import { DEFAULT_SPEAKER_COLOR } from './theme'
 import { normalizeScenes } from './sceneAnalysis'
 
 function normalizeTransform(t?: Partial<Transform>): Transform {
@@ -45,10 +46,16 @@ export function normalizeProject(project: Project): Project {
       })),
       speakers: project.transcript?.speakers?.length
         ? project.transcript.speakers
-        : [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+        : [{ id: 'ryan', name: 'Speaker 1', color: DEFAULT_SPEAKER_COLOR }]
     },
     markIn: project.markIn ?? null,
     markOut: project.markOut ?? null,
+    assets: Object.fromEntries(
+      Object.entries(project.assets ?? {}).map(([id, asset]) => [
+        id,
+        { ...asset, waveform: asset.waveform ?? [] }
+      ])
+    ),
     tracks: project.tracks.map((track) => ({
       ...track,
       clips: track.clips.map((clip) => ({

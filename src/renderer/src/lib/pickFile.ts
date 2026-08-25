@@ -1,4 +1,5 @@
 import { host, isElectron } from '../host'
+import { displaySize, quarterTurn } from '../../../shared/mediaOrient'
 import { needsProxy } from '../../../shared/proxy'
 import type { Asset } from '../types'
 import { uid } from './time'
@@ -20,6 +21,8 @@ export async function inspectPickedMedia(file: string, role: 'broll' | 'audio'):
   }
   const image = /\.(png|jpe?g|webp|gif)$/i.test(name)
   const info = await host.probe(file)
+  const shown = displaySize(info.width, info.height, info.rotation)
+  const displayRotation = quarterTurn(info.rotation)
   const proxyPath =
     !image && info.hasVideo && needsProxy(info)
       ? await host.makeProxy(file).catch(() => '')
@@ -30,11 +33,14 @@ export async function inspectPickedMedia(file: string, role: 'broll' | 'audio'):
     name,
     kind: image ? 'image' : info.hasVideo ? 'video' : 'image',
     duration: info.duration || 8,
-    width: info.width,
-    height: info.height,
+    width: shown.width,
+    height: shown.height,
     fps: info.fps,
     waveform: [],
-    ...(proxyPath ? { proxyPath } : {})
+    ...(proxyPath ? { proxyPath } : {}),
+    ...(displayRotation ? { displayRotation } : {}),
+    ...(info.codec ? { codec: info.codec } : {}),
+    ...(info.vfr ? { vfr: true } : {})
   }
 }
 

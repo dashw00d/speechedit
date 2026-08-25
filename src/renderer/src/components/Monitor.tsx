@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { mediaUrl } from '../host'
+import { programFrame } from '../../../shared/mediaOrient'
 import { playbackPath } from '../../../shared/proxy'
 import { programLength } from '../lib/commands'
 import { currentWord } from '../lib/edl'
@@ -25,7 +26,11 @@ export function Monitor() {
   const sourceTime = look.sourceTime
   const word = currentWord(project.transcript.words, sourceTime)
   const asset = Object.values(project.assets)[0]
-  const src = asset?.path ? mediaUrl(playbackPath(asset)) : ''
+  const [proxyFailed, setProxyFailed] = useState(false)
+  useEffect(() => {
+    setProxyFailed(false)
+  }, [asset?.id, asset?.path, asset?.proxyPath])
+  const src = asset?.path ? mediaUrl(playbackPath(asset, { proxyExists: !proxyFailed })) : ''
   const picture = pictureAt(project, programTime)
   const { gain: volume, ducked, duckAmount, incomingGain } = look.voice
   const captions = look.layers.filter((l) => l.layer.kind === 'caption')
@@ -40,6 +45,10 @@ export function Monitor() {
 
   const crop = picture.crop
   const angle = useMemo(() => 18 + sourceTime * 37, [sourceTime])
+  const frame = programFrame(project.width, project.height)
+  const sx = (n: number) => `calc(${n} * 100cqw / ${frame.width})`
+  const sy = (n: number) => `calc(${n} * 100cqh / ${frame.height})`
+  const sfont = (n: number) => `calc(${n}px * 100cqw / ${frame.width})`
 
   function onPlayClick() {
     const willPlay = !playing
@@ -62,6 +71,16 @@ export function Monitor() {
         </span>
       </div>
       <div className="crt">
+        <div
+          className="program-stage"
+          data-orient={frame.orientation}
+          data-size={`${frame.width}x${frame.height}`}
+          style={{
+            aspectRatio: `${frame.width} / ${frame.height}`,
+            width: `min(100%, calc(100cqh * ${frame.width} / ${frame.height}))`,
+            height: `min(100%, calc(100cqw * ${frame.height} / ${frame.width}))`
+          }}
+        >
         {src ? (
           <>
             {look.outgoing && (
@@ -90,15 +109,25 @@ export function Monitor() {
                 if (usePlayback.getState().playing) return
                 usePlayback.setState({ playing: false })
               }}
+              onError={() => {
+                if (asset?.proxyPath && !proxyFailed) setProxyFailed(true)
+              }}
             />
           </>
         ) : (
+          <>
           <div className="voiceprint" style={{ transform: cssTransform(picture), opacity: picture.opacity }}>
             <div className="ring" />
             <div className="ring" />
             <div className="ring" />
             <div className="needle" style={{ transform: `translate(-50%, -100%) rotate(${angle}deg)` }} />
           </div>
+          <p className="monitor-hint">
+            {project.transcript.words.length
+              ? 'Audio-only preview — picture unavailable in this session.'
+              : 'Open media to preview your program here.'}
+          </p>
+          </>
         )}
         {overlays.map(({ layer, opacity }) => {
           if (layer.kind === 'blur') {
@@ -107,7 +136,7 @@ export function Monitor() {
                 key={layer.id ?? `${layer.start}-blur`}
                 className="redact"
                 style={{
-                  transform: `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
+                  transform: `translate(${sx(layer.x)}, ${sy(layer.y)}) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
                   opacity,
                   width: `${Math.max(12, layer.scale * 100)}%`
                 }}
@@ -117,7 +146,7 @@ export function Monitor() {
           if (layer.kind === 'image' && layer.path) {
             const media = Object.values(project.assets).find((a) => a.path === layer.path)
             const url = mediaUrl(media ? playbackPath(media) : layer.path)
-            const xf = `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`
+            const xf = `translate(${sx(layer.x)}, ${sy(layer.y)}) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`
             return layer.loop ? (
               <img
                 key={layer.id ?? layer.path}
@@ -144,9 +173,9 @@ export function Monitor() {
               key={layer.id ?? `${layer.start}-ov`}
               className="overlay-card"
               style={{
-                transform: `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
+                transform: `translate(${sx(layer.x)}, ${sy(layer.y)}) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
                 opacity,
-                fontSize: layer.fontSize,
+                fontSize: sfont(layer.fontSize),
                 color: layer.fill,
                 WebkitTextStrokeColor: layer.stroke
               }}
@@ -163,7 +192,7 @@ export function Monitor() {
               data-pos={layer.position ?? 'lower'}
               data-align={layer.align ?? 'center'}
               style={{
-                fontSize: layer.fontSize,
+                fontSize: sfont(layer.fontSize),
                 textAlign: layer.align,
                 color: layer.fill,
                 WebkitTextStrokeColor: layer.stroke,
@@ -180,6 +209,7 @@ export function Monitor() {
             </div>
           ) : null
         )}
+        </div>
         {word && <div className="now-word">{word.text}</div>}
       </div>
       <div className="transport">

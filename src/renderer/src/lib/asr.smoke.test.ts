@@ -17,6 +17,7 @@ describe('local whisper.cpp', () => {
       model: ready.model
     })
     expect(cues?.length).toBeGreaterThan(4)
+    expect(await transcribeMedia(ready.sample!, { kind: 'whisper-cpp', model: ready.model })).toEqual(cues)
     const text = (cues ?? []).map((c) => c.text).join(' ')
     expect(text).toMatch(/america|american|fellow|ask|country/i)
     expect(cues![0].end).toBeGreaterThan(cues![0].start)

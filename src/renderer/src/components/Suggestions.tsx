@@ -27,9 +27,13 @@ export function Suggestions() {
   const playFromSource = usePlayback((s) => s.playFromSource)
   const task = suggestTask(project)
   const pace = paceFromMargin(project.cutMargin)
+  const primaryApply = Boolean(task.applyLabel)
+  const primaryReview = !primaryApply && task.reviewCount > 0
+  const showReviewToggle = (primaryApply && task.reviewCount > 0) || (primaryReview && reviewing)
 
   const pending = project.suggestions.filter((s) => !s.applied)
   const applied = project.suggestions.filter((s) => s.applied)
+  const hasEdits = project.cuts.length > 0 || applied.length > 0
 
   function park(s: EditSuggestion) {
     selectSuggestion(s.id)
@@ -42,38 +46,49 @@ export function Suggestions() {
         <span className="spark">✦</span>
         <span className="suggest-copy">{task.headline}</span>
         <div className="chips">
-          {PACE_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              className="chip"
-              data-active={pace === preset.id}
-              title={`Cut pad ${preset.margin}s`}
-              onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
-            >
-              {preset.label}
-            </button>
-          ))}
+          {task.showPace &&
+            PACE_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                className="chip"
+                data-active={pace === preset.id}
+                title={`Cut pad ${preset.margin}s`}
+                onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
+              >
+                {preset.label}
+              </button>
+            ))}
         </div>
         {task.findRetakes && (
           <button className="review-btn" onClick={() => dispatch({ type: 'inferScenes' })}>
             Find retakes
           </button>
         )}
-        <button className="review-btn" onClick={() => setReviewing(!reviewing)}>
-          {reviewing ? 'Hide review' : task.reviewLabel}
-        </button>
-        {task.showWatch && (
-          <button className="review-btn" type="button" onClick={() => playFromSource(0)}>
-            Watch
+        {task.collapseRetakes && (
+          <button className="review-btn" onClick={() => dispatch({ type: 'collapseRetakes' })}>
+            Collapse retakes
           </button>
         )}
-        <button
-          className="safe-btn"
-          disabled={!task.applyLabel}
-          onClick={() => dispatch({ type: 'applySafeSuggestions' })}
-        >
-          {task.applyLabel ?? 'Nothing safe'}
-        </button>
+        {showReviewToggle && (
+          <button className="review-btn" onClick={() => setReviewing(!reviewing)}>
+            {reviewing ? 'Hide review' : task.reviewLabel}
+          </button>
+        )}
+        {task.showWatch && (
+          <button className="review-btn" type="button" onClick={() => playFromSource(0)}>
+            {hasEdits ? 'Watch edited reel' : 'Watch full reel'}
+          </button>
+        )}
+        {primaryApply && (
+          <button className="safe-btn" onClick={() => dispatch({ type: 'applySafeSuggestions' })}>
+            {task.applyLabel}
+          </button>
+        )}
+        {primaryReview && !reviewing && (
+          <button className="safe-btn" onClick={() => setReviewing(true)}>
+            {task.reviewLabel}
+          </button>
+        )}
       </footer>
       {reviewing && (
         <div className="drawer">
