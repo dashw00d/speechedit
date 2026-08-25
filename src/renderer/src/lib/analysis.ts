@@ -124,7 +124,10 @@ export function detectFillers(words: Word[]): EditSuggestion[] {
     const w = words[i]
     const key = tokenKey(w.text)
     // Discourse "like" / "Like this" is not a cut. Only um/uh-class tokens.
-    if (isFillerToken(w.text) && (key === 'um' || key === 'uh' || key === 'uhm' || key === 'uhh' || hesitationGap(words, i))) {
+    if (
+      isFillerToken(w.text) &&
+      (key === 'um' || key === 'uh' || key === 'uhm' || key === 'uhh' || hesitationGap(words, i))
+    ) {
       out.push({
         id: uid('sug'),
         type: 'filler',
@@ -345,7 +348,11 @@ export function talkingDuration(words: Word[], duration: number, silence: Interv
   return Math.max(0.5, span.end - span.start - quiet)
 }
 
-export function suggestionsFromPace(words: Word[], duration: number, silence: Interval[] = []): EditSuggestion[] {
+export function suggestionsFromPace(
+  words: Word[],
+  duration: number,
+  silence: Interval[] = []
+): EditSuggestion[] {
   const live = words.filter((w) => !w.deleted)
   if (live.length < 8 || duration < 8) return []
   const talk = talkingDuration(words, duration, silence)
@@ -404,9 +411,10 @@ export function protectIntervals(tags: RangeTag[]): Interval[] {
   return tags.filter(isProtectTag)
 }
 
-export function cutMinusProtected(range: Interval, tags: Interval[]): Interval[] {
+export function cutMinusProtected(range: Interval, tags: Array<Interval | RangeTag>): Interval[] {
+  const guards = tags.filter((tag) => !('kind' in tag) || tag.kind === 'keep' || tag.kind === 'demo')
   let pieces: Interval[] = [{ start: range.start, end: range.end }]
-  for (const tag of tags) {
+  for (const tag of guards) {
     pieces = pieces.flatMap((piece) => {
       if (overlap(piece, tag) === 0) return [piece]
       const out: Interval[] = []

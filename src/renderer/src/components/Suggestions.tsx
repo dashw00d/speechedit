@@ -51,6 +51,7 @@ export function Suggestions() {
           {safe.length ? ` · ${safe.length} safe` : ''}
           {blocked.length ? ` · ${blocked.length} protected` : ''}
           {applied.length ? ` · ${applied.length} applied` : ''}
+          {project.scenes.length ? ` · ${project.scenes.length} scenes` : ''}
         </span>
         <div className="chips">
           <span className="chip">
@@ -90,7 +91,8 @@ export function Suggestions() {
           {project.scenes.map((scene) => {
             const family = takeFamily(project.scenes, scene.id)
             const spoken = project.transcript.words.filter((w) => w.start >= scene.start && w.end <= scene.end)
-            const dropped = Boolean(suggestionForScene(project, scene)?.applied) ||
+            const dropped =
+              Boolean(suggestionForScene(project, scene)?.applied) ||
               (spoken.length > 0 && spoken.every((w) => w.deleted))
             return (
               <div key={scene.id} className="drawer-row" data-kind={scene.kind} data-applied={dropped}>
@@ -103,10 +105,7 @@ export function Suggestions() {
                   {formatClock(scene.start)}–{formatClock(scene.end)}
                 </span>
                 <span>
-                  <button
-                    className="chip"
-                    onClick={() => seekProgram(sourceToProgramOf(project, scene.start))}
-                  >
+                  <button className="chip" onClick={() => seekProgram(sourceToProgramOf(project, scene.start))}>
                     Park
                   </button>{' '}
                   {dropped ? (
