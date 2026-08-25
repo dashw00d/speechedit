@@ -1,4 +1,5 @@
 import type { Command, Project } from '../types'
+import { findTake } from './sceneAnalysis'
 import { wordRange, wordsMatchingPhrase } from './transcriptEdit'
 
 export interface IntentPlan {
@@ -11,6 +12,31 @@ export function planIntent(project: Project, intent: string): IntentPlan {
   const quoted = [...text.matchAll(/[“"]([^”"]+)[”"]/g)].map((m) => m[1])
   const lower = text.toLowerCase()
 
+  const keepTake = lower.match(
+    /keep take (\d+)(?:\s+of\s+(?:the\s+)?(.+?))?$|use take (\d+)(?:\s+of\s+(?:the\s+)?(.+))?/
+  )
+  if (keepTake) {
+    const index = Number(keepTake[1] || keepTake[3])
+    const topic = (keepTake[2] || keepTake[4] || '').trim()
+    const scene = findTake(project, topic || undefined, index)
+    if (scene) {
+      return {
+        commands: [{ type: 'keepTake', sceneId: scene.id }],
+        note: topic
+          ? `Keep take ${index} of “${topic}”. Other takes stay revertible.`
+          : `Keep take ${index}. Other takes stay revertible.`
+      }
+    }
+  }
+  if (/rebuild intelligence|re-?group scenes|refresh scenes/.test(lower)) {
+    return { commands: [{ type: 'rebuildIntelligence' }], note: 'Rebuild scenes, retakes, and suggestions (local heuristic).' }
+  }
+  if (/find scenes|group scenes|mark retakes|chapterize/.test(lower) && !/collapse|cut|remove|apply/.test(lower)) {
+    return { commands: [{ type: 'inferScenes' }], note: 'Group scenes and mark retakes from the transcript (no LLM required).' }
+  }
+  if (/collapse retake|keep (the )?best take|drop (false|bad) (start|take)s?|use (the )?good take/.test(lower)) {
+    return { commands: [{ type: 'collapseRetakes' }], note: 'Cut superseded takes. Undo still works one-by-one.' }
+  }
   if (/rebuild|re-?analy/.test(lower)) {
     return { commands: [{ type: 'rebuildSuggestions' }], note: 'Rebuild suggestions from analysis + words.' }
   }

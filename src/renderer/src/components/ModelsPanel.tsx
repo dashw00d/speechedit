@@ -96,7 +96,8 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
     <>
       <p className="help">
         Transcribe with Whisper on PATH, or any OpenAI-compatible API (Speaches, faster-whisper,
-        Groq, OpenAI). A second model groups scenes and retakes. MCP agents use the same command bus.
+        Groq, OpenAI). Intelligence is Off (local scene/retake heuristic) or an OpenAI-compatible
+        /v1/chat/completions JSON call. MCP agents use the same command bus.
       </p>
       <Field label="Transcript">
         <select
@@ -216,6 +217,12 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         </button>
         <button className="chip" disabled={Boolean(busy)} onClick={() => void ask('Group scenes and mark retakes. Do not cut yet.')}>
           Find scenes
+        </button>
+        <button className="chip" disabled={Boolean(busy)} onClick={() => dispatch({ type: 'inferScenes' })}>
+          Local heuristic
+        </button>
+        <button className="chip" disabled={Boolean(busy)} onClick={() => dispatch({ type: 'rebuildIntelligence' })}>
+          Rebuild intelligence
         </button>
       </div>
       <p className="help">

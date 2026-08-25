@@ -8,6 +8,7 @@ import {
   type Transform
 } from '../types'
 import { annotateProtected } from './analysis'
+import { normalizeScenes } from './sceneAnalysis'
 
 function normalizeTransform(t?: Partial<Transform>): Transform {
   return {
@@ -27,7 +28,7 @@ export function normalizeProject(project: Project): Project {
     })),
     picture: normalizeTransform(project.picture),
     tags: project.tags ?? [],
-    scenes: project.scenes ?? [],
+    scenes: normalizeScenes(project.scenes),
     suggestions: annotateProtected(project.suggestions ?? [], project.tags ?? []),
     audioMaster: { ...DEFAULT_AUDIO_MASTER, ...project.audioMaster },
     cutMargin: project.cutMargin ?? 0.12,

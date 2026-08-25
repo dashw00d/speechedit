@@ -207,7 +207,8 @@ export function createDemoProject(): Project {
         title: 'False take',
         summary: 'First pass of the thesis line.',
         kind: 'retake',
-        takeOf: 'sc_thesis'
+        takeOf: 'sc_thesis',
+        takeIndex: 1
       },
       {
         id: 'sc_thesis',
@@ -215,7 +216,8 @@ export function createDemoProject(): Project {
         end: 35.4,
         title: 'Keep this take',
         summary: 'The line that should stay.',
-        kind: 'talk'
+        kind: 'talk',
+        takeIndex: 2
       },
       {
         id: 'sc_end',

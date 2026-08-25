@@ -155,6 +155,7 @@ export interface EditorialScene {
   summary: string
   kind: 'talk' | 'demo' | 'retake' | 'broll' | 'other'
   takeOf?: string
+  takeIndex?: number
 }
 
 export interface AnalysisCache {
@@ -296,6 +297,10 @@ export type Command =
   | { type: 'setScenes'; scenes: EditorialScene[] }
   | { type: 'mergeIntelligence'; scenes?: EditorialScene[]; suggestions?: EditSuggestion[] }
   | { type: 'revertAt'; start: number; end: number }
+  | { type: 'inferScenes' }
+  | { type: 'rebuildIntelligence' }
+  | { type: 'collapseRetakes' }
+  | { type: 'keepTake'; sceneId: string }
 
 export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes' | 'effect'> {
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }

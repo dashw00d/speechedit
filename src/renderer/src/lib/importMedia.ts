@@ -1,6 +1,7 @@
 import { host } from '../host'
 import type { Asset, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
+import { inferScenesLocal } from './sceneAnalysis'
 import { loadSettings } from './settings'
 import { createEmptyProject } from './demo'
 import { parseSrt } from './transcript'
@@ -58,7 +59,7 @@ export async function importRecording(
     thumbnails: thumbs
   }
   const base = createEmptyProject(name.replace(/\.[^.]+$/, ''))
-  return {
+  const draft = {
     ...base,
     sourceDuration: info.duration,
     width: info.width ?? 1920,
@@ -79,6 +80,12 @@ export async function importRecording(
       words,
       margin: base.cutMargin
     })
+  }
+  const intel = inferScenesLocal(draft)
+  return {
+    ...draft,
+    scenes: intel.scenes,
+    suggestions: [...draft.suggestions, ...intel.suggestions]
   }
 }
 

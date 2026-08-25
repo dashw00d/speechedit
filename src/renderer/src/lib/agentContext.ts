@@ -12,7 +12,16 @@ export interface AgentContext {
   openSuggestions: number
   appliedSuggestions: number
   tags: { id: string; kind: string; start: number; end: number; label: string }[]
-  scenes: { id: string; start: number; end: number; title: string; kind: string; takeOf?: string; summary: string }[]
+  scenes: {
+    id: string
+    start: number
+    end: number
+    title: string
+    kind: string
+    takeOf?: string
+    takeIndex?: number
+    summary: string
+  }[]
   suggestions: {
     id: string
     type: string
@@ -70,6 +79,7 @@ export function buildAgentContext(project: Project): AgentContext {
       title: s.title,
       kind: s.kind,
       takeOf: s.takeOf,
+      takeIndex: s.takeIndex,
       summary: s.summary
     })),
     suggestions: project.suggestions.map((s) => ({
@@ -104,7 +114,7 @@ export function renderAgentBrief(project: Project): string {
   const sceneLines = ctx.scenes
     .map(
       (s) =>
-        `- ${s.title} (${formatClock(s.start)}–${formatClock(s.end)}) ${s.kind}${s.takeOf ? ` retake of ${s.takeOf}` : ''}: ${s.summary}`
+        `- ${s.title} (${formatClock(s.start)}–${formatClock(s.end)}) ${s.kind}${s.takeIndex ? ` take ${s.takeIndex}` : ''}${s.takeOf ? ` retake of ${s.takeOf}` : ''}: ${s.summary}`
     )
     .join('\n')
   const tagLines = ctx.tags

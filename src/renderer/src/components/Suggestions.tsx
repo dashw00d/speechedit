@@ -1,3 +1,4 @@
+import { commandForScene, suggestionForScene, takeFamily } from '../lib/sceneAnalysis'
 import { sourceToProgramOf } from '../lib/resolver'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
@@ -69,6 +70,45 @@ export function Suggestions() {
       </footer>
       {reviewing && (
         <div className="drawer">
+          {project.scenes.map((scene) => {
+            const family = takeFamily(project.scenes, scene.id)
+            const spoken = project.transcript.words.filter((w) => w.start >= scene.start && w.end <= scene.end)
+            const dropped = Boolean(suggestionForScene(project, scene)?.applied) ||
+              (spoken.length > 0 && spoken.every((w) => w.deleted))
+            return (
+              <div key={scene.id} className="drawer-row" data-kind={scene.kind} data-applied={dropped}>
+                <span className="kind">{scene.kind}</span>
+                <span>
+                  {scene.takeIndex ? `Take ${scene.takeIndex} · ` : ''}
+                  {scene.title}
+                </span>
+                <span className="kind">
+                  {formatClock(scene.start)}–{formatClock(scene.end)}
+                </span>
+                <span>
+                  <button
+                    className="chip"
+                    onClick={() => seekProgram(sourceToProgramOf(project, scene.start))}
+                  >
+                    Park
+                  </button>{' '}
+                  {dropped ? (
+                    <button className="chip" onClick={() => dispatch(commandForScene(project, scene, 'revert'))}>
+                      Put back
+                    </button>
+                  ) : scene.kind === 'retake' ? (
+                    <button className="chip" onClick={() => dispatch(commandForScene(project, scene, 'apply'))}>
+                      Drop take
+                    </button>
+                  ) : family.length > 1 ? (
+                    <button className="chip" onClick={() => dispatch({ type: 'keepTake', sceneId: scene.id })}>
+                      Keep this take
+                    </button>
+                  ) : null}
+                </span>
+              </div>
+            )
+          })}
           {pending.map((s) => (
             <div key={s.id} className="drawer-row" data-on={selected === s.id} data-blocked={Boolean(s.blockedBy)}>
               <span className="kind">{s.blockedBy ? 'protected' : s.type}</span>
@@ -137,7 +177,9 @@ export function Suggestions() {
               </span>
             </div>
           ))}
-          {pending.length === 0 && applied.length === 0 && <div className="drawer-row">No open suggestions.</div>}
+          {pending.length === 0 && applied.length === 0 && project.scenes.length === 0 && (
+            <div className="drawer-row">No open suggestions.</div>
+          )}
         </div>
       )}
     </>
