@@ -2,7 +2,16 @@ import { useRef, useState } from 'react'
 import { parseAnyTranscript, isFillerToken } from '../lib/transcript'
 import { currentWord } from '../lib/edl'
 import { programToSourceOf } from '../lib/resolver'
-import { extendSelection, paragraphIds, sentenceIds, tagAt, wordRange } from '../lib/transcriptEdit'
+import {
+  appliedForWord,
+  coveringAppliedSuggestion,
+  extendSelection,
+  PARAGRAPH_GAP,
+  paragraphIds,
+  sentenceIds,
+  tagAt,
+  wordRange
+} from '../lib/transcriptEdit'
 import { useEditor, usePlayback } from '../store'
 import type { TagKind } from '../types'
 
@@ -15,10 +24,12 @@ export function Transcript() {
   const programTime = usePlayback((s) => s.programTime)
   const sourceTime = programToSourceOf(project, programTime)
   const seekSource = usePlayback((s) => s.seekSource)
+  const playFromSource = usePlayback((s) => s.playFromSource)
   const active = currentWord(project.transcript.words, sourceTime)
   const [editing, setEditing] = useState<string | null>(null)
   const [paintIds, setPaintIds] = useState<string[] | null>(null)
   const dragMoved = useRef(false)
+  const pendingDouble = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tool = useEditor((s) => s.tool)
   const guardKind = useEditor((s) => s.guardKind)
   const setTool = useEditor((s) => s.setTool)
@@ -192,9 +203,10 @@ export function Transcript() {
           )
           const scene = (project.scenes ?? []).find((s) => word.start >= s.start && word.start < s.end)
           const sceneStart = scene && (!prev || prev.start < scene.start)
-          const applied = project.suggestions.find(
-            (s) => s.applied && word.deleted && word.start >= s.start && word.end <= s.end + 0.02
-          )
+          const applied = word.deleted ? appliedForWord(project, word) : undefined
+          const prevApplied = prev?.deleted ? appliedForWord(project, prev) : undefined
+          const putBackLead = Boolean(applied && applied.id !== prevApplied?.id)
+          const gapSuggestion = prev ? coveringAppliedSuggestion(project, prev.end, word.start) : undefined
           return (
             <span key={word.id}>
               {sceneStart && scene && (
@@ -203,16 +215,29 @@ export function Transcript() {
                   {scene.kind === 'retake' ? ' · retake' : ''}
                 </span>
               )}
-              {gap > 0.45 && prev && (
+              {gap > 0.45 && prev && gapSuggestion && (
                 <button
+                  type="button"
+                  className="gap-chip put-back"
+                  data-cut={gapCut}
+                  data-sug={gapSuggestion.id}
+                  title={`${gapSuggestion.label} · put this auto-edit back`}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    dispatch({ type: 'revertSuggestion', suggestionId: gapSuggestion.id })
+                  }}
+                >
+                  {gap.toFixed(1)}s · Put back
+                </button>
+              )}
+              {gap > 0.45 && prev && !gapSuggestion && (
+                <button
+                  type="button"
                   className="gap-chip"
                   data-cut={gapCut}
                   data-tag={tagAt(project.tags, (prev.end + word.start) / 2)?.kind ?? ''}
-                  title={
-                    gapCut
-                      ? 'Double-click to put this air back — reverts that auto-edit if it has one'
-                      : 'Double-click to cut this air'
-                  }
+                  title={gapCut ? 'Double-click to put this air back' : 'Double-click to cut this air'}
                   onClick={() => seekSource(prev.end)}
                   onDoubleClick={(e) => {
                     e.preventDefault()
@@ -226,7 +251,22 @@ export function Transcript() {
                   {gap.toFixed(1)}s
                 </button>
               )}
-              {gap > 1.2 && <span className="para-gap" />}
+              {gap > PARAGRAPH_GAP && <span className="para-gap" />}
+              {putBackLead && applied && (
+                <button
+                  type="button"
+                  className="gap-chip put-back"
+                  data-sug={applied.id}
+                  title={`${applied.label} · put this auto-edit back`}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    dispatch({ type: 'revertSuggestion', suggestionId: applied.id })
+                  }}
+                >
+                  Put back
+                </button>
+              )}
               {editing === word.id ? (
                 <input
                   className="word-edit"
@@ -274,29 +314,41 @@ export function Transcript() {
                       dragMoved.current = false
                       return
                     }
-                    seekSource(word.start)
+                    if (e.detail >= 3) {
+                      if (pendingDouble.current) clearTimeout(pendingDouble.current)
+                      pendingDouble.current = null
+                      selectWords(paragraphIds(words, i))
+                      return
+                    }
+                    if (e.detail === 2) return
+                    if (e.shiftKey && (e.altKey || e.metaKey || e.ctrlKey)) {
+                      selectWords(paragraphIds(words, i))
+                      return
+                    }
                     if (e.shiftKey && selected.length) {
                       const anchor = words.findIndex((w) => w.id === selected[0])
                       const [lo, hi] = anchor <= i ? [anchor, i] : [i, anchor]
                       selectWords(words.slice(lo, hi + 1).map((w) => w.id))
-                      return
-                    }
-                    if (e.shiftKey && (e.altKey || e.metaKey || e.ctrlKey)) {
-                      selectWords(paragraphIds(words, i))
+                      seekSource(word.start)
                       return
                     }
                     if (e.altKey || e.metaKey) {
                       selectWords(sentenceIds(words, i))
                       return
                     }
+                    playFromSource(word.start)
                     selectWords([word.id])
                   }}
                   onDoubleClick={() => {
-                    if (applied) {
-                      dispatch({ type: 'revertSuggestion', suggestionId: applied.id })
-                      return
-                    }
-                    dispatch({ type: 'toggleWords', wordIds: [word.id] })
+                    if (pendingDouble.current) clearTimeout(pendingDouble.current)
+                    pendingDouble.current = setTimeout(() => {
+                      pendingDouble.current = null
+                      if (applied) {
+                        dispatch({ type: 'revertSuggestion', suggestionId: applied.id })
+                        return
+                      }
+                      dispatch({ type: 'toggleWords', wordIds: [word.id] })
+                    }, 220)
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault()
@@ -311,9 +363,10 @@ export function Transcript() {
         })}
         {words.length > 0 && (
           <p className="script-hint">
-            Drag words to select. M marks them, / loops I/O. . cuts this sentence, , cuts the false start, T tightens gaps.
-            Double-click a struck auto-edit to put just that cut back. Shift+Alt-click a paragraph.
-            G paints a keep/demo guard. Double-click a word or gap chip to cut or restore. X cuts, U puts back.
+            Click a word to play from it. P plays I/O or the selection. C blades at the word.
+            Triple-click or A selects a paragraph (gap over 1.2s). M marks words, / loops I/O.
+            . cuts this sentence, , cuts the false start, T tightens gaps. Put back chips revert that auto-edit.
+            G paints a keep/demo guard. X cuts, U puts back. Drag speaker chips onto a selection.
           </p>
         )}
       </div>

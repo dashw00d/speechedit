@@ -14,7 +14,7 @@ import {
   type Transform
 } from '../types'
 import { buildSuggestions, cutMinusProtected, suggestionsFromGaps } from './analysis'
-import { previousSentenceRange, sentenceRange } from './transcriptEdit'
+import { coveringAppliedSuggestion, previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
   mergeIntervals,
@@ -835,13 +835,7 @@ export function applyCommand(project: Project, command: Command): Project {
       })
     }
     case 'revertAt': {
-      const span = { start: command.start, end: command.end }
-      const hit = current.suggestions
-        .filter((s) => s.applied && s.action !== 'normalize' && overlap(s, span) > 0.02)
-        .sort((a, b) => {
-          const cover = (s: typeof a) => overlap(s, span) / Math.max(0.01, s.end - s.start)
-          return cover(b) - cover(a)
-        })[0]
+      const hit = coveringAppliedSuggestion(current, command.start, command.end)
       if (hit) return revertSuggestion(current, hit.id)
       return restoreSourceRange(current, command.start, command.end)
     }

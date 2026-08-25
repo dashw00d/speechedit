@@ -29,6 +29,15 @@ describe('command bus', () => {
     expect(programLength(p)).toBeLessThan(programLength(createDemoProject()))
   })
 
+  test('splitAt blades on a word start', () => {
+    const demo = createDemoProject()
+    const word = demo.transcript.words.find((w) => w.text === 'First')
+    expect(word).toBeTruthy()
+    const next = applyCommand(demo, { type: 'splitAt', time: word!.start })
+    expect(next.splits.some((t) => Math.abs(t - word!.start) < 0.01)).toBe(true)
+    expect(resolveSegments(next).some((s) => Math.abs(s.inPoint - word!.start) < 0.01)).toBe(true)
+  })
+
   test('word edit does not cut', () => {
     const p = createDemoProject()
     const word = p.transcript.words[0]
@@ -368,5 +377,34 @@ describe('intelligence and MCP', () => {
     expect(um).toBeTruthy()
     const back = applyCommand(safe, { type: 'revertAt', start: um!.start, end: um!.end })
     expect(back.suggestions.find((s) => s.id === um!.id)?.applied).toBe(false)
+  })
+
+  test('revertAt reverts the covering applied suggestion, not a blind restore', () => {
+    const safe = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const silence = safe.suggestions.find((s) => s.type === 'silence' && s.applied && s.start < 10)
+    expect(silence).toBeTruthy()
+    const mid = applyCommand(safe, {
+      type: 'revertAt',
+      start: silence!.start + 0.15,
+      end: silence!.start + 0.4
+    })
+    expect(mid.suggestions.find((s) => s.id === silence!.id)?.applied).toBe(false)
+    expect(programLength(mid)).toBeGreaterThan(programLength(safe))
+  })
+
+  test('revertAt falls back to restoreRange when no applied suggestion covers', () => {
+    const demo = createDemoProject()
+    const that = demo.transcript.words.find((w) => w.text === 'that')
+    expect(that).toBeTruthy()
+    const cut = applyCommand(demo, {
+      type: 'deleteRange',
+      start: that!.start,
+      end: that!.end,
+      source: 'transcript'
+    })
+    expect(cut.transcript.words.find((w) => w.id === that!.id)?.deleted).toBe(true)
+    expect(cut.suggestions.some((s) => s.applied && s.action !== 'normalize')).toBe(false)
+    const back = applyCommand(cut, { type: 'revertAt', start: that!.start, end: that!.end })
+    expect(back.transcript.words.find((w) => w.id === that!.id)?.deleted).toBe(false)
   })
 })

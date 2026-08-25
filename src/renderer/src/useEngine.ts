@@ -157,6 +157,13 @@ export function useEngine(
         proj.markIn != null && proj.markOut != null ? Math.min(proj.markIn, proj.markOut) : 0
       const markB =
         proj.markIn != null && proj.markOut != null ? Math.max(proj.markIn, proj.markOut) : duration
+      if (state.playUntil != null && program >= state.playUntil) {
+        usePlayback.setState({ playing: false, programTime: state.playUntil, playUntil: null })
+        video?.pause()
+        underRef?.current?.pause()
+        syncBeds(false, state.playUntil)
+        return
+      }
       if (state.loop && proj.markIn != null && proj.markOut != null && program >= markB) {
         program = markA
       } else if (program >= duration) {

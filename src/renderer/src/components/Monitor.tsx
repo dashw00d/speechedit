@@ -206,6 +206,13 @@ export function Monitor() {
           </span>
         )}
         <LoopButton />
+        <button
+          className="chip"
+          title="Play I/O, or the word selection if marks are empty (P)"
+          onClick={() => usePlayback.getState().playSelectionOrMarks()}
+        >
+          Play I/O
+        </button>
         <MarkButtons />
         <div className="beds" hidden>
           {audioBeds(project).map((bed) => (
