@@ -44,6 +44,7 @@ export interface EditorState {
   agentOpen: boolean
   dirty: boolean
   analyzing: string | null
+  exporting: boolean
   snap: boolean
   ripple: boolean
   tool: 'select' | 'guard' | 'blade'
@@ -63,6 +64,7 @@ export interface EditorState {
   setPalette: (value: boolean) => void
   setAgentOpen: (value: boolean) => void
   setAnalyzing: (value: string | null) => void
+  setExporting: (value: boolean) => void
   setSnap: (value: boolean) => void
   setRipple: (value: boolean) => void
   setTool: (tool: EditorState['tool']) => void
@@ -233,6 +235,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   agentOpen: false,
   dirty: false,
   analyzing: null,
+  exporting: false,
   snap: true,
   ripple: true,
   tool: 'select',
@@ -302,6 +305,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setPalette: (value) => set({ palette: value }),
   setAgentOpen: (value) => set({ agentOpen: value }),
   setAnalyzing: (value) => set({ analyzing: value }),
+  setExporting: (value) => set({ exporting: value }),
   setSnap: (value) => set({ snap: value }),
   setRipple: (value) => set({ ripple: value }),
   setTool: (tool) => set({ tool }),

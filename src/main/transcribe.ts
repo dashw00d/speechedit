@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readdir, readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import {
   cliBinariesFor,
@@ -11,6 +10,8 @@ import {
   type AsrResult,
   type TranscriptKind
 } from '../shared/asr'
+import { WhisperUnavailable, isJobCancelled, throwIfAborted } from '../shared/mediaJob'
+import { runChild, withTempDir } from './childJob'
 
 export interface ModelEndpointOpts {
   kind?: string
@@ -33,18 +34,14 @@ export interface AsrPathStatus {
 
 type ProgressFn = (info: TranscribeProgress) => void
 
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (d) => (stdout += d.toString()))
-    child.stderr.on('data', (d) => (stderr += d.toString()))
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) resolve(stderr + stdout)
-      else reject(new Error(`${cmd} exited ${code}: ${stderr.slice(-400)}`))
-    })
+function run(cmd: string, args: string[], signal?: AbortSignal): Promise<string> {
+  return runChild(cmd, args, {
+    signal,
+    kind: 'import',
+    missing:
+      cmd === 'ffmpeg' || cmd === 'ffprobe'
+        ? 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
+        : `${cmd} did not start. Install whisper-cli or whisper.cpp, or pick an OpenAI-compatible endpoint in Models.`
   })
 }
 
@@ -87,89 +84,92 @@ async function transcribePythonStyle(
   bin: string,
   file: string,
   extra: string[],
-  provider: string
+  provider: string,
+  signal?: AbortSignal
 ): Promise<AsrResult | null> {
-  const dir = await mkdtemp(join(tmpdir(), 'speechedit-asr-'))
-  try {
-    const out = await run(bin, [
-      file,
-      '--output_format',
-      'json',
-      '--output_dir',
-      dir,
-      '--word_timestamps',
-      'True',
-      ...extra
-    ])
-    const fromOut = parseAsrPayload(out, provider)
-    if (fromOut?.cues.length) return fromOut
-    const raw = await firstJsonIn(dir)
-    return raw ? parseAsrPayload(raw, provider) : null
-  } catch {
+  return withTempDir('speechedit-asr-', async (dir) => {
     try {
-      const out = await run(bin, [file, '--output_format', 'json', '--output_dir', dir, ...extra])
+      const out = await run(
+        bin,
+        [file, '--output_format', 'json', '--output_dir', dir, '--word_timestamps', 'True', ...extra],
+        signal
+      )
       const fromOut = parseAsrPayload(out, provider)
       if (fromOut?.cues.length) return fromOut
       const raw = await firstJsonIn(dir)
       return raw ? parseAsrPayload(raw, provider) : null
-    } catch {
-      return null
+    } catch (err) {
+      if (isJobCancelled(err)) throw err
+      try {
+        const out = await run(bin, [file, '--output_format', 'json', '--output_dir', dir, ...extra], signal)
+        const fromOut = parseAsrPayload(out, provider)
+        if (fromOut?.cues.length) return fromOut
+        const raw = await firstJsonIn(dir)
+        return raw ? parseAsrPayload(raw, provider) : null
+      } catch (inner) {
+        if (isJobCancelled(inner)) throw inner
+        return null
+      }
     }
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
+  })
 }
 
-async function transcribeMlx(bin: string, file: string, model?: string): Promise<AsrResult | null> {
-  const dir = await mkdtemp(join(tmpdir(), 'speechedit-mlx-'))
-  const extra = pythonModelArgs(model)
-  const attempts = [
-    [file, '--output-format', 'json', '--output-dir', dir, '--word-timestamps', ...extra],
-    [file, '--output_format', 'json', '--output_dir', dir, '--word_timestamps', 'True', ...extra]
-  ]
-  try {
+async function transcribeMlx(
+  bin: string,
+  file: string,
+  model?: string,
+  signal?: AbortSignal
+): Promise<AsrResult | null> {
+  return withTempDir('speechedit-mlx-', async (dir) => {
+    const extra = pythonModelArgs(model)
+    const attempts = [
+      [file, '--output-format', 'json', '--output-dir', dir, '--word-timestamps', ...extra],
+      [file, '--output_format', 'json', '--output_dir', dir, '--word_timestamps', 'True', ...extra]
+    ]
     for (const args of attempts) {
       try {
-        const out = await run(bin, args)
+        const out = await run(bin, args, signal)
         const fromOut = parseAsrPayload(out, 'mlx-whisper')
         if (fromOut?.cues.length) return fromOut
         const raw = await firstJsonIn(dir)
         const parsed = raw ? parseAsrPayload(raw, 'mlx-whisper') : null
         if (parsed?.cues.length) return parsed
-      } catch {
+      } catch (err) {
+        if (isJobCancelled(err)) throw err
         continue
       }
     }
     return null
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
+  })
 }
 
-async function transcribeWhisperCpp(bin: string, file: string, model?: string): Promise<AsrResult | null> {
-  const dir = await mkdtemp(join(tmpdir(), 'speechedit-wcpp-'))
-  const prefix = join(dir, 'out')
-  const modelArgs =
-    model && (model.endsWith('.bin') || model.includes('/') || model.includes('\\')) ? ['-m', model] : []
-  const attempts = [
-    ['-f', file, '-oj', '-ojf', '-of', prefix, '-ml', '1', ...modelArgs],
-    ['-f', file, '-oj', '-of', prefix, ...modelArgs]
-  ]
-  try {
+async function transcribeWhisperCpp(
+  bin: string,
+  file: string,
+  model?: string,
+  signal?: AbortSignal
+): Promise<AsrResult | null> {
+  return withTempDir('speechedit-wcpp-', async (dir) => {
+    const prefix = join(dir, 'out')
+    const modelArgs =
+      model && (model.endsWith('.bin') || model.includes('/') || model.includes('\\')) ? ['-m', model] : []
+    const attempts = [
+      ['-f', file, '-oj', '-ojf', '-of', prefix, '-ml', '1', ...modelArgs],
+      ['-f', file, '-oj', '-of', prefix, ...modelArgs]
+    ]
     for (const args of attempts) {
       try {
-        await run(bin, args)
+        await run(bin, args, signal)
         const raw = await readFile(`${prefix}.json`, 'utf8').catch(async () => (await firstJsonIn(dir)) ?? '')
         const parsed = raw ? parseAsrPayload(raw, 'whisper-cpp') : null
         if (parsed?.cues.length) return parsed
-      } catch {
+      } catch (err) {
+        if (isJobCancelled(err)) throw err
         continue
       }
     }
     return null
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
+  })
 }
 
 async function tryBins(
@@ -184,34 +184,50 @@ async function tryBins(
   return null
 }
 
-async function transcribeCli(kind: TranscriptKind, file: string, model?: string): Promise<AsrResult | null> {
-  if (kind === 'whisper-cpp') {
-    return tryBins(cliBinariesFor('whisper-cpp'), (bin) => transcribeWhisperCpp(bin, file, model))
+async function transcribeCli(
+  kind: TranscriptKind,
+  file: string,
+  model?: string,
+  signal?: AbortSignal
+): Promise<AsrResult | null> {
+  const bins =
+    kind === 'whisper-cpp'
+      ? cliBinariesFor('whisper-cpp')
+      : kind === 'mlx-whisper'
+        ? cliBinariesFor('mlx-whisper')
+        : kind === 'faster-whisper'
+          ? cliBinariesFor('faster-whisper')
+          : cliBinariesFor('whisper-cli')
+  const runOne =
+    kind === 'whisper-cpp'
+      ? (bin: string) => transcribeWhisperCpp(bin, file, model, signal)
+      : kind === 'mlx-whisper'
+        ? (bin: string) => transcribeMlx(bin, file, model, signal)
+        : kind === 'faster-whisper'
+          ? (bin: string) => transcribePythonStyle(bin, file, pythonModelArgs(model), 'faster-whisper', signal)
+          : (bin: string) => transcribePythonStyle(bin, file, pythonModelArgs(model), 'whisper-cli', signal)
+  const result = await tryBins(bins, runOne)
+  if (result?.cues.length) return result
+  const found = []
+  for (const bin of bins) {
+    if (await hasBin(bin)) found.push(bin)
   }
-  if (kind === 'mlx-whisper') {
-    return tryBins(cliBinariesFor('mlx-whisper'), (bin) => transcribeMlx(bin, file, model))
-  }
-  if (kind === 'faster-whisper') {
-    return tryBins(cliBinariesFor('faster-whisper'), (bin) =>
-      transcribePythonStyle(bin, file, pythonModelArgs(model), 'faster-whisper')
-    )
-  }
-  return tryBins(cliBinariesFor('whisper-cli'), (bin) =>
-    transcribePythonStyle(bin, file, pythonModelArgs(model), 'whisper-cli')
-  )
+  if (!found.length) throw new WhisperUnavailable()
+  return null
 }
 
-async function extractWav(file: string): Promise<{ dir: string; wav: string }> {
-  const dir = await mkdtemp(join(tmpdir(), 'speechedit-asr-'))
-  const wav = join(dir, `${basename(file, '').replace(/\.[^.]+$/, '') || 'a'}.wav`)
-  await run('ffmpeg', ['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav])
-  return { dir, wav }
-}
-
-async function transcribeHttp(file: string, opts: ModelEndpointOpts): Promise<AsrResult | null> {
-  if (!opts.baseUrl || !opts.model) return null
-  const { dir, wav } = await extractWav(file)
-  try {
+async function transcribeHttp(
+  file: string,
+  opts: ModelEndpointOpts,
+  signal?: AbortSignal
+): Promise<AsrResult | null> {
+  if (!opts.baseUrl || !opts.model) {
+    throw new WhisperUnavailable('Set a transcription URL and model in Models.')
+  }
+  return withTempDir('speechedit-asr-', async (dir) => {
+    throwIfAborted(signal, 'import')
+    const wav = join(dir, `${basename(file, '').replace(/\.[^.]+$/, '') || 'a'}.wav`)
+    await run('ffmpeg', ['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav], signal)
     const buf = await readFile(wav)
     const blob = new Blob([buf], { type: 'audio/wav' })
     const headers: Record<string, string> = {}
@@ -223,7 +239,7 @@ async function transcribeHttp(file: string, opts: ModelEndpointOpts): Promise<As
       body.append('model', opts.model || 'whisper-1')
       body.append('response_format', 'verbose_json')
       if (withWords) body.append('timestamp_granularities[]', 'word')
-      const res = await fetch(transcriptionsUrl(opts.baseUrl || ''), { method: 'POST', headers, body })
+      const res = await fetch(transcriptionsUrl(opts.baseUrl || ''), { method: 'POST', headers, body, signal })
       if (!res.ok) throw new Error(`Transcribe ${res.status}: ${(await res.text()).slice(0, 200)}`)
       return parseAsrPayload(await res.json(), 'openai-compatible')
     }
@@ -231,13 +247,12 @@ async function transcribeHttp(file: string, opts: ModelEndpointOpts): Promise<As
     try {
       const withWords = await post(true)
       if (withWords?.cues.length) return withWords
-    } catch {
+    } catch (err) {
+      if (isJobCancelled(err)) throw err
       /* some local servers reject timestamp_granularities */
     }
     return post(false)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
+  })
 }
 
 function flatten(result: AsrResult | null): AsrCue[] | null {
@@ -264,7 +279,8 @@ export async function transcribe(
 export async function transcribeMedia(
   file: string,
   opts?: ModelEndpointOpts,
-  onProgress?: ProgressFn
+  onProgress?: ProgressFn,
+  signal?: AbortSignal
 ): Promise<AsrCue[] | null> {
   const kind = coerceTranscriptKind(opts?.kind)
   const note = (stage: TranscribeProgress['stage'], ratio: number) => onProgress?.({ stage, ratio })
@@ -275,18 +291,19 @@ export async function transcribeMedia(
   }
 
   note('prepare', 0.05)
+  throwIfAborted(signal, 'import')
   try {
     if (kind === 'openai-compatible') {
       note('audio', 0.2)
       note('run', 0.45)
-      const result = await transcribeHttp(file, opts ?? {})
+      const result = await transcribeHttp(file, opts ?? {}, signal)
       note('parse', 0.9)
       note('done', 1)
       return flatten(result)
     }
 
     note('run', 0.35)
-    const result = await transcribeCli(kind, file, opts?.model)
+    const result = await transcribeCli(kind, file, opts?.model, signal)
     if (result?.cues.length) {
       note('parse', 0.9)
       note('done', 1)
@@ -295,8 +312,8 @@ export async function transcribeMedia(
 
     note('done', 1)
     return null
-  } catch {
+  } catch (err) {
     note('done', 1)
-    return null
+    throw err
   }
 }

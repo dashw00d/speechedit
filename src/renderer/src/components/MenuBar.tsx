@@ -29,6 +29,14 @@ import {
   saveCurrentDocument
 } from '../lib/documentIo'
 import { parseAnyTranscript } from '../lib/transcript'
+import {
+  cancelExport,
+  cancelImport,
+  createImportSignal,
+  isJobCancelled,
+  mediaBusyToast,
+  whisperMissingMessage
+} from '../lib/mediaJobs'
 import { useEditor, usePlayback } from '../store'
 
 interface Props {
@@ -56,24 +64,43 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
   const ripple = useEditor((s) => s.ripple)
 
   async function importMedia() {
+    const busy = mediaBusyToast(exporting, analyzing)
+    if (busy) {
+      onToast(busy)
+      return
+    }
     if (!confirmLoseWork()) return
     const file = await host.openMedia()
     if (!file) {
       onToast(isElectron ? 'No file selected.' : 'Open this in Electron to import media.')
       return
     }
+    const signal = createImportSignal()
+    let whisperNote: string | null = null
     try {
-      const next = await importRecording(file, (stage) => {
-        setAnalyzing(stage)
-        onToast(`Analyzing · ${stage}`)
+      await host.beginJob('import')
+      const next = await importRecording(file, {
+        signal,
+        onStage: (stage) => {
+          if (stage === 'transcript:missing') {
+            whisperNote = whisperMissingMessage()
+            setAnalyzing('transcript')
+            return
+          }
+          setAnalyzing(stage)
+          onToast(`Analyzing · ${stage}`)
+        }
       })
       loadProject(next, { path: null, clean: false })
       onToast(
-        `${next.name} · ${next.suggestions.length} suggestions · ${next.transcript.words.length} words`
+        whisperNote
+          ? `${next.name} · ${next.transcript.words.length} island words. ${whisperNote}`
+          : `${next.name} · ${next.suggestions.length} suggestions · ${next.transcript.words.length} words`
       )
     } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Import failed.')
+      onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Import failed.')
     } finally {
+      await host.endJob('import').catch(() => undefined)
       setAnalyzing(null)
     }
   }
@@ -142,7 +169,9 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           >
             New reel
           </Item>
-          <Item onClick={() => void importMedia()}>Open media…</Item>
+          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void importMedia()}>
+            Open media…
+          </Item>
           <Item onClick={() => void openTranscript()}>Open transcript…</Item>
           <Item onClick={() => void importTimeline()}>Import timeline…</Item>
           <Item
@@ -341,7 +370,12 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           </Item>
         </Menu>
         <Menu label="Export">
-          <Item onClick={onExport}>Program MP4…</Item>
+          <Item
+            disabled={Boolean(analyzing) && !exporting}
+            onClick={exporting ? () => void cancelExport() : onExport}
+          >
+            {exporting ? 'Cancel export' : 'Program MP4…'}
+          </Item>
           <Item onClick={() => void exportInterchange('srt', projectToSrt(project), `${project.name}.srt`)}>
             Captions SRT
           </Item>
@@ -488,7 +522,12 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
         </button>
       </nav>
       <div className="menubar-right">
-        <span className="status-pill" data-dirty={dirty || undefined}>
+        <span
+          className="status-pill"
+          data-dirty={dirty || undefined}
+          title={analyzing ? 'Cancel import' : undefined}
+          onClick={analyzing ? () => void cancelImport() : undefined}
+        >
           {analyzing
             ? `Analyze · ${analyzing}`
             : dirty
@@ -497,8 +536,12 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           · {documentPath ? currentDocumentTitle() : project.name} · {project.fps} fps · {project.width}×
           {project.height}
         </span>
-        <button className="export-btn" onClick={onExport} disabled={exporting}>
-          {exporting ? 'Exporting…' : 'Export'}
+        <button
+          className="export-btn"
+          onClick={exporting ? () => void cancelExport() : onExport}
+          disabled={Boolean(analyzing) && !exporting}
+        >
+          {exporting ? 'Cancel' : 'Export'}
         </button>
       </div>
     </header>

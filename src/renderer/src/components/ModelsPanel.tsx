@@ -11,11 +11,15 @@ import {
   type AppSettings
 } from '../lib/settings'
 import { presetIdFor } from '../../../shared/asr'
+import { busyMessage, isJobCancelled, whisperMissingMessage } from '../lib/mediaJobs'
 import { useEditor } from '../store'
 
 export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
   const dispatch = useEditor((s) => s.dispatch)
+  const analyzing = useEditor((s) => s.analyzing)
+  const exporting = useEditor((s) => s.exporting)
+  const setAnalyzing = useEditor((s) => s.setAnalyzing)
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [busy, setBusy] = useState<string | null>(null)
   const [pathStatus, setPathStatus] = useState<{ kind: string; available: boolean; found: string[] }[]>(
@@ -33,16 +37,26 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   }
 
   async function transcribeAgain() {
+    if (exporting) {
+      onToast(busyMessage('export'))
+      return
+    }
+    if (analyzing) {
+      onToast(busyMessage('import'))
+      return
+    }
     const asset = Object.values(project.assets).find((a) => a.path)
     if (!asset?.path) {
       onToast('Open media first.')
       return
     }
     setBusy('transcribe')
+    setAnalyzing('transcript')
     try {
+      await host.beginJob('import')
       const cues = await host.transcribe(asset.path, settings.transcript)
       const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
-      if (!words.length) throw new Error('No transcript came back. Check the provider, or use speech islands.')
+      if (!words.length) throw new Error(`${whisperMissingMessage()} Or use speech islands.`)
       useEditor.getState().loadTranscript(words)
       const labeled = Array.isArray(cues) ? cues.filter((c) => c.speaker) : []
       if (labeled.length) {
@@ -53,8 +67,10 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       }
       onToast(`Transcript · ${words.length} words`)
     } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Transcribe failed.')
+      onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Transcribe failed.')
     } finally {
+      await host.endJob('import').catch(() => undefined)
+      setAnalyzing(null)
       setBusy(null)
     }
   }
@@ -213,7 +229,11 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         </>
       )}
       <div className="script-tools" style={{ padding: 0 }}>
-        <button className="chip" disabled={Boolean(busy)} onClick={() => void transcribeAgain()}>
+        <button
+          className="chip"
+          disabled={Boolean(busy) || Boolean(analyzing) || exporting}
+          onClick={() => void transcribeAgain()}
+        >
           {busy === 'transcribe' ? 'Transcribing…' : 'Transcribe again'}
         </button>
         <button className="chip" disabled={Boolean(busy)} onClick={() => void ask()}>

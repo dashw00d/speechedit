@@ -57,6 +57,9 @@ const api = {
   syncPath: () => ipcRenderer.invoke('project:syncPath') as Promise<string>,
   analyze: (file: string) => ipcRenderer.invoke('media:analyze', file),
   encoders: () => ipcRenderer.invoke('media:encoders'),
+  beginJob: (kind: 'export' | 'import') => ipcRenderer.invoke('media:job-begin', kind) as Promise<void>,
+  endJob: (kind?: 'export' | 'import') => ipcRenderer.invoke('media:job-end', kind) as Promise<void>,
+  cancelJob: (kind?: 'export' | 'import') => ipcRenderer.invoke('media:job-cancel', kind) as Promise<void>,
   exportProgram: (job: unknown) => ipcRenderer.invoke('media:export', job) as Promise<string>,
   onExportProgress: (fn: (info: { ratio: number; stage: string }) => void) => {
     const listener = (_e: unknown, info: { ratio: number; stage: string }) => fn(info)

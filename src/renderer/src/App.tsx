@@ -24,11 +24,12 @@ import { buildExportJob } from './lib/exportJob'
 import { programToSourceOf, snapTime, sourceToProgramOf } from './lib/resolver'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
 import { extendSelection, wordRange } from './lib/transcriptEdit'
+import { cancelExport, cancelImport, isJobCancelled, mediaBusyToast } from './lib/mediaJobs'
 import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
 
 export function App() {
   const [toast, setToast] = useState<string | null>(null)
-  const [exporting, setExporting] = useState(false)
+  const exporting = useEditor((s) => s.exporting)
   const agentOpen = useEditor((s) => s.agentOpen)
   const recoveryOffer = useEditor((s) => s.recoveryOffer)
   const missingAssets = useEditor((s) => s.missingAssets)
@@ -70,7 +71,17 @@ export function App() {
   useHotkeys(setToast)
 
   async function onExport() {
-    const project = useEditor.getState().project
+    const editor = useEditor.getState()
+    if (editor.exporting) {
+      void cancelExport()
+      return
+    }
+    const busy = mediaBusyToast(false, editor.analyzing)
+    if (busy) {
+      setToast(busy)
+      return
+    }
+    const project = editor.project
     const job = buildExportJob(project, '')
     if (!job) {
       setToast('Open media to export a program.')
@@ -87,7 +98,7 @@ export function App() {
     }
     const output = await host.chooseExport()
     if (!output) return
-    setExporting(true)
+    editor.setExporting(true)
     setToast(`Export 0% — ${summarizeJob(job)}`)
     const stop = host.onExportProgress((info) =>
       setToast(`Export ${Math.round(info.ratio * 100)}% — ${info.stage}`)
@@ -96,10 +107,10 @@ export function App() {
       await host.exportProgram({ ...job, output })
       setToast(`Export finished — ${summarizeJob(job)}. File: ${output}`)
     } catch (err) {
-      setToast(err instanceof Error ? err.message : 'Export failed.')
+      setToast(isJobCancelled(err) ? 'Export cancelled.' : err instanceof Error ? err.message : 'Export failed.')
     } finally {
       stop()
-      setExporting(false)
+      useEditor.getState().setExporting(false)
     }
   }
 
@@ -178,6 +189,12 @@ function useHotkeys(setToast: (msg: string) => void) {
       const editor = useEditor.getState()
       const playback = usePlayback.getState()
 
+      if (e.key === 'Escape' && (editor.exporting || editor.analyzing) && !editor.palette) {
+        e.preventDefault()
+        if (editor.exporting) void cancelExport()
+        else void cancelImport()
+        return
+      }
       if (meta && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         editor.setPalette(!editor.palette)

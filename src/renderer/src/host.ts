@@ -1,3 +1,5 @@
+import { JobGate } from '../../shared/mediaJob'
+
 export interface SpeechHost {
   openMedia: () => Promise<string | null>
   openBroll: () => Promise<string | null>
@@ -54,6 +56,9 @@ export interface SpeechHost {
     loudness: { start: number; end: number; lufs: number }[]
   }>
   encoders: () => Promise<{ id: string; label: string; hardware: boolean }[]>
+  beginJob: (kind: 'export' | 'import') => Promise<void>
+  endJob: (kind?: 'export' | 'import') => Promise<void>
+  cancelJob: (kind?: 'export' | 'import') => Promise<void>
   exportProgram: (job: unknown) => Promise<string>
   onExportProgress: (fn: (info: { ratio: number; stage: string }) => void) => () => void
   onAnalyzeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
@@ -109,6 +114,7 @@ function pickBrowserFile(accept: string): Promise<{ name: string; text: string }
 }
 
 const electronHost = typeof window !== 'undefined' ? window.speech : undefined
+const webJobs = new JobGate()
 
 export const host: SpeechHost = electronHost ?? {
   openMedia: missing,
@@ -234,6 +240,15 @@ export const host: SpeechHost = electronHost ?? {
     loudness: []
   }),
   encoders: async () => [{ id: 'libx264', label: 'x264 (CPU)', hardware: false }],
+  beginJob: async (kind) => {
+    webJobs.start(kind)
+  },
+  endJob: async (kind) => {
+    webJobs.finish(kind)
+  },
+  cancelJob: async (kind) => {
+    webJobs.cancel(kind)
+  },
   exportProgram: async () => {
     throw new Error('Export needs the Electron app.')
   },

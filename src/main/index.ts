@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { asMediaJobKind, JobBusy, JobGate } from '../shared/mediaJob'
 import {
   detectEncoders,
   detectLoudness,
@@ -67,7 +68,21 @@ function createWindow(): BrowserWindow {
     shell.openExternal(url)
     return { action: 'deny' }
   })
+  win.on('closed', () => {
+    jobs.cancel()
+    jobs.finish()
+  })
   return win
+}
+
+const jobs = new JobGate()
+
+function ipcError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err))
+}
+
+function refuseIfExporting(): void {
+  if (jobs.kind === 'export') throw new JobBusy('export')
 }
 
 app.whenReady().then(() => {
@@ -241,16 +256,49 @@ ipcMain.handle('dialog:openTranscript', async () => {
   return { path, text, name: path.split(/[\\/]/).pop() ?? 'transcript' }
 })
 
-ipcMain.handle('media:probe', async (_e, file: string) => probe(file))
-ipcMain.handle('media:waveform', async (_e, file: string) => waveform(file))
-ipcMain.handle('media:silence', async (_e, file: string) => detectSilence(file))
-ipcMain.handle('media:scenes', async (_e, file: string) => detectScenes(file))
-ipcMain.handle('media:loudness', async (_e, file: string) => detectLoudness(file))
-ipcMain.handle('media:transcribe', async (e, file: string, opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
-  transcribeMedia(file, opts, (info) => {
-    e.sender.send('media:transcribe-progress', info)
-  })
-)
+ipcMain.handle('media:job-begin', (_e, kind: unknown) => {
+  const job = asMediaJobKind(kind)
+  if (!job) throw new Error('Unknown media job.')
+  jobs.start(job)
+})
+ipcMain.handle('media:job-end', (_e, kind?: unknown) => {
+  jobs.finish(asMediaJobKind(kind) ?? undefined)
+})
+ipcMain.handle('media:job-cancel', (_e, kind?: unknown) => {
+  jobs.cancel(asMediaJobKind(kind) ?? undefined)
+})
+ipcMain.handle('media:job-busy', () => jobs.kind)
+
+ipcMain.handle('media:probe', async (_e, file: string) => {
+  refuseIfExporting()
+  return probe(file, jobs.signal)
+})
+ipcMain.handle('media:waveform', async (_e, file: string) => {
+  refuseIfExporting()
+  return waveform(file, 1800, jobs.signal)
+})
+ipcMain.handle('media:silence', async (_e, file: string) => {
+  refuseIfExporting()
+  return detectSilence(file, '-30dB', 0.35, jobs.signal)
+})
+ipcMain.handle('media:scenes', async (_e, file: string) => {
+  refuseIfExporting()
+  return detectScenes(file, jobs.signal)
+})
+ipcMain.handle('media:loudness', async (_e, file: string) => {
+  refuseIfExporting()
+  return detectLoudness(file, jobs.signal)
+})
+ipcMain.handle('media:transcribe', async (e, file: string, opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) => {
+  refuseIfExporting()
+  try {
+    return await transcribeMedia(file, opts, (info) => {
+      e.sender.send('media:transcribe-progress', info)
+    }, jobs.signal)
+  } catch (err) {
+    throw ipcError(err)
+  }
+})
 ipcMain.handle('media:asrPath', async () => listAsrPath())
 ipcMain.handle(
   'model:complete',
@@ -279,22 +327,44 @@ ipcMain.handle('settings:sync', async (_e, settings: unknown) => {
 ipcMain.handle('project:syncPath', async () => join(syncDir(), 'current.speechedit.json'))
 
 ipcMain.handle('media:analyze', async (e, file: string) => {
-  e.sender.send('media:analyze-progress', { stage: 'silence', ratio: 0.15 })
-  const silence = await detectSilence(file)
-  e.sender.send('media:analyze-progress', { stage: 'motion', ratio: 0.45 })
-  const scenes = await detectScenes(file).catch(() => ({ times: [], staticRegions: [] }))
-  e.sender.send('media:analyze-progress', { stage: 'loudness', ratio: 0.7 })
-  const loudness = await detectLoudness(file).catch(() => [])
-  e.sender.send('media:analyze-progress', { stage: 'done', ratio: 1 })
-  return { silence, scenes, loudness }
+  refuseIfExporting()
+  const signal = jobs.signal
+  try {
+    e.sender.send('media:analyze-progress', { stage: 'silence', ratio: 0.15 })
+    const silence = await detectSilence(file, '-30dB', 0.35, signal)
+    e.sender.send('media:analyze-progress', { stage: 'motion', ratio: 0.45 })
+    const scenes = await detectScenes(file, signal).catch((err) => {
+      if (err instanceof Error && /cancelled/i.test(err.message)) throw err
+      return { times: [], staticRegions: [] }
+    })
+    e.sender.send('media:analyze-progress', { stage: 'loudness', ratio: 0.7 })
+    const loudness = await detectLoudness(file, signal).catch((err) => {
+      if (err instanceof Error && /cancelled/i.test(err.message)) throw err
+      return []
+    })
+    e.sender.send('media:analyze-progress', { stage: 'done', ratio: 1 })
+    return { silence, scenes, loudness }
+  } catch (err) {
+    throw ipcError(err)
+  }
 })
 
-ipcMain.handle('media:thumbnails', async (_e, file: string) => thumbnails(file))
+ipcMain.handle('media:thumbnails', async (_e, file: string) => {
+  refuseIfExporting()
+  return thumbnails(file, 20, jobs.signal)
+})
 ipcMain.handle('media:encoders', async () => detectEncoders())
 
 ipcMain.handle('media:export', async (e, job) => {
-  await exportProgram(job, (info) => {
-    e.sender.send('media:export-progress', info)
-  })
-  return job.output
+  const signal = jobs.start('export')
+  try {
+    await exportProgram(job, (info) => {
+      e.sender.send('media:export-progress', info)
+    }, signal)
+    return job.output
+  } catch (err) {
+    throw ipcError(err)
+  } finally {
+    jobs.finish('export')
+  }
 })
