@@ -177,7 +177,7 @@ export function suggestTask(project: Project): SuggestTask {
   }
   if (applied.length && review.length) {
     return {
-      headline: `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need review.`,
+      headline: `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need${review.length === 1 ? 's' : ''} review.`,
       applyLabel: safe.length ? `Apply ${safe.length} safe` : null,
       reviewLabel: `Review ${review.length}`,
       reviewCount: review.length,

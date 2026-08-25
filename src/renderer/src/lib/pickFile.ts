@@ -1,4 +1,5 @@
 import { host, isElectron } from '../host'
+import { needsProxy } from '../../../shared/proxy'
 import type { Asset } from '../types'
 import { uid } from './time'
 
@@ -19,6 +20,10 @@ export async function inspectPickedMedia(file: string, role: 'broll' | 'audio'):
   }
   const image = /\.(png|jpe?g|webp|gif)$/i.test(name)
   const info = await host.probe(file)
+  const proxyPath =
+    !image && info.hasVideo && needsProxy(info)
+      ? await host.makeProxy(file).catch(() => '')
+      : ''
   return {
     id: uid('asset'),
     path: file,
@@ -28,7 +33,8 @@ export async function inspectPickedMedia(file: string, role: 'broll' | 'audio'):
     width: info.width,
     height: info.height,
     fps: info.fps,
-    waveform: []
+    waveform: [],
+    ...(proxyPath ? { proxyPath } : {})
   }
 }
 

@@ -12,6 +12,7 @@ import {
   detectScenes,
   detectSilence,
   exportProgram,
+  makeProxy,
   probe,
   thumbnails,
   completeChat,
@@ -19,6 +20,7 @@ import {
   transcribeMedia,
   waveform
 } from './ffmpeg'
+import { proxyCachePath } from './asrLocal'
 
 const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url))
 function preloadScript(): string {
@@ -272,6 +274,10 @@ ipcMain.handle('media:job-busy', () => jobs.kind)
 ipcMain.handle('media:probe', async (_e, file: string) => {
   refuseIfExporting()
   return probe(file, jobs.signal)
+})
+ipcMain.handle('media:proxy', async (_e, file: string) => {
+  refuseIfExporting()
+  return makeProxy(file, proxyCachePath(file), jobs.signal)
 })
 ipcMain.handle('media:waveform', async (_e, file: string) => {
   refuseIfExporting()

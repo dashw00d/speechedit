@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { applyCommand } from '../renderer/src/lib/commands'
-import { createEmptyProject } from '../renderer/src/lib/demo'
-import { wordsFromAsr } from '../renderer/src/lib/asr'
-import { ensureLocalWhisper } from './asrLocal'
-import { transcribeMedia } from './transcribe'
+import { applyCommand } from './commands'
+import { createEmptyProject } from './demo'
+import { wordsFromAsr } from './asr'
 
 describe('local whisper.cpp', () => {
   test('transcribes speech to word times and lands on the command bus', async () => {
+    const { ensureLocalWhisper } = await import('../../../main/asrLocal.ts')
+    const { transcribeMedia } = await import('../../../main/transcribe.ts')
     const ready = await ensureLocalWhisper({ sample: true })
     expect(ready.bin).toContain('whisper-cli')
     expect(ready.model).toMatch(/ggml-tiny\.en\.bin$/)
@@ -30,6 +30,8 @@ describe('local whisper.cpp', () => {
   }, 180000)
 
   test('default whisper-cli setting falls back to local whisper.cpp on an mp4', async () => {
+    const { ensureLocalWhisper } = await import('../../../main/asrLocal.ts')
+    const { transcribeMedia } = await import('../../../main/transcribe.ts')
     const ready = await ensureLocalWhisper({ sample: true })
     const ffmpeg = Bun.which('ffmpeg')
     if (!ffmpeg) throw new Error('ffmpeg required')

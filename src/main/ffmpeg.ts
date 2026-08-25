@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import {
   assertMixGraph,
   buildJoinGraph,
@@ -274,6 +274,45 @@ export async function probe(file: string, signal?: AbortSignal): Promise<ProbeRe
     hasAudio: Boolean(audio),
     codec: video?.codec_name ?? audio?.codec_name
   }
+}
+
+export async function makeProxy(file: string, output: string, signal?: AbortSignal): Promise<string> {
+  throwIfAborted(signal, 'import')
+  if (!file) throw new Error('Pick a media file to import.')
+  if (!existsSync(file)) {
+    throw new Error(`Can't open that recording:\n${file}\nPick a real media file.`)
+  }
+  await mkdir(dirname(output), { recursive: true })
+  if (existsSync(output)) {
+    const cached = await probe(output, signal).catch(() => null)
+    if (cached?.hasVideo && cached.duration > 0.2) return output
+  }
+  const info = await probe(file, signal)
+  const args = [
+    '-y',
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-i',
+    file,
+    '-vf',
+    "scale='min(960,iw)':-2",
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-crf',
+    '23',
+    '-pix_fmt',
+    'yuv420p',
+    '-movflags',
+    '+faststart'
+  ]
+  if (info.hasAudio) args.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2')
+  else args.push('-an')
+  args.push(output)
+  await runStrict('ffmpeg', args, signal, 'import')
+  return output
 }
 
 export async function waveform(file: string, samples = 1800, signal?: AbortSignal): Promise<number[]> {

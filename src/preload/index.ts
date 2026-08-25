@@ -40,6 +40,7 @@ const api = {
     ipcRenderer.invoke('fs:exists', paths) as Promise<{ path: string; exists: boolean }[]>,
   chooseExport: () => ipcRenderer.invoke('dialog:export') as Promise<string | null>,
   probe: (file: string) => ipcRenderer.invoke('media:probe', file),
+  makeProxy: (file: string) => ipcRenderer.invoke('media:proxy', file) as Promise<string>,
   waveform: (file: string) => ipcRenderer.invoke('media:waveform', file),
   thumbnails: (file: string) => ipcRenderer.invoke('media:thumbnails', file) as Promise<string[]>,
   silence: (file: string) => ipcRenderer.invoke('media:silence', file),

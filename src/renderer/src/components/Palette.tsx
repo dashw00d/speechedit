@@ -324,7 +324,7 @@ export function Palette() {
         }
       },
       {
-        name: 'Export OpenTimelineIO',
+        name: 'Export OTIO',
         group: 'export',
         run: () => {
           const project = useEditor.getState().project

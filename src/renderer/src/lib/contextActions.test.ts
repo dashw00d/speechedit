@@ -132,7 +132,7 @@ describe('pace and inspector focus', () => {
 
 describe('palette ranking', () => {
   const items = [
-    { name: 'Export OpenTimelineIO', group: 'export' as const, run: () => undefined },
+    { name: 'Export OTIO', group: 'export' as const, run: () => undefined },
     { name: 'Cut selection', group: 'selection' as const, run: () => undefined },
     { name: 'Cancel export', group: 'job' as const, run: () => undefined },
     { name: 'Save', group: 'file' as const, run: () => undefined }
@@ -156,7 +156,17 @@ describe('palette ranking', () => {
       hasClip: false
     })
     expect(ranked[0]?.name).toBe('Cut selection')
-    expect(ranked.map((i) => i.name)).toContain('Export OpenTimelineIO')
+    expect(ranked.map((i) => i.name)).toContain('Export OTIO')
     expect(ranked.map((i) => i.name)).not.toContain('Cancel export')
+  })
+
+  test('otio query finds interchange in the palette, not a menu', () => {
+    const ranked = rankPalette(items, 'otio', {
+      exporting: false,
+      analyzing: null,
+      hasWordSelection: false,
+      hasClip: false
+    })
+    expect(ranked.map((i) => i.name)).toEqual(['Export OTIO'])
   })
 })

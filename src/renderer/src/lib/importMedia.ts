@@ -1,4 +1,5 @@
 import { host } from '../host'
+import { needsProxy } from '../../../shared/proxy'
 import type { Asset, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
 import { wordsFromAsr } from './asr'
@@ -42,6 +43,16 @@ export async function importRecording(
     if (isJobCancelled(err)) throw err
     throw new Error(explainImportError(err))
   })
+  throwIfAborted(signal, 'import')
+
+  onStage?.('proxy')
+  const proxyPath =
+    info.hasVideo && needsProxy(info)
+      ? await host.makeProxy(file).catch((err) => {
+          if (isJobCancelled(err)) throw err
+          return ''
+        })
+      : ''
   throwIfAborted(signal, 'import')
 
   onStage?.('waveform')
@@ -113,7 +124,8 @@ export async function importRecording(
     fps: info.fps,
     sampleRate: info.sampleRate,
     waveform: peaks,
-    thumbnails: thumbs
+    thumbnails: thumbs,
+    ...(proxyPath ? { proxyPath } : {})
   }
   const base = createEmptyProject(name.replace(/\.[^.]+$/, ''))
   const draft = {

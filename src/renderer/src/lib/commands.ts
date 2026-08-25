@@ -1077,7 +1077,20 @@ export function applyCommand(project: Project, command: Command): Project {
         ...current,
         assets: {
           ...current.assets,
-          [command.assetId]: { ...asset, path: command.path }
+          [command.assetId]: { ...asset, path: command.path, proxyPath: undefined }
+        }
+      })
+    }
+    case 'setAssetProxy': {
+      const asset = current.assets[command.assetId]
+      if (!asset) return current
+      const proxyPath = command.proxyPath || undefined
+      if (asset.proxyPath === proxyPath) return current
+      return touch({
+        ...current,
+        assets: {
+          ...current.assets,
+          [command.assetId]: { ...asset, proxyPath }
         }
       })
     }

@@ -40,15 +40,18 @@ describe('project document portability', () => {
           kind: 'video' as const,
           duration: 12,
           waveform: [0.2],
-          thumbnails: ['data:image/jpeg;base64,xxx']
+          thumbnails: ['data:image/jpeg;base64,xxx'],
+          proxyPath: '/data/reel/take.proxy.mp4'
         }
       }
     }
     const doc = serializeDocument(project, '/data/reel/talk.speechedit.json')
     expect(doc.kind).toBe(DOCUMENT_KIND)
     expect(doc.project.assets.src.path).toBe('take.mp4')
+    expect(doc.project.assets.src.proxyPath).toBe('take.proxy.mp4')
     const opened = openDocumentFromRaw(doc, '/data/reel/talk.speechedit.json')
     expect(opened.project.assets.src.path).toBe('/data/reel/take.mp4')
+    expect(opened.project.assets.src.proxyPath).toBe('/data/reel/take.proxy.mp4')
 
     const legacy = parseProjectDocument(createDemoProject())
     expect(legacy.version).toBe(0)

@@ -31,6 +31,7 @@ export interface SpeechHost {
     hasAudio: boolean
     codec?: string
   }>
+  makeProxy: (file: string) => Promise<string>
   waveform: (file: string) => Promise<number[]>
   thumbnails: (file: string) => Promise<string[]>
   silence: (file: string) => Promise<{ start: number; end: number }[]>
@@ -208,6 +209,7 @@ export const host: SpeechHost = electronHost ?? {
   probe: async () => {
     throw new Error('Import needs the Electron app.')
   },
+  makeProxy: async () => '',
   waveform: empty,
   thumbnails: empty,
   silence: empty,

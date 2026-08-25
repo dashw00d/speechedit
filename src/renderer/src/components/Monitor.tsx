@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { mediaUrl } from '../host'
+import { playbackPath } from '../../../shared/proxy'
 import { programLength } from '../lib/commands'
 import { currentWord } from '../lib/edl'
 import { projectToExportJob } from '../lib/exportJob'
@@ -24,7 +25,7 @@ export function Monitor() {
   const sourceTime = look.sourceTime
   const word = currentWord(project.transcript.words, sourceTime)
   const asset = Object.values(project.assets)[0]
-  const src = asset?.path ? mediaUrl(asset.path) : ''
+  const src = asset?.path ? mediaUrl(playbackPath(asset)) : ''
   const picture = pictureAt(project, programTime)
   const { gain: volume, ducked, duckAmount, incomingGain } = look.voice
   const captions = look.layers.filter((l) => l.layer.kind === 'caption')
@@ -114,7 +115,8 @@ export function Monitor() {
             )
           }
           if (layer.kind === 'image' && layer.path) {
-            const url = mediaUrl(layer.path)
+            const media = Object.values(project.assets).find((a) => a.path === layer.path)
+            const url = mediaUrl(media ? playbackPath(media) : layer.path)
             const xf = `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`
             return layer.loop ? (
               <img

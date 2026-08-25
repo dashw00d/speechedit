@@ -1,9 +1,13 @@
-import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { mkdir, chmod, writeFile } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, statSync } from 'node:fs'
+import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import { cliBinariesFor, type TranscriptKind } from '../shared/asr'
+
+const execFileAsync = promisify(execFile)
 
 export const WHISPER_CPP_RELEASE = 'b4938'
 const MODEL_NAME = 'ggml-tiny.en.bin'
@@ -16,6 +20,16 @@ export function asrHome(): string {
 
 export function asrBinDir(): string {
   return join(asrHome(), 'bin')
+}
+
+export function proxyCacheDir(): string {
+  return join(asrHome(), 'proxies')
+}
+
+export function proxyCachePath(file: string): string {
+  const st = statSync(file)
+  const id = createHash('sha1').update(`${file}\0${st.size}\0${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 20)
+  return join(proxyCacheDir(), `${id}.mp4`)
 }
 
 export function whisperCppOptDir(): string {
@@ -116,7 +130,7 @@ async function downloadTo(url: string, dest: string): Promise<void> {
   const res = await fetch(url, { redirect: 'follow' })
   if (!res.ok) throw new Error(`Download failed ${res.status}: ${url}`)
   await mkdir(join(dest, '..'), { recursive: true })
-  await Bun.write(dest, res)
+  await writeFile(dest, Buffer.from(await res.arrayBuffer()))
 }
 
 export async function ensureLocalWhisper(opts?: { sample?: boolean }): Promise<{
@@ -149,11 +163,11 @@ export async function ensureLocalWhisper(opts?: { sample?: boolean }): Promise<{
   const optBin = join(whisperCppOptDir(), 'whisper-cli')
   if (!existsSync(optBin) || !existsSync(join(whisperCppOptDir(), 'libwhisper.so.1'))) {
     const staging = join(asrHome(), 'opt')
-    await Bun.$`tar -xzf ${archive} -C ${staging}`.quiet()
+    await execFileAsync('tar', ['-xzf', archive, '-C', staging])
     const unpacked = join(staging, 'whisper-bin-ubuntu-x64')
     if (existsSync(unpacked) && unpacked !== whisperCppOptDir()) {
-      await Bun.$`rm -rf ${whisperCppOptDir()}`.quiet()
-      await Bun.$`mv ${unpacked} ${whisperCppOptDir()}`.quiet()
+      await rm(whisperCppOptDir(), { recursive: true, force: true })
+      await rename(unpacked, whisperCppOptDir())
     }
     if (!existsSync(optBin)) throw new Error('Could not unpack whisper-cli into ~/.speechedit/opt/whisper-cpp')
     await chmod(optBin, 0o755)

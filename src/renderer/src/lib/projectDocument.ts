@@ -96,14 +96,16 @@ function mapAssets(project: Project, fn: (asset: Asset) => Asset): Project {
 export function withRelativizedAssets(project: Project, projectDir: string): Project {
   return mapAssets(project, (asset) => ({
     ...asset,
-    path: relativizeMediaPath(projectDir, asset.path)
+    path: relativizeMediaPath(projectDir, asset.path),
+    proxyPath: asset.proxyPath ? relativizeMediaPath(projectDir, asset.proxyPath) : undefined
   }))
 }
 
 export function withResolvedAssets(project: Project, projectDir: string): Project {
   return mapAssets(project, (asset) => ({
     ...asset,
-    path: joinMediaPath(projectDir, asset.path)
+    path: joinMediaPath(projectDir, asset.path),
+    proxyPath: asset.proxyPath ? joinMediaPath(projectDir, asset.proxyPath) : undefined
   }))
 }
 

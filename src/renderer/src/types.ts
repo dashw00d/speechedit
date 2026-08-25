@@ -29,6 +29,8 @@ export interface Asset {
   sampleRate?: number
   waveform: number[]
   thumbnails?: string[]
+  /** Preview-only file. Playback uses this when set; export always uses path. */
+  proxyPath?: string
 }
 
 export interface Crop {
@@ -319,6 +321,7 @@ export type Command =
   | { type: 'applyModelSuggestions' }
   | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked'>> }
   | { type: 'relinkAsset'; assetId: string; path: string }
+  | { type: 'setAssetProxy'; assetId: string; proxyPath: string | null }
 
 export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes' | 'effect'> {
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }
