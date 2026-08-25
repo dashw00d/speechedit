@@ -2,24 +2,41 @@ import { host, isElectron } from '../host'
 import type { Asset } from '../types'
 import { uid } from './time'
 
-export async function pickBroll(): Promise<Asset | null> {
-  if (isElectron) {
-    const file = await host.openBroll()
-    if (!file) return null
-    const info = await host.probe(file).catch(() => null)
-    const name = file.split(/[\\/]/).pop() ?? 'B-roll'
-    const image = /\.(png|jpe?g|webp|gif)$/i.test(name)
+export async function inspectPickedMedia(file: string, role: 'broll' | 'audio'): Promise<Asset> {
+  const name = file.split(/[\\/]/).pop() ?? (role === 'audio' ? 'Music' : 'B-roll')
+  if (role === 'audio') {
+    const info = await host.probe(file)
+    const peaks = await host.waveform(file)
     return {
       id: uid('asset'),
       path: file,
       name,
-      kind: image ? 'image' : info?.hasVideo ? 'video' : 'image',
-      duration: info?.duration || 8,
-      width: info?.width,
-      height: info?.height,
-      fps: info?.fps,
-      waveform: []
+      kind: 'audio',
+      duration: info.duration || 8,
+      sampleRate: info.sampleRate,
+      waveform: peaks
     }
+  }
+  const image = /\.(png|jpe?g|webp|gif)$/i.test(name)
+  const info = await host.probe(file)
+  return {
+    id: uid('asset'),
+    path: file,
+    name,
+    kind: image ? 'image' : info.hasVideo ? 'video' : 'image',
+    duration: info.duration || 8,
+    width: info.width,
+    height: info.height,
+    fps: info.fps,
+    waveform: []
+  }
+}
+
+export async function pickBroll(): Promise<Asset | null> {
+  if (isElectron) {
+    const file = await host.openBroll()
+    if (!file) return null
+    return inspectPickedMedia(file, 'broll')
   }
   return new Promise((resolve) => {
     const input = document.createElement('input')
@@ -41,7 +58,7 @@ export async function pickBroll(): Promise<Asset | null> {
         waveform: []
       })
     }
-      input.click()
+    input.click()
   })
 }
 
@@ -49,18 +66,7 @@ export async function pickAudio(): Promise<Asset | null> {
   if (isElectron) {
     const file = await host.openMedia()
     if (!file) return null
-    const info = await host.probe(file).catch(() => null)
-    const peaks = await host.waveform(file).catch(() => [])
-    const name = file.split(/[\\/]/).pop() ?? 'Music'
-    return {
-      id: uid('asset'),
-      path: file,
-      name,
-      kind: 'audio',
-      duration: info?.duration || 8,
-      sampleRate: info?.sampleRate,
-      waveform: peaks
-    }
+    return inspectPickedMedia(file, 'audio')
   }
   return new Promise((resolve) => {
     const input = document.createElement('input')

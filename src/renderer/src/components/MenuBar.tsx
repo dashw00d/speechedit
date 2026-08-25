@@ -33,6 +33,7 @@ import {
   cancelExport,
   cancelImport,
   createImportSignal,
+  explainImportError,
   isJobCancelled,
   mediaBusyToast,
   whisperMissingMessage
@@ -99,6 +100,41 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
       )
     } catch (err) {
       onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Import failed.')
+    } finally {
+      await host.endJob('import').catch(() => undefined)
+      setAnalyzing(null)
+    }
+  }
+
+  async function addPickedOverlay(role: 'broll' | 'audio') {
+    const busy = mediaBusyToast(exporting, analyzing)
+    if (busy) {
+      onToast(busy)
+      return
+    }
+    try {
+      await host.beginJob('import')
+      setAnalyzing('probe')
+      const asset = role === 'broll' ? await pickBroll() : await pickAudio()
+      if (!asset) return
+      dispatch(
+        role === 'broll'
+          ? {
+              type: 'addBroll',
+              start: usePlayback.getState().programTime,
+              duration: Math.min(6, asset.duration || 6),
+              asset
+            }
+          : {
+              type: 'addAudio',
+              start: usePlayback.getState().programTime,
+              duration: Math.min(asset.duration || 8, programLength(project) || asset.duration || 8),
+              asset
+            }
+      )
+      onToast(`${role === 'broll' ? 'B-roll' : 'Music'} · ${asset.name}`)
+    } catch (err) {
+      onToast(explainImportError(err))
     } finally {
       await host.endJob('import').catch(() => undefined)
       setAnalyzing(null)
@@ -313,34 +349,10 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             Caption remaining words
           </Item>
           <Item onClick={() => dispatch({ type: 'addLowerThirds' })}>Scene lower thirds</Item>
-          <Item
-            onClick={async () => {
-              const asset = await pickBroll()
-              if (!asset) return
-              dispatch({
-                type: 'addBroll',
-                start: usePlayback.getState().programTime,
-                duration: Math.min(6, asset.duration || 6),
-                asset
-              })
-              onToast(`B-roll · ${asset.name}`)
-            }}
-          >
+          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void addPickedOverlay('broll')}>
             Add B-roll…
           </Item>
-          <Item
-            onClick={async () => {
-              const asset = await pickAudio()
-              if (!asset) return
-              dispatch({
-                type: 'addAudio',
-                start: usePlayback.getState().programTime,
-                duration: Math.min(asset.duration || 8, programLength(project) || asset.duration || 8),
-                asset
-              })
-              onToast(`Music · ${asset.name}`)
-            }}
-          >
+          <Item disabled={Boolean(analyzing) || exporting} onClick={() => void addPickedOverlay('audio')}>
             Add music bed…
           </Item>
           <Item

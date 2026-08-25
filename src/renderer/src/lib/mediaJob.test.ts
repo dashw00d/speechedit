@@ -205,3 +205,48 @@ describe('export / import cancel without a long encode', () => {
     expect(analyzing).toBeNull()
   })
 })
+
+describe('b-roll / music pick stays inside the job gate', () => {
+  test('inspectPickedMedia does not invent an asset when probe is busy', async () => {
+    const { inspectPickedMedia } = await import('./pickFile')
+    const prev = { probe: host.probe, waveform: host.waveform }
+    host.probe = async () => {
+      throw new JobBusy('export')
+    }
+    host.waveform = async () => {
+      throw new Error('waveform should not run')
+    }
+    try {
+      await expect(inspectPickedMedia('/tmp/se-broll.mp4', 'broll')).rejects.toThrow(/export is already running/)
+      await expect(inspectPickedMedia('/tmp/se-music.wav', 'audio')).rejects.toThrow(/export is already running/)
+    } finally {
+      Object.assign(host, prev)
+    }
+  })
+
+  test('inspectPickedMedia returns probed duration instead of a silent fallback', async () => {
+    const { inspectPickedMedia } = await import('./pickFile')
+    const prev = { probe: host.probe, waveform: host.waveform }
+    host.probe = async () => ({
+      duration: 12.5,
+      hasVideo: true,
+      hasAudio: true,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      sampleRate: 48000
+    })
+    host.waveform = async () => [0.2, 0.4]
+    try {
+      const clip = await inspectPickedMedia('/tmp/se-broll.mp4', 'broll')
+      expect(clip.duration).toBe(12.5)
+      expect(clip.kind).toBe('video')
+      const bed = await inspectPickedMedia('/tmp/se-music.wav', 'audio')
+      expect(bed.duration).toBe(12.5)
+      expect(bed.kind).toBe('audio')
+      expect(bed.waveform).toEqual([0.2, 0.4])
+    } finally {
+      Object.assign(host, prev)
+    }
+  })
+})
