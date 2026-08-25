@@ -29,6 +29,7 @@ import {
   programLengthOf,
   programToSourceOf,
   resolveSegments,
+  segmentAtProgram,
   segmentId,
   sourceToProgramOf
 } from './resolver'
@@ -43,7 +44,17 @@ function overlayTracks(project: Project): Track[] {
 }
 
 export function isPrimaryLane(track: Track): boolean {
-  return track.type === 'video' || track.id === 'a1'
+  return track.id === 'v1' || track.id === 'a1'
+}
+
+export function findMovableClip(project: Project, clipId: string | null): Clip | undefined {
+  if (!clipId) return undefined
+  for (const track of project.tracks) {
+    if (isPrimaryLane(track) || track.locked) continue
+    const clip = track.clips.find((c) => c.id === clipId)
+    if (clip) return clip
+  }
+  return undefined
 }
 
 function shiftOverlays(project: Project, afterProgram: number, delta: number): Track[] {
@@ -170,6 +181,27 @@ function findClip(project: Project, clipId: string): { track: Track; clip: Clip 
     if (clip) return { track, clip }
   }
   return undefined
+}
+
+function splitClipsAtProgram(clips: Clip[], program: number): Clip[] {
+  const out: Clip[] = []
+  for (const clip of clips) {
+    const end = clip.start + clip.duration
+    if (program > clip.start + 0.05 && program < end - 0.05) {
+      const leftDur = program - clip.start
+      out.push({ ...clip, duration: leftDur, outPoint: clip.inPoint + leftDur })
+      out.push({
+        ...clip,
+        id: uid('clip'),
+        start: program,
+        duration: end - program,
+        inPoint: clip.inPoint + leftDur
+      })
+    } else {
+      out.push(clip)
+    }
+  }
+  return out
 }
 
 function mapClip(project: Project, clipId: string, fn: (clip: Clip) => Clip): Project {
@@ -443,32 +475,17 @@ export function applyCommand(project: Project, command: Command): Project {
         ...current,
         splits,
         tracks: current.tracks.map((track) => {
-          if (track.type !== 'overlay' && track.type !== 'caption') return track
-          const clips: Clip[] = []
-          for (const clip of track.clips) {
-            const end = clip.start + clip.duration
-            if (program > clip.start + 0.05 && program < end - 0.05) {
-              const leftDur = program - clip.start
-              clips.push({ ...clip, duration: leftDur, outPoint: clip.inPoint + leftDur })
-              clips.push({
-                ...clip,
-                id: uid('clip'),
-                start: program,
-                duration: end - program,
-                inPoint: clip.inPoint + leftDur
-              })
-            } else {
-              clips.push(clip)
-            }
-          }
-          return { ...track, clips }
+          if (isPrimaryLane(track) || track.locked) return track
+          return { ...track, clips: splitClipsAtProgram(track.clips, program) }
         })
       })
     }
     case 'moveClip': {
       const found = findClip(current, command.clipId)
-      if (!found) return current
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
       const destTrack = command.trackId ?? found.clip.trackId
+      const dest = current.tracks.find((track) => track.id === destTrack)
+      if (!dest || isPrimaryLane(dest) || dest.locked) return current
       const moved: Clip = {
         ...found.clip,
         start: Math.max(0, command.start),
@@ -483,7 +500,9 @@ export function applyCommand(project: Project, command: Command): Project {
         })
       })
     }
-    case 'trimClip':
+    case 'trimClip': {
+      const found = findClip(current, command.clipId)
+      if (!found || isPrimaryLane(found.track) || found.track.locked) return current
       return mapClip(current, command.clipId, (clip) => {
         if (command.edge === 'in') {
           const nextStart = clamp(command.time, 0, clip.start + clip.duration - 0.05)
@@ -498,6 +517,7 @@ export function applyCommand(project: Project, command: Command): Project {
         const nextEnd = clamp(command.time, clip.start + 0.05, 60 * 60)
         return { ...clip, duration: nextEnd - clip.start, outPoint: clip.inPoint + (nextEnd - clip.start) }
       })
+    }
     case 'trimPrimary': {
       const seg = resolveSegments(current).find((s) => s.id === command.segmentId)
       if (!seg) return current
@@ -507,6 +527,21 @@ export function applyCommand(project: Project, command: Command): Project {
       }
       const next = clamp(command.sourceTime, seg.inPoint + 0.05, seg.outPoint)
       return deleteSourceRange(current, next, seg.outPoint, 'manual')
+    }
+    case 'rippleTrimToPlayhead': {
+      const seg =
+        segmentAtProgram(current, command.time) ??
+        resolveSegments(current)
+          .filter((s) => s.start + s.duration <= command.time + 1e-4)
+          .at(-1)
+      if (!seg) return current
+      const sourceTime = programToSourceOf(current, command.time)
+      return applyCommand(current, {
+        type: 'trimPrimary',
+        segmentId: seg.id,
+        edge: command.edge,
+        sourceTime
+      })
     }
     case 'setTransform': {
       const merge = (base: Transform, patch: Partial<Transform>): Transform => ({

@@ -7,11 +7,11 @@ import { Suggestions } from './components/Suggestions'
 import { Timeline } from './components/Timeline'
 import { Transcript } from './components/Transcript'
 import { host, isElectron } from './host'
-import { programLength } from './lib/commands'
+import { findMovableClip, programLength } from './lib/commands'
 import { currentWord } from './lib/edl'
 import { summarizeJob } from './lib/exportGraph'
 import { buildExportJob } from './lib/exportJob'
-import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
+import { programToSourceOf, snapTime, sourceToProgramOf } from './lib/resolver'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
 import { extendSelection, wordRange } from './lib/transcriptEdit'
 import { currentProgramDuration, useEditor, usePlayback } from './store'
@@ -114,6 +114,34 @@ function useHotkeys(setToast: (msg: string) => void) {
       }
       if (e.key === 'End' && !typing) {
         playback.seekProgram(currentProgramDuration())
+        return
+      }
+      if ((e.key === 'q' || e.key === 'Q') && !typing && !meta) {
+        e.preventDefault()
+        editor.dispatch({ type: 'rippleTrimToPlayhead', edge: 'in', time: playback.programTime })
+        setToast('Q · ripple trimmed in to playhead')
+        return
+      }
+      if ((e.key === 'w' || e.key === 'W') && !typing && !meta) {
+        e.preventDefault()
+        editor.dispatch({ type: 'rippleTrimToPlayhead', edge: 'out', time: playback.programTime })
+        setToast('W · ripple trimmed out to playhead')
+        return
+      }
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !typing && !meta) {
+        e.preventDefault()
+        const dir = e.key === 'ArrowRight' ? 1 : -1
+        const frame = 1 / Math.max(1, editor.project.fps)
+        const movable = findMovableClip(editor.project, editor.selectedClipId)
+        if (movable) {
+          const step = e.shiftKey ? 1 : e.altKey ? frame * 10 : frame
+          let start = Math.max(0, movable.start + dir * step)
+          if (editor.snap && e.shiftKey) start = snapTime(editor.project, start, [playback.programTime])
+          editor.dispatch({ type: 'moveClip', clipId: movable.id, start })
+          return
+        }
+        const step = e.shiftKey ? 1 : frame
+        playback.seekProgram(Math.max(0, playback.programTime + dir * step))
         return
       }
       if ((e.key === 'i' || e.key === 'I') && !typing && !meta) {

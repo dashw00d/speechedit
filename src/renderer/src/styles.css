@@ -464,9 +464,12 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   padding: 0 10px;
   font-family: var(--mono);
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   color: var(--steel);
   border-bottom: 1px solid var(--hair);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .ruler-gutter { height: auto; min-height: 28px; flex-wrap: wrap; gap: 4px; padding: 4px 8px; }
 .track-label[data-kind='guard'] {
@@ -591,6 +594,14 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .clip[data-kind='audio'] {
   background: #1b2418;
   border-color: #35553a;
+}
+.clip[data-bed='true'] {
+  background: #1a2a22;
+  border-color: #4a7a58;
+}
+.clip[data-primary='true'][data-kind='audio'] span {
+  position: relative;
+  z-index: 1;
 }
 .clip[data-kind='caption'] {
   background: #2b2414;
@@ -784,14 +795,66 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .menu-item:hover { background: var(--ghost); }
 .menu-item:disabled { opacity: 0.35; }
 .marks { display: flex; gap: 6px; margin-left: auto; }
-.io {
+.io, .io-line {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
   background: #8eb5d3;
+  z-index: 4;
+  pointer-events: none;
 }
-.io.out { background: var(--oxide); }
+.io.out, .io-line.out { background: var(--oxide); }
+.io.in::after, .io-line.in::before {
+  content: 'I';
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: #8eb5d3;
+}
+.io.out::after, .io-line.out::before {
+  content: 'O';
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--oxide);
+}
+.io-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(142, 181, 211, 0.18);
+  color: #c5d8e8;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.io-span {
+  position: absolute;
+  top: 28px;
+  bottom: 0;
+  background: rgba(142, 181, 211, 0.08);
+  border-left: 2px solid #8eb5d3;
+  border-right: 2px solid var(--oxide);
+  pointer-events: none;
+  z-index: 3;
+}
+.chip.io-ripple {
+  border-color: #8eb5d3;
+  color: #c5d8e8;
+}
 .clip[data-speed='true'] { box-shadow: inset 0 0 0 1px var(--brass); }
 .word-edit {
   width: 7ch;

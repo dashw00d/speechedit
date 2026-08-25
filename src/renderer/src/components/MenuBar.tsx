@@ -166,6 +166,28 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           <Item onClick={() => playInOutOrSelection()}>Play I/O or selection</Item>
           <Item onClick={() => selectParagraphAtCaret()}>Select paragraph</Item>
           <Item onClick={() => dispatch({ type: 'rippleDeleteMarks' })}>Ripple delete I/O</Item>
+          <Item
+            onClick={() =>
+              dispatch({
+                type: 'rippleTrimToPlayhead',
+                edge: 'in',
+                time: usePlayback.getState().programTime
+              })
+            }
+          >
+            Q · ripple trim in
+          </Item>
+          <Item
+            onClick={() =>
+              dispatch({
+                type: 'rippleTrimToPlayhead',
+                edge: 'out',
+                time: usePlayback.getState().programTime
+              })
+            }
+          >
+            W · ripple trim out
+          </Item>
         </Menu>
         <Menu label="Sequence">
           <Item

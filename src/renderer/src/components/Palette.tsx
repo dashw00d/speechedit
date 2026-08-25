@@ -95,6 +95,24 @@ export function Palette() {
         run: () => dispatch({ type: 'rippleDeleteMarks' })
       },
       {
+        name: 'Q ripple trim in to playhead',
+        run: () =>
+          dispatch({
+            type: 'rippleTrimToPlayhead',
+            edge: 'in',
+            time: usePlayback.getState().programTime
+          })
+      },
+      {
+        name: 'W ripple trim out to playhead',
+        run: () =>
+          dispatch({
+            type: 'rippleTrimToPlayhead',
+            edge: 'out',
+            time: usePlayback.getState().programTime
+          })
+      },
+      {
         name: 'Add title',
         run: () =>
           dispatch({

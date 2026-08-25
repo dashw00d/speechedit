@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
 import { isPrimaryLane, primarySegments, programLength } from '../lib/commands'
-import { programToSourceOf, snapTime, sourceToProgramOf } from '../lib/resolver'
+import { wordsInRange } from '../lib/edl'
+import { programToSourceOf, snapSourceTime, snapTime, sourceToProgramOf } from '../lib/resolver'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
-import type { Asset, Clip, RangeTag, TagKind, Track } from '../types'
+import type { Asset, Clip, RangeTag, TagKind, Track, Word } from '../types'
 
 export function Timeline() {
   const project = useEditor((s) => s.project)
@@ -36,6 +37,37 @@ export function Timeline() {
     for (let t = 0; t <= duration; t += step) out.push(t)
     return out
   }, [duration, pps])
+
+  const io =
+    project.markIn != null && project.markOut != null
+      ? {
+          start: Math.min(project.markIn, project.markOut),
+          end: Math.max(project.markIn, project.markOut)
+        }
+      : null
+
+  function zoomAroundPlayhead(nextPps: number) {
+    const tape = tapeRef.current
+    const clamped = Math.min(280, Math.max(18, nextPps))
+    const viewX = tape ? programTime * pps - tape.scrollLeft : 0
+    setPps(clamped)
+    requestAnimationFrame(() => {
+      if (!tapeRef.current) return
+      tapeRef.current.scrollLeft = Math.max(0, programTime * clamped - viewX)
+    })
+  }
+
+  function fitTape() {
+    const view = tapeRef.current?.clientWidth ?? 800
+    const next = Math.min(280, Math.max(18, (view - 48) / Math.max(duration, 0.5)))
+    setPps(next)
+    requestAnimationFrame(() => {
+      const tape = tapeRef.current
+      if (!tape) return
+      const x = programTime * next
+      tape.scrollLeft = Math.max(0, x - tape.clientWidth / 2)
+    })
+  }
 
   function timeAt(clientX: number): number {
     const tape = tapeRef.current
@@ -72,7 +104,7 @@ export function Timeline() {
     <section className="timeline-shell">
       <div className="track-labels">
         <div className="ruler-gutter">
-          <button className="chip" onClick={() => setPps(72)}>
+          <button className="chip" onClick={fitTape}>
             Fit
           </button>
           <button className="chip" onClick={() => dispatch({ type: 'addTrack', trackType: 'overlay' })}>
@@ -84,6 +116,15 @@ export function Timeline() {
           <button className="chip" data-active={tool === 'guard'} onClick={() => setTool(tool === 'guard' ? 'select' : 'guard')}>
             Guard
           </button>
+          {io && (
+            <button
+              className="chip io-ripple"
+              title="Ripple-delete the I/O range"
+              onClick={() => dispatch({ type: 'rippleDeleteMarks' })}
+            >
+              Ripple I/O
+            </button>
+          )}
         </div>
         <div className="track-label" data-kind="guard">
           Guard
@@ -103,8 +144,8 @@ export function Timeline() {
           </button>
         </div>
         {project.tracks.map((track) => (
-          <div key={track.id} className="track-label" data-kind={track.type}>
-            {track.name.split(' ')[0]}
+          <div key={track.id} className="track-label" data-kind={track.type} data-primary={isPrimaryLane(track)}>
+            {track.name}
           </div>
         ))}
       </div>
@@ -114,7 +155,7 @@ export function Timeline() {
         onWheel={(e) => {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault()
-            setPps(pps + (e.deltaY > 0 ? -8 : 8))
+            zoomAroundPlayhead(pps + (e.deltaY > 0 ? -8 : 8))
           }
         }}
         data-tool={tool}
@@ -140,6 +181,15 @@ export function Timeline() {
             ))}
             {project.markIn != null && <div className="io in" style={{ left: project.markIn * pps }} />}
             {project.markOut != null && <div className="io out" style={{ left: project.markOut * pps }} />}
+            {io && (
+              <div
+                className="io-range"
+                style={{ left: io.start * pps, width: Math.max(6, (io.end - io.start) * pps) }}
+                title="I/O · Delete ripples this range"
+              >
+                I/O · Del ripples
+              </div>
+            )}
             {project.tags.map((tag) => {
               const start = sourceToProgramOf(project, tag.start)
               const end = sourceToProgramOf(project, tag.end)
@@ -194,6 +244,7 @@ export function Timeline() {
               assets={project.assets}
               thumbnails={asset?.thumbnails}
               sourceDuration={project.sourceDuration}
+              words={project.transcript.words}
               onSelect={selectClip}
               onMove={(clipId, start) =>
                 dispatch({
@@ -202,12 +253,34 @@ export function Timeline() {
                   start: snap ? snapTime(project, start, [programTime]) : start
                 })
               }
-              onTrim={(clipId, edge, time) => dispatch({ type: 'trimClip', clipId, edge, time })}
+              onTrim={(clipId, edge, time) =>
+                dispatch({
+                  type: 'trimClip',
+                  clipId,
+                  edge,
+                  time: snap ? snapTime(project, time, [programTime]) : time
+                })
+              }
               onTrimPrimary={(segmentId, edge, sourceTime) =>
-                dispatch({ type: 'trimPrimary', segmentId, edge, sourceTime })
+                dispatch({
+                  type: 'trimPrimary',
+                  segmentId,
+                  edge,
+                  sourceTime: snap ? snapSourceTime(project, sourceTime, [programTime]) : sourceTime
+                })
               }
             />
           ))}
+
+          {io && (
+            <div
+              className="io-span"
+              style={{ left: io.start * pps, width: Math.max(6, (io.end - io.start) * pps) }}
+              title="I/O · Delete ripples this range"
+            />
+          )}
+          {project.markIn != null && <div className="io-line in" style={{ left: project.markIn * pps }} />}
+          {project.markOut != null && <div className="io-line out" style={{ left: project.markOut * pps }} />}
 
           <div className="playhead" style={{ left: programTime * pps }} />
         </div>
@@ -266,6 +339,24 @@ function GuardLane({
   )
 }
 
+function clipLabel(clip: Clip, track: Track, assets: Record<string, Asset>, words: Word[]): string {
+  if (clip.effect === 'blur') return 'REDACT'
+  if (clip.text?.trim()) return clip.text
+  const assetName = clip.assetId ? assets[clip.assetId]?.name.replace(/\.[^.]+$/, '') : undefined
+  if (assetName) return assetName
+  if (isPrimaryLane(track)) {
+    const spoken = wordsInRange(words, clip.inPoint, clip.outPoint)
+      .filter((word) => !word.deleted)
+      .slice(0, 5)
+      .map((word) => word.text)
+      .join(' ')
+    const clock = `${formatClock(clip.inPoint)}–${formatClock(clip.outPoint)}`
+    const speed = clip.speed !== 1 ? ` ${clip.speed}×` : ''
+    return spoken ? `${spoken}${speed}` : `${clock}${speed}`
+  }
+  return track.name
+}
+
 function Lane({
   track,
   segments,
@@ -275,6 +366,7 @@ function Lane({
   assets,
   thumbnails,
   sourceDuration,
+  words,
   onSelect,
   onMove,
   onTrim,
@@ -288,6 +380,7 @@ function Lane({
   assets: Record<string, Asset>
   thumbnails?: string[]
   sourceDuration: number
+  words: Word[]
   onSelect: (id: string) => void
   onMove: (clipId: string, start: number) => void
   onTrim: (clipId: string, edge: 'in' | 'out', time: number) => void
@@ -297,20 +390,23 @@ function Lane({
   const clips = primary ? segments : track.clips
 
   return (
-    <div className="lane">
+    <div className="lane" data-primary={primary} data-kind={track.type}>
       {clips.map((clip) => (
         <div
           key={clip.id}
           className="clip"
           data-kind={track.type}
+          data-primary={primary}
+          data-bed={!primary && track.type === 'audio'}
           data-sel={selectedClipId === clip.id}
           data-speed={clip.speed !== 1}
           data-effect={clip.effect ?? 'none'}
+          title={clipLabel(clip, track, assets, words)}
           style={{ left: clip.start * pps, width: Math.max(8, clip.duration * pps) }}
           onMouseDown={(e) => {
             if ((e.target as HTMLElement).classList.contains('handle')) return
             onSelect(clip.id)
-            if (primary) return
+            if (primary || track.locked) return
             const origin = clip.start
             const startX = e.clientX
             const move = (ev: MouseEvent) => {
@@ -342,17 +438,12 @@ function Lane({
               sourceDuration={primary ? sourceDuration : assets[clip.assetId!]?.duration ?? clip.duration}
             />
           ) : null}
-          <span>
-            {track.type === 'video'
-              ? `${formatClock(clip.inPoint)}–${formatClock(clip.outPoint)}${clip.speed !== 1 ? ` ${clip.speed}×` : ''}`
-              : clip.effect === 'blur'
-                ? 'REDACT'
-                : (clip.text ?? track.name)}
-          </span>
+          <span>{clipLabel(clip, track, assets, words)}</span>
           <i
             className="handle in"
             onMouseDown={(e) => {
               e.stopPropagation()
+              if (track.locked) return
               const startX = e.clientX
               const origin = primary ? clip.inPoint : clip.start
               const move = (ev: MouseEvent) => {
@@ -375,6 +466,7 @@ function Lane({
             className="handle out"
             onMouseDown={(e) => {
               e.stopPropagation()
+              if (track.locked) return
               const startX = e.clientX
               const origin = primary ? clip.outPoint : clip.start + clip.duration
               const move = (ev: MouseEvent) => {
