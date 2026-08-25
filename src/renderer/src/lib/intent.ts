@@ -45,7 +45,10 @@ export function planIntent(project: Project, intent: string): IntentPlan {
   if (/find scenes|group scenes|mark retakes|chapterize/.test(lower) && !/collapse|cut|remove|apply/.test(lower)) {
     return { commands: [{ type: 'inferScenes' }], note: 'Group scenes and mark retakes from the transcript (no LLM required).' }
   }
-  if (/collapse retake|keep (the )?best take|drop (false|bad) (start|take)s?|use (the )?good take/.test(lower)) {
+  if (
+    wantsCollapseTakes(lower) &&
+    !/auto[- ]?cut|auto[- ]?edit|cut the reel/.test(lower)
+  ) {
     return { commands: [{ type: 'collapseRetakes' }], note: 'Cut superseded takes. Undo still works one-by-one.' }
   }
   if (/caption remaining|generate captions|burn captions|caption the/.test(lower)) {
