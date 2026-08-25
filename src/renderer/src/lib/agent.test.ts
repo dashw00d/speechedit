@@ -62,6 +62,10 @@ describe('agent tool loop', () => {
     expect(commandToTool({ type: 'toggleWords', wordIds: ['w1'] }).name).toBe('toggle_words')
     expect(commandToTool({ type: 'applySafeSuggestions' }).name).toBe('apply_safe_edits')
     expect(commandToTool({ type: 'addCaption', start: 1, duration: 2, text: 'Hi' }).name).toBe('add_caption')
+    expect(commandToTool({ type: 'keepTake', sceneId: 'sc1' }).name).toBe('keep_take')
+    expect(commandToTool({ type: 'rebuildIntelligence' }).name).toBe('rebuild_intelligence')
+    expect(commandToTool({ type: 'generateCaptions', maxWords: 5 }).name).toBe('generate_captions')
+    expect(commandToTool({ type: 'addLowerThirds' }).name).toBe('add_lower_thirds')
   })
 })
 

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { host } from '../host'
 import { primarySegments, programLength } from '../lib/commands'
+import { currentDocumentTitle, relinkAssetInteractive } from '../lib/documentIo'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { EncoderOption } from '../types'
@@ -21,6 +22,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const setTab = useEditor((s) => s.setInspectorTab)
   const selectedClipId = useEditor((s) => s.selectedClipId)
   const dispatch = useEditor((s) => s.dispatch)
+  const documentPath = useEditor((s) => s.documentPath)
+  const missingAssets = useEditor((s) => s.missingAssets)
   const programTime = usePlayback((s) => s.programTime)
 
   const [encoders, setEncoders] = useState<EncoderOption[]>([
@@ -63,6 +66,29 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               {project.transcript.words.filter((w) => !w.deleted).length} live words · {project.cuts.length}{' '}
               cuts · {project.suggestions.filter((s) => !s.applied).length} open edits
             </p>
+            <Field label="Document">
+              <input type="text" readOnly value={documentPath || 'Unsaved — use File → Save'} />
+            </Field>
+            <p className="help">
+              {currentDocumentTitle()} writes a crash copy to ~/.speechedit. Media paths stay relative to
+              the project file when you save.
+            </p>
+            {missingAssets.map((asset) => (
+              <p key={asset.id} className="help">
+                Missing {asset.name}{' '}
+                <button
+                  className="chip"
+                  type="button"
+                  onClick={() => {
+                    void relinkAssetInteractive(asset.id).then((path) => {
+                      if (path) onToast?.(`Relinked ${asset.name}.`)
+                    })
+                  }}
+                >
+                  Relink…
+                </button>
+              </p>
+            ))}
             <Field label="Encoder">
               <select
                 value={project.encoder ?? 'auto'}

@@ -9,18 +9,56 @@ import { Timeline } from './components/Timeline'
 import { Transcript } from './components/Transcript'
 import { host, isElectron } from './host'
 import { findMovableClip, programLength } from './lib/commands'
+import {
+  discardRecovery,
+  hydrateWorkspace,
+  recoveryCopy,
+  refreshMissingAssets,
+  relinkAssetInteractive,
+  restoreRecovery,
+  saveCurrentDocument
+} from './lib/documentIo'
 import { currentWord } from './lib/edl'
 import { summarizeJob } from './lib/exportGraph'
 import { buildExportJob } from './lib/exportJob'
 import { programToSourceOf, snapTime, sourceToProgramOf } from './lib/resolver'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
 import { extendSelection, wordRange } from './lib/transcriptEdit'
-import { currentProgramDuration, useEditor, usePlayback } from './store'
+import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
 
 export function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const agentOpen = useEditor((s) => s.agentOpen)
+  const recoveryOffer = useEditor((s) => s.recoveryOffer)
+  const missingAssets = useEditor((s) => s.missingAssets)
+
+  useEffect(() => {
+    void hydrateWorkspace()
+      .then((result) => {
+        if (result.recovery) setToast('Crash recovery is available — restore unsaved edits or keep the last save.')
+      })
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    const onLeave = (e: BeforeUnloadEvent) => {
+      if (!useEditor.getState().dirty) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flushWorkspace()
+    }
+    window.addEventListener('beforeunload', onLeave)
+    document.addEventListener('visibilitychange', onHide)
+    window.addEventListener('pagehide', flushWorkspace)
+    return () => {
+      window.removeEventListener('beforeunload', onLeave)
+      document.removeEventListener('visibilitychange', onHide)
+      window.removeEventListener('pagehide', flushWorkspace)
+    }
+  }, [])
 
   useEffect(() => {
     if (!toast || exporting) return
@@ -63,11 +101,60 @@ export function App() {
   return (
     <div className="app">
       <MenuBar onToast={setToast} onExport={onExport} exporting={exporting} />
-      <main className="workspace">
-        <Transcript />
-        <Monitor />
-        <Inspector onToast={setToast} />
-      </main>
+      <div className="stage">
+        {(recoveryOffer || missingAssets.length > 0) && (
+          <div className="doc-banners">
+            {recoveryOffer && (
+              <div className="doc-banner" data-kind="recovery">
+                <span>{recoveryCopy(recoveryOffer)} — restore them or keep the last save.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void restoreRecovery().then(() => setToast('Restored unsaved edits.'))
+                  }}
+                >
+                  Restore
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void discardRecovery().then(() => setToast('Kept the last save.'))
+                  }}
+                >
+                  Keep saved
+                </button>
+              </div>
+            )}
+            {missingAssets.length > 0 && (
+              <div className="doc-banner" data-kind="missing">
+                <span>
+                  {missingAssets.length === 1
+                    ? `Media missing: ${missingAssets[0].name}`
+                    : `${missingAssets.length} media files are missing`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void relinkAssetInteractive(missingAssets[0].id).then((path) => {
+                      if (path) {
+                        void refreshMissingAssets()
+                        setToast(`Relinked ${missingAssets[0].name}.`)
+                      }
+                    })
+                  }}
+                >
+                  Relink…
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        <main className="workspace">
+          <Transcript />
+          <Monitor />
+          <Inspector onToast={setToast} />
+        </main>
+      </div>
       <Timeline />
       <Suggestions />
       <Palette />
@@ -108,12 +195,14 @@ function useHotkeys(setToast: (msg: string) => void) {
       }
       if (meta && e.key.toLowerCase() === 's') {
         e.preventDefault()
-        void host.saveProject(editor.project).then((path) => {
-          if (path) {
-            editor.markClean()
-            setToast('Saved.')
+        void saveCurrentDocument({ saveAs: e.shiftKey }).then(
+          (path) => {
+            if (path) setToast(`Saved ${path.split(/[\\/]/).pop()}.`)
+          },
+          (err: unknown) => {
+            setToast(err instanceof Error ? err.message : 'Save failed.')
           }
-        })
+        )
         return
       }
       if (e.key === 'Home' && !typing) {

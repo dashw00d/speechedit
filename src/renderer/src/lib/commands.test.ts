@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { runAgent } from './agent'
 import { applyCommand, findMovableClip, isPrimaryLane, programLength } from './commands'
 import { buildExportJob, duckGainAt } from './exportJob'
-import { createDemoProject } from './demo'
+import { createDemoProject, createEmptyProject } from './demo'
 import { resolveSegments, snapTime, sourceToProgramOf, wordSnapTimes } from './resolver'
 import { parseSrt } from './transcript'
 import type { Asset } from '../types'
@@ -19,6 +20,26 @@ describe('command bus', () => {
     const cut = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
     const restored = applyCommand(cut, { type: 'restoreRange', start: 6.7, end: 15.9 })
     expect(programLength(restored)).toBeGreaterThan(programLength(cut))
+  })
+
+  test('deleteRange splits an island word instead of eating the whole reel', () => {
+    const island = {
+      ...createEmptyProject('island'),
+      sourceDuration: 2,
+      transcript: {
+        words: [{ id: 'w1', text: 'Speech 1', start: 0, end: 2, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Speaker 1', color: '#C4452D' }]
+      }
+    }
+    const cut = applyCommand(island, { type: 'deleteRange', start: 1.0, end: 1.4, source: 'manual' })
+    expect(programLength(cut)).toBeCloseTo(1.6, 1)
+    expect(cut.transcript.words.filter((w) => w.deleted)).toHaveLength(1)
+    expect(cut.transcript.words.filter((w) => !w.deleted)).toHaveLength(2)
+    expect(resolveSegments(cut)).toHaveLength(2)
+
+    const back = applyCommand(cut, { type: 'restoreRange', start: 1.0, end: 1.4 })
+    expect(programLength(back)).toBeCloseTo(2, 1)
+    expect(back.transcript.words.every((w) => !w.deleted)).toBe(true)
   })
 
   test('speed shortens program time of a source range', () => {
@@ -614,5 +635,45 @@ describe('timeline snap and Q/W', () => {
     expect(pieces).toHaveLength(2)
     expect(withBed.tracks.find((t) => t.id === 'v1')?.clips).toHaveLength(0)
     expect(withBed.tracks.find((t) => t.id === 'a1')?.clips).toHaveLength(0)
+  })
+})
+
+describe('document media', () => {
+  test('relinkAsset retargets footage on the command bus', () => {
+    const next = applyCommand(createDemoProject(), {
+      type: 'relinkAsset',
+      assetId: 'demo_src',
+      path: '/data/reel/take.mp4'
+    })
+    expect(next.assets.demo_src.path).toBe('/data/reel/take.mp4')
+    const skipped = applyCommand(next, { type: 'relinkAsset', assetId: 'missing', path: '/x' })
+    expect(skipped.assets.demo_src.path).toBe('/data/reel/take.mp4')
+    expect(skipped.updatedAt).toBe(next.updatedAt)
+  })
+})
+
+describe('studio review path', () => {
+  test('safe edits, put back one cut, paint a demo guard, agent infers scenes', async () => {
+    const demo = createDemoProject()
+    const cut = applyCommand(demo, { type: 'applySafeSuggestions' })
+    expect(programLength(cut)).toBeLessThan(programLength(demo))
+    const applied = cut.suggestions.find((s) => s.applied && s.action === 'cut')
+    expect(applied).toBeTruthy()
+    const putBack = applyCommand(cut, { type: 'revertSuggestion', suggestionId: applied!.id })
+    expect(putBack.suggestions.find((s) => s.id === applied!.id)?.applied).toBe(false)
+
+    const guarded = applyCommand(cut, {
+      type: 'addTag',
+      start: 24.2,
+      end: 28,
+      kind: 'demo',
+      label: 'Silent product demo'
+    })
+    expect(guarded.tags.some((t) => t.kind === 'demo' && t.start <= 24.2 && t.end >= 28)).toBe(true)
+
+    const agent = await runAgent(demo, 'Find scenes and mark retakes. Do not cut yet.')
+    expect(agent.calls[0]?.name).toBe('infer_scenes')
+    expect(agent.project.scenes.length).toBeGreaterThan(0)
+    expect(programLength(agent.project)).toBeCloseTo(programLength(demo), 5)
   })
 })

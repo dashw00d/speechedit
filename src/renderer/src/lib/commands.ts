@@ -11,7 +11,8 @@ import {
   type TagKind,
   type Track,
   type TrackType,
-  type Transform
+  type Transform,
+  type Word
 } from '../types'
 import { buildSuggestions, cutMinusProtected, protectIntervals, suggestionsFromGaps } from './analysis'
 import {
@@ -81,14 +82,42 @@ function shiftOverlays(project: Project, afterProgram: number, delta: number): T
   })
 }
 
+function stampWords(words: Word[], start: number, end: number, deleted: boolean): Word[] {
+  const out: Word[] = []
+  for (const word of words) {
+    const ov = overlap(word, { start, end })
+    const wordLen = word.end - word.start
+    if (ov <= 0 || wordLen <= 0) {
+      out.push(word)
+      continue
+    }
+    if (ov >= wordLen - 0.02) {
+      out.push({ ...word, deleted })
+      continue
+    }
+    if (word.start < start - 0.02) {
+      out.push({ ...word, id: uid('w'), end: start })
+    }
+    out.push({
+      ...word,
+      id: uid('w'),
+      start: Math.max(word.start, start),
+      end: Math.min(word.end, end),
+      deleted
+    })
+    if (word.end > end + 0.02) {
+      out.push({ ...word, id: uid('w'), start: end })
+    }
+  }
+  return out
+}
+
 function markWords(project: Project, start: number, end: number, deleted: boolean): Project {
   return {
     ...project,
     transcript: {
       ...project.transcript,
-      words: project.transcript.words.map((word) =>
-        overlap(word, { start, end }) > 0 ? { ...word, deleted } : word
-      )
+      words: stampWords(project.transcript.words, start, end, deleted)
     }
   }
 }
@@ -166,9 +195,7 @@ function restoreSourceRange(project: Project, start: number, end: number): Proje
     cuts: subtractFromCuts(project.cuts, lo, hi),
     transcript: {
       ...project.transcript,
-      words: project.transcript.words.map((word) =>
-        overlap(word, { start: lo, end: hi }) > 0 ? { ...word, deleted: false } : word
-      )
+      words: stampWords(project.transcript.words, lo, hi, false)
     },
     suggestions: project.suggestions.map((s) =>
       overlap(s, { start: lo, end: hi }) > s.end - s.start - 0.05 ? { ...s, applied: false } : s
@@ -1035,6 +1062,17 @@ export function applyCommand(project: Project, command: Command): Project {
           track.id === command.trackId ? { ...track, ...command.patch } : track
         )
       })
+    case 'relinkAsset': {
+      const asset = current.assets[command.assetId]
+      if (!asset || asset.path === command.path) return current
+      return touch({
+        ...current,
+        assets: {
+          ...current.assets,
+          [command.assetId]: { ...asset, path: command.path }
+        }
+      })
+    }
     default:
       return current
   }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { withGeneratedCaptions } from '../lib/captions'
+import { confirmLoseWork, saveCurrentDocument } from '../lib/documentIo'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
 import { useEditor, usePlayback } from '../store'
@@ -249,8 +249,22 @@ export function Palette() {
         name: 'Normalize to -16 LUFS',
         run: () => dispatch({ type: 'setAudioMaster', patch: { normalize: true } })
       },
-      { name: 'Load studio demo', run: () => useEditor.getState().loadDemo() },
-      { name: 'New reel', run: () => useEditor.getState().newProject() }
+      { name: 'Save', run: () => void saveCurrentDocument() },
+      { name: 'Save As…', run: () => void saveCurrentDocument({ saveAs: true }) },
+      {
+        name: 'Load studio demo',
+        run: () => {
+          if (!confirmLoseWork()) return
+          useEditor.getState().loadDemo()
+        }
+      },
+      {
+        name: 'New reel',
+        run: () => {
+          if (!confirmLoseWork()) return
+          useEditor.getState().newProject()
+        }
+      }
     ],
     [dispatch]
   )

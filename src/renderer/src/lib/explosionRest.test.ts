@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { runAgent } from './agent'
 import { applyCommand, programLength } from './commands'
 import { createDemoProject } from './demo'
 import { cuesFromTranscriptJson } from './diarize'
@@ -74,6 +75,8 @@ Hello PORT 8080
     expect(plan.commands[0]?.type).toBe('generateCaptions')
     const tool = await runTool(createDemoProject(), 'generate_captions', { maxWords: 5 })
     expect(tool.project.tracks.find((t) => t.type === 'caption')?.clips.length).toBeGreaterThan(2)
+    const turn = await runAgent(createDemoProject(), 'caption remaining words')
+    expect(turn.calls[0]?.name).toBe('generate_captions')
   })
 })
 

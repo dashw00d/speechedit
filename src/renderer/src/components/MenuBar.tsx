@@ -22,9 +22,14 @@ import { programLength } from '../lib/commands'
 import { pickAudio, pickBroll } from '../lib/pickFile'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
+import {
+  confirmLoseWork,
+  currentDocumentTitle,
+  openCurrentDocument,
+  saveCurrentDocument
+} from '../lib/documentIo'
 import { parseAnyTranscript } from '../lib/transcript'
 import { useEditor, usePlayback } from '../store'
-import type { Project } from '../types'
 
 interface Props {
   onToast: (msg: string) => void
@@ -44,13 +49,14 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
   const newProject = useEditor((s) => s.newProject)
   const loadDemo = useEditor((s) => s.loadDemo)
   const dispatch = useEditor((s) => s.dispatch)
-  const markClean = useEditor((s) => s.markClean)
+  const documentPath = useEditor((s) => s.documentPath)
   const setAnalyzing = useEditor((s) => s.setAnalyzing)
   const setPalette = useEditor((s) => s.setPalette)
   const snap = useEditor((s) => s.snap)
   const ripple = useEditor((s) => s.ripple)
 
   async function importMedia() {
+    if (!confirmLoseWork()) return
     const file = await host.openMedia()
     if (!file) {
       onToast(isElectron ? 'No file selected.' : 'Open this in Electron to import media.')
@@ -61,7 +67,7 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
         setAnalyzing(stage)
         onToast(`Analyzing · ${stage}`)
       })
-      loadProject(next)
+      loadProject(next, { path: null, clean: false })
       onToast(
         `${next.name} · ${next.suggestions.length} suggestions · ${next.transcript.words.length} words`
       )
@@ -85,15 +91,19 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
   }
 
   async function openTranscript() {
-    const result = await host.openTranscript()
-    if (!result) return
-    useEditor.getState().loadTranscript(parseAnyTranscript(result.name, result.text))
-    onToast('Transcript loaded.')
+    try {
+      const result = await host.openTranscript()
+      if (!result) return
+      useEditor.getState().loadTranscript(parseAnyTranscript(result.name, result.text))
+      onToast('Transcript loaded.')
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Transcript import failed.')
+    }
   }
 
   function ioSource() {
     if (project.markIn == null || project.markOut == null) {
-      onToast('Mark I and O first, or select words and press B.')
+      onToast('Mark I and O first, or select words and press M.')
       return null
     }
     return {
@@ -124,16 +134,25 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
       </div>
       <nav className="menu-cluster">
         <Menu label="File">
-          <Item onClick={newProject}>New reel</Item>
-          <Item onClick={importMedia}>Open media…</Item>
-          <Item onClick={openTranscript}>Open transcript…</Item>
+          <Item
+            onClick={() => {
+              if (!confirmLoseWork()) return
+              newProject()
+            }}
+          >
+            New reel
+          </Item>
+          <Item onClick={() => void importMedia()}>Open media…</Item>
+          <Item onClick={() => void openTranscript()}>Open transcript…</Item>
           <Item onClick={() => void importTimeline()}>Import timeline…</Item>
           <Item
             onClick={async () => {
-              const result = await host.openProject()
-              if (result) {
-                loadProject(result.project as Project)
-                onToast('Project opened.')
+              if (!confirmLoseWork()) return
+              try {
+                const path = await openCurrentDocument()
+                if (path) onToast(`Opened ${currentDocumentTitle()}.`)
+              } catch (err) {
+                onToast(err instanceof Error ? err.message : 'Open failed.')
               }
             }}
           >
@@ -141,16 +160,36 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           </Item>
           <Item
             onClick={async () => {
-              const path = await host.saveProject(project)
-              if (path) {
-                markClean()
-                onToast('Saved.')
+              try {
+                const path = await saveCurrentDocument()
+                if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
+              } catch (err) {
+                onToast(err instanceof Error ? err.message : 'Save failed.')
               }
             }}
           >
             Save
           </Item>
-          <Item onClick={loadDemo}>Studio demo</Item>
+          <Item
+            onClick={async () => {
+              try {
+                const path = await saveCurrentDocument({ saveAs: true })
+                if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
+              } catch (err) {
+                onToast(err instanceof Error ? err.message : 'Save failed.')
+              }
+            }}
+          >
+            Save As…
+          </Item>
+          <Item
+            onClick={() => {
+              if (!confirmLoseWork()) return
+              loadDemo()
+            }}
+          >
+            Studio demo
+          </Item>
         </Menu>
         <Menu label="Edit">
           <Item disabled={!past} onClick={undo}>
@@ -449,9 +488,14 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
         </button>
       </nav>
       <div className="menubar-right">
-        <span className="status-pill">
-          {analyzing ? `Analyze · ${analyzing}` : dirty ? 'Unsaved' : 'Saved'} · {project.fps} fps ·{' '}
-          {project.width}×{project.height}
+        <span className="status-pill" data-dirty={dirty || undefined}>
+          {analyzing
+            ? `Analyze · ${analyzing}`
+            : dirty
+              ? 'Unsaved'
+              : 'Saved'}{' '}
+          · {documentPath ? currentDocumentTitle() : project.name} · {project.fps} fps · {project.width}×
+          {project.height}
         </span>
         <button className="export-btn" onClick={onExport} disabled={exporting}>
           {exporting ? 'Exporting…' : 'Export'}

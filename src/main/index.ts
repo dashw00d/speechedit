@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -144,16 +144,67 @@ ipcMain.handle('dialog:openProject', async () => {
   return { path: result.filePaths[0], project: JSON.parse(raw) }
 })
 
-ipcMain.handle('dialog:saveProject', async (_e, project: unknown) => {
+async function writeAtomic(path: string, body: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const tmp = `${path}.${process.pid}.tmp`
+  await writeFile(tmp, body, 'utf8')
+  try {
+    await rename(tmp, path)
+  } catch {
+    await writeFile(path, body, 'utf8')
+    await rm(tmp, { force: true }).catch(() => undefined)
+  }
+}
+
+ipcMain.handle('dialog:saveProject', async (_e, project: unknown, defaultPath?: string) => {
   const result = await dialog.showSaveDialog({
     title: 'Save project',
-    defaultPath: 'project.speechedit.json',
-    filters: [{ name: 'SpeechEdit', extensions: ['speechedit.json'] }]
+    defaultPath: defaultPath || 'project.speechedit.json',
+    filters: [{ name: 'SpeechEdit', extensions: ['speechedit.json', 'json'] }]
   })
   if (result.canceled || !result.filePath) return null
-  await writeFile(result.filePath, JSON.stringify(project, null, 2))
+  await writeAtomic(result.filePath, JSON.stringify(project, null, 2))
   return result.filePath
 })
+
+ipcMain.handle('project:write', async (_e, path: string, project: unknown) => {
+  await writeAtomic(path, JSON.stringify(project, null, 2))
+  return path
+})
+
+ipcMain.handle('project:read', async (_e, path: string) => {
+  if (!existsSync(path)) return null
+  return { path, project: JSON.parse(await readFile(path, 'utf8')) }
+})
+
+ipcMain.handle('workspace:sync', async (_e, payload: { project: unknown; recovery: unknown; session: unknown }) => {
+  const dir = syncDir()
+  await writeAtomic(join(dir, 'current.speechedit.json'), JSON.stringify(payload.project, null, 2))
+  await writeAtomic(join(dir, 'recovery.speechedit.json'), JSON.stringify(payload.recovery, null, 2))
+  await writeAtomic(join(dir, 'session.json'), JSON.stringify(payload.session, null, 2))
+  return dir
+})
+
+ipcMain.handle('workspace:recovery', async () => {
+  const path = join(syncDir(), 'recovery.speechedit.json')
+  if (!existsSync(path)) return null
+  return JSON.parse(await readFile(path, 'utf8'))
+})
+
+ipcMain.handle('workspace:clearRecovery', async () => {
+  const path = join(syncDir(), 'recovery.speechedit.json')
+  if (existsSync(path)) await rm(path, { force: true })
+})
+
+ipcMain.handle('workspace:session', async () => {
+  const path = join(syncDir(), 'session.json')
+  if (!existsSync(path)) return { lastDocumentPath: null, lastSavedAt: null }
+  return JSON.parse(await readFile(path, 'utf8'))
+})
+
+ipcMain.handle('fs:exists', async (_e, paths: string[]) =>
+  paths.map((path) => ({ path, exists: Boolean(path) && existsSync(path) }))
+)
 
 ipcMain.handle('dialog:export', async () => {
   const result = await dialog.showSaveDialog({
@@ -214,10 +265,8 @@ function syncDir(): string {
 }
 
 ipcMain.handle('project:sync', async (_e, project: unknown) => {
-  const dir = syncDir()
-  await mkdir(dir, { recursive: true })
-  const path = join(dir, 'current.speechedit.json')
-  await writeFile(path, JSON.stringify(project, null, 2))
+  const path = join(syncDir(), 'current.speechedit.json')
+  await writeAtomic(path, JSON.stringify(project, null, 2))
   return path
 })
 ipcMain.handle('settings:sync', async (_e, settings: unknown) => {

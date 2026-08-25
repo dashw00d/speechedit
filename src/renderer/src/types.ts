@@ -317,6 +317,7 @@ export type Command =
   | { type: 'keepTake'; sceneId: string }
   | { type: 'applyModelSuggestions' }
   | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked'>> }
+  | { type: 'relinkAsset'; assetId: string; path: string }
 
 export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes' | 'effect'> {
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }

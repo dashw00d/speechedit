@@ -97,6 +97,23 @@ export function commandToTool(command: Command): PlannedCall {
       return { name: 'infer_scenes', args: {} }
     case 'collapseRetakes':
       return { name: 'collapse_retakes', args: {} }
+    case 'keepTake':
+      return { name: 'keep_take', args: { sceneId: command.sceneId } }
+    case 'rebuildIntelligence':
+      return { name: 'rebuild_intelligence', args: {} }
+    case 'generateCaptions':
+      return {
+        name: 'generate_captions',
+        args: {
+          maxWords: command.maxWords,
+          speakerPrefix: command.speakerPrefix,
+          emphasize: command.emphasize
+        }
+      }
+    case 'addLowerThirds':
+      return { name: 'add_lower_thirds', args: {} }
+    case 'relinkAsset':
+      return { name: 'apply_command', args: { command } }
     case 'applyModelSuggestions':
       return { name: 'apply_model_suggestions', args: {} }
     case 'setSpeed':

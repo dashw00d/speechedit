@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createDemoProject } from '../renderer/src/lib/demo'
 import { MCP_TOOLS, runTool } from '../renderer/src/lib/mcpTools'
-import { normalizeProject } from '../renderer/src/lib/normalize'
+import { parseProjectDocument, serializeDocument } from '../renderer/src/lib/projectDocument'
 import { settingsFromEnv, type AppSettings } from '../renderer/src/lib/settings'
 import type { Project } from '../renderer/src/types'
 
@@ -21,7 +21,7 @@ function loadProject(): Project {
   const path = projectPath()
   if (existsSync(path)) {
     try {
-      return normalizeProject(JSON.parse(readFileSync(path, 'utf8')) as Project)
+      return parseProjectDocument(JSON.parse(readFileSync(path, 'utf8'))).project
     } catch {
       /* fall through */
     }
@@ -32,7 +32,7 @@ function loadProject(): Project {
 function saveProject(project: Project): void {
   const path = projectPath()
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(project, null, 2))
+  writeFileSync(path, JSON.stringify(serializeDocument(project), null, 2))
 }
 
 function loadSettings(): AppSettings {

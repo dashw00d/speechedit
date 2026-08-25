@@ -266,4 +266,91 @@ describe('lavfi smoke', () => {
     expect(info.duration).toBeLessThan(2.05)
     expect(stages.some((s) => /clip|mixing|bed|caption/i.test(s))).toBe(true)
   }, 60000)
+
+  test('importRecording + applyCommand + exportProgram writes a program', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for export smoke')
+
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=320x240:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 2 -pix_fmt yuv420p /tmp/se-src.mp4`.quiet()
+    await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=220:sample_rate=48000 -t 2 /tmp/se-bed.wav`.quiet()
+    await Bun.$`${ffmpeg} -y -f lavfi -i color=c=red:s=80x80 -frames:v 1 /tmp/se-still.png`.quiet()
+
+    const { exportProgram, probe, waveform, thumbnails, detectSilence, detectScenes, detectLoudness } =
+      await import('../../../main/ffmpeg.ts')
+    const { host } = await import('../host.ts')
+    const { importRecording } = await import('./importMedia.ts')
+
+    const prev = {
+      probe: host.probe,
+      waveform: host.waveform,
+      thumbnails: host.thumbnails,
+      silence: host.silence,
+      scenes: host.scenes,
+      loudness: host.loudness,
+      analyze: host.analyze,
+      transcribe: host.transcribe
+    }
+    host.probe = probe
+    host.waveform = (file) => waveform(file)
+    host.thumbnails = (file) => thumbnails(file)
+    host.silence = detectSilence
+    host.scenes = detectScenes
+    host.loudness = detectLoudness
+    host.analyze = async (file) => ({
+      silence: await detectSilence(file),
+      scenes: await detectScenes(file),
+      loudness: await detectLoudness(file)
+    })
+    host.transcribe = async () => null
+
+    let project
+    try {
+      project = await importRecording('/tmp/se-src.mp4')
+    } finally {
+      Object.assign(host, prev)
+    }
+    if (!project) throw new Error('importRecording returned nothing')
+    expect(Object.values(project.assets)[0]?.path).toBe('/tmp/se-src.mp4')
+    expect(project.sourceDuration).toBeGreaterThan(1.5)
+
+    project = applyCommand(project, { type: 'deleteRange', start: 1.0, end: 1.4, source: 'manual' })
+    project = applyCommand(project, {
+      type: 'addAudio',
+      start: 0.2,
+      duration: 1.5,
+      asset: {
+        id: 'bed1',
+        path: '/tmp/se-bed.wav',
+        name: 'bed.wav',
+        kind: 'audio',
+        duration: 2,
+        waveform: []
+      }
+    })
+    project = applyCommand(project, {
+      type: 'addBroll',
+      start: 0.4,
+      duration: 0.8,
+      asset: {
+        id: 'still1',
+        path: '/tmp/se-still.png',
+        name: 'still.png',
+        kind: 'image',
+        duration: 1,
+        waveform: []
+      }
+    })
+    project = applyCommand(project, { type: 'addCaption', start: 0.1, duration: 1.2, text: 'Never Shotcut' })
+
+    const job = buildExportJob(project, '/tmp/se-import-export.mp4')!
+    job.encoder = 'libx264'
+    job.normalize = false
+    await exportProgram(job)
+    const info = await probe('/tmp/se-import-export.mp4')
+    expect(info.hasVideo).toBe(true)
+    expect(info.hasAudio).toBe(true)
+    expect(info.duration).toBeGreaterThan(1.1)
+    expect(info.duration).toBeLessThan(2.05)
+  }, 90000)
 })

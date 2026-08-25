@@ -21,8 +21,23 @@ const api = {
       text: string
       name: string
     } | null>,
-  saveProject: (project: unknown) =>
-    ipcRenderer.invoke('dialog:saveProject', project) as Promise<string | null>,
+  saveProject: (project: unknown, defaultPath?: string) =>
+    ipcRenderer.invoke('dialog:saveProject', project, defaultPath) as Promise<string | null>,
+  writeProject: (path: string, project: unknown) =>
+    ipcRenderer.invoke('project:write', path, project) as Promise<string>,
+  readProject: (path: string) =>
+    ipcRenderer.invoke('project:read', path) as Promise<{ path: string; project: unknown } | null>,
+  readRecovery: () => ipcRenderer.invoke('workspace:recovery') as Promise<unknown | null>,
+  clearRecovery: () => ipcRenderer.invoke('workspace:clearRecovery') as Promise<void>,
+  readSession: () =>
+    ipcRenderer.invoke('workspace:session') as Promise<{
+      lastDocumentPath: string | null
+      lastSavedAt: number | null
+    }>,
+  syncWorkspace: (payload: { project: unknown; recovery: unknown; session: unknown }) =>
+    ipcRenderer.invoke('workspace:sync', payload) as Promise<string>,
+  mediaExists: (paths: string[]) =>
+    ipcRenderer.invoke('fs:exists', paths) as Promise<{ path: string; exists: boolean }[]>,
   chooseExport: () => ipcRenderer.invoke('dialog:export') as Promise<string | null>,
   probe: (file: string) => ipcRenderer.invoke('media:probe', file),
   waveform: (file: string) => ipcRenderer.invoke('media:waveform', file),

@@ -3,6 +3,15 @@ import { host } from './host'
 import { applyCommand, programLength } from './lib/commands'
 import { createDemoProject, createEmptyProject } from './lib/demo'
 import { normalizeProject } from './lib/normalize'
+import {
+  makeRecovery,
+  parseProjectDocument,
+  parseSession,
+  serializeDocument,
+  slimProjectForCache,
+  type MediaRef,
+  type RecoveryRecord
+} from './lib/projectDocument'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
 import { wordRange } from './lib/transcriptEdit'
 import type { Command, Project, TagKind, Word } from './types'
@@ -39,6 +48,10 @@ export interface EditorState {
   ripple: boolean
   tool: 'select' | 'guard' | 'blade'
   guardKind: Extract<TagKind, 'keep' | 'demo'>
+  documentPath: string | null
+  lastSavedAt: number | null
+  recoveryOffer: RecoveryRecord | null
+  missingAssets: MediaRef[]
   dispatch: (command: Command) => void
   undo: () => void
   redo: () => void
@@ -54,31 +67,158 @@ export interface EditorState {
   setRipple: (value: boolean) => void
   setTool: (tool: EditorState['tool']) => void
   setGuardKind: (kind: EditorState['guardKind']) => void
-  loadProject: (project: Project) => void
+  loadProject: (
+    project: Project,
+    opts?: { path?: string | null; clean?: boolean; lastSavedAt?: number | null }
+  ) => void
   newProject: () => void
   loadDemo: () => void
   loadTranscript: (words: Word[]) => void
-  markClean: () => void
+  markClean: (info?: { path?: string; savedAt?: number }) => void
+  bindDocument: (path: string | null, savedAt?: number | null) => void
+  setRecoveryOffer: (offer: RecoveryRecord | null) => void
+  setMissingAssets: (assets: MediaRef[]) => void
 }
 
-function persist(project: Project) {
+export interface PersistMeta {
+  dirty: boolean
+  documentPath: string | null
+  lastSavedAt: number | null
+}
+
+const PROJECT_CACHE = 'speechedit:project'
+const RECOVERY_CACHE = 'speechedit:recovery'
+const SESSION_CACHE = 'speechedit:session'
+const PERSIST_WAIT = 400
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+let persistPending: { project: Project; meta: PersistMeta } | null = null
+
+function writeLocalCache(project: Project, meta: PersistMeta) {
+  if (typeof localStorage === 'undefined') return
   try {
-    localStorage.setItem('speechedit:project', JSON.stringify(project))
+    localStorage.setItem(PROJECT_CACHE, JSON.stringify(slimProjectForCache(project)))
+    localStorage.setItem(
+      RECOVERY_CACHE,
+      JSON.stringify(makeRecovery(slimProjectForCache(project), meta))
+    )
+    localStorage.setItem(
+      SESSION_CACHE,
+      JSON.stringify({ lastDocumentPath: meta.documentPath, lastSavedAt: meta.lastSavedAt })
+    )
   } catch {
-    /* ignore quota */
+    /* quota — disk recovery still has the full reel */
   }
-  void host.syncProject(project).catch(() => undefined)
+}
+
+function persistMeta(extra?: Partial<PersistMeta>): PersistMeta {
+  let live: PersistMeta = { dirty: false, documentPath: null, lastSavedAt: null }
+  try {
+    const state = useEditor.getState()
+    live = {
+      dirty: state.dirty,
+      documentPath: state.documentPath,
+      lastSavedAt: state.lastSavedAt
+    }
+  } catch {
+    /* store not ready */
+  }
+  return {
+    dirty: extra?.dirty ?? live.dirty,
+    documentPath: extra?.documentPath !== undefined ? extra.documentPath : live.documentPath,
+    lastSavedAt: extra?.lastSavedAt !== undefined ? extra.lastSavedAt : live.lastSavedAt
+  }
+}
+
+async function flushPending() {
+  if (!persistPending) return
+  const { project, meta } = persistPending
+  persistPending = null
+  const envelope = serializeDocument(project)
+  const recovery = makeRecovery(project, meta)
+  const session = { lastDocumentPath: meta.documentPath, lastSavedAt: meta.lastSavedAt }
+  await host.syncWorkspace({ project: envelope, recovery, session }).catch(() => undefined)
+}
+
+function persist(project: Project, extra?: Partial<PersistMeta>, immediate = false) {
+  const meta = persistMeta(extra)
+  writeLocalCache(project, meta)
+  persistPending = { project, meta }
+  if (persistTimer) clearTimeout(persistTimer)
+  if (immediate) {
+    persistTimer = null
+    void flushPending()
+    return
+  }
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    void flushPending()
+  }, PERSIST_WAIT)
+}
+
+export function flushWorkspace() {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  const state = useEditor.getState()
+  persistPending = {
+    project: state.project,
+    meta: {
+      dirty: state.dirty,
+      documentPath: state.documentPath,
+      lastSavedAt: state.lastSavedAt
+    }
+  }
+  writeLocalCache(persistPending.project, persistPending.meta)
+  void flushPending()
 }
 
 function bootProject(): Project {
+  if (typeof localStorage === 'undefined') return createDemoProject()
   try {
-    const raw = localStorage.getItem('speechedit:project')
-    if (raw) return normalizeProject(JSON.parse(raw) as Project)
+    const raw = localStorage.getItem(PROJECT_CACHE)
+    if (raw) return parseProjectDocument(JSON.parse(raw) as unknown).project
   } catch {
     /* ignore */
   }
   return createDemoProject()
 }
+
+function bootSession(): PersistMeta {
+  if (typeof localStorage === 'undefined') {
+    return { dirty: false, documentPath: null, lastSavedAt: null }
+  }
+  try {
+    const session = parseSession(JSON.parse(localStorage.getItem(SESSION_CACHE) ?? 'null'))
+    return { dirty: false, documentPath: session.lastDocumentPath, lastSavedAt: session.lastSavedAt }
+  } catch {
+    return { dirty: false, documentPath: null, lastSavedAt: null }
+  }
+}
+
+function resetView(
+  next: Project,
+  extra: PersistMeta & { persistNow?: boolean }
+): Pick<
+  EditorState,
+  'project' | 'past' | 'future' | 'selectedWordIds' | 'selectedClipId' | 'dirty' | 'documentPath' | 'lastSavedAt' | 'recoveryOffer'
+> {
+  persist(next, extra, extra.persistNow ?? true)
+  return {
+    project: next,
+    past: [],
+    future: [],
+    selectedWordIds: [],
+    selectedClipId: null,
+    dirty: extra.dirty,
+    documentPath: extra.documentPath,
+    lastSavedAt: extra.lastSavedAt,
+    recoveryOffer: null
+  }
+}
+
+const bootedSession = bootSession()
 
 export const useEditor = create<EditorState>((set, get) => ({
   project: bootProject(),
@@ -97,6 +237,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   ripple: true,
   tool: 'select',
   guardKind: 'keep',
+  documentPath: bootedSession.documentPath,
+  lastSavedAt: bootedSession.lastSavedAt,
+  recoveryOffer: null,
+  missingAssets: [],
   dispatch: (command) => {
     const { project, past } = get()
     const next = applyCommand(project, command)
@@ -110,7 +254,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       lastCoalesce.clipId === clipId &&
       now - lastCoalesce.at < 500
     lastCoalesce = { type: command.type, clipId, at: now }
-    persist(next)
+    persist(next, { dirty: true })
     set({
       project: next,
       past: coalesce ? past : [...past, project].slice(-HISTORY_LIMIT),
@@ -122,7 +266,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const { past, project, future } = get()
     const prev = past[past.length - 1]
     if (!prev) return
-    persist(prev)
+    persist(prev, { dirty: true })
     set({
       project: prev,
       past: past.slice(0, -1),
@@ -134,7 +278,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const { future, project, past } = get()
     const next = future[0]
     if (!next) return
-    persist(next)
+    persist(next, { dirty: true })
     set({
       project: next,
       past: [...past, project].slice(-HISTORY_LIMIT),
@@ -162,41 +306,39 @@ export const useEditor = create<EditorState>((set, get) => ({
   setRipple: (value) => set({ ripple: value }),
   setTool: (tool) => set({ tool }),
   setGuardKind: (kind) => set({ guardKind: kind }),
-  loadProject: (project) => {
+  loadProject: (project, opts) => {
     const next = normalizeProject(project)
-    persist(next)
-    set({
-      project: next,
-      past: [],
-      future: [],
-      selectedWordIds: [],
-      selectedClipId: null,
-      dirty: false
-    })
+    const documentPath = opts && 'path' in opts ? opts.path ?? null : null
+    const dirty = !(opts?.clean ?? true)
+    const lastSavedAt = opts?.lastSavedAt ?? (dirty ? get().lastSavedAt : next.updatedAt)
+    set(
+      resetView(next, {
+        dirty,
+        documentPath,
+        lastSavedAt,
+        persistNow: true
+      })
+    )
   },
   newProject: () => {
-    const next = createEmptyProject()
-    persist(next)
-    set({
-      project: next,
-      past: [],
-      future: [],
-      selectedWordIds: [],
-      selectedClipId: null,
-      dirty: false
-    })
+    set(
+      resetView(createEmptyProject(), {
+        dirty: false,
+        documentPath: null,
+        lastSavedAt: null,
+        persistNow: true
+      })
+    )
   },
   loadDemo: () => {
-    const next = createDemoProject()
-    persist(next)
-    set({
-      project: next,
-      past: [],
-      future: [],
-      selectedWordIds: [],
-      selectedClipId: null,
-      dirty: false
-    })
+    set(
+      resetView(createDemoProject(), {
+        dirty: false,
+        documentPath: null,
+        lastSavedAt: null,
+        persistNow: true
+      })
+    )
   },
   loadTranscript: (words) =>
     set((state) => {
@@ -204,10 +346,22 @@ export const useEditor = create<EditorState>((set, get) => ({
         { ...state.project, transcript: { ...state.project.transcript, words } },
         { type: 'rebuildSuggestions' }
       )
-      persist(project)
+      persist(project, { dirty: true })
       return { project, dirty: true, selectedWordIds: [] }
     }),
-  markClean: () => set({ dirty: false })
+  markClean: (info) => {
+    const documentPath = info?.path ?? get().documentPath
+    const lastSavedAt = info?.savedAt ?? Date.now()
+    set({ dirty: false, documentPath, lastSavedAt })
+    persist(get().project, { dirty: false, documentPath, lastSavedAt }, true)
+  },
+  bindDocument: (path, savedAt) => {
+    const lastSavedAt = savedAt ?? get().lastSavedAt
+    set({ documentPath: path, lastSavedAt })
+    persist(get().project, { documentPath: path, lastSavedAt, dirty: get().dirty }, true)
+  },
+  setRecoveryOffer: (offer) => set({ recoveryOffer: offer }),
+  setMissingAssets: (assets) => set({ missingAssets: assets })
 }))
 
 export interface PlaybackState {
