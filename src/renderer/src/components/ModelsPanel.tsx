@@ -44,6 +44,13 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
       if (!words.length) throw new Error('No transcript came back. Check the provider, or use speech islands.')
       useEditor.getState().loadTranscript(words)
+      const labeled = Array.isArray(cues) ? cues.filter((c) => c.speaker) : []
+      if (labeled.length) {
+        useEditor.getState().dispatch({
+          type: 'applyDiarization',
+          assignments: labeled.map((c) => ({ start: c.start, end: c.end, speaker: c.speaker as string }))
+        })
+      }
       onToast(`Transcript · ${words.length} words`)
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Transcribe failed.')

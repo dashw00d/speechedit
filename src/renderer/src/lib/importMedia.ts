@@ -2,6 +2,8 @@ import { host } from '../host'
 import type { Asset, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
 import { wordsFromAsr } from './asr'
+import { applyCommand } from './commands'
+import { assignmentsFromCues, hasProviderSpeakers } from './diarize'
 import { inferScenesLocal } from './sceneAnalysis'
 import { loadSettings } from './settings'
 import { createEmptyProject } from './demo'
@@ -30,8 +32,9 @@ export async function importRecording(
     onStage?.(`transcript:${info.stage}`)
   })
   let words: Word[] = []
+  let whispered: { text: string; start: number; end: number; speaker?: string }[] | null = null
   try {
-    const whispered = await host.transcribe(file, loadSettings().transcript).catch(() => null)
+    whispered = await host.transcribe(file, loadSettings().transcript).catch(() => null)
     words = wordsFromAsr(whispered)
     if (!words.length) {
       onStage?.('transcript:islands')
@@ -80,11 +83,18 @@ export async function importRecording(
     })
   }
   const intel = inferScenesLocal(draft)
-  return {
+  const withScenes = {
     ...draft,
     scenes: intel.scenes,
     suggestions: [...draft.suggestions, ...intel.suggestions]
   }
+  if (whispered && hasProviderSpeakers(whispered)) {
+    return applyCommand(withScenes, {
+      type: 'applyDiarization',
+      assignments: assignmentsFromCues(whispered)
+    })
+  }
+  return withScenes
 }
 
 export { parseSrt }

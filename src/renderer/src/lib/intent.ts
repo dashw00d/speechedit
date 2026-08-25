@@ -48,6 +48,22 @@ export function planIntent(project: Project, intent: string): IntentPlan {
   if (/collapse retake|keep (the )?best take|drop (false|bad) (start|take)s?|use (the )?good take/.test(lower)) {
     return { commands: [{ type: 'collapseRetakes' }], note: 'Cut superseded takes. Undo still works one-by-one.' }
   }
+  if (/caption remaining|generate captions|burn captions|caption the/.test(lower)) {
+    return {
+      commands: [
+        {
+          type: 'generateCaptions',
+          maxWords: 5,
+          speakerPrefix: /speaker/.test(lower),
+          emphasize: !/no emphasis/.test(lower)
+        }
+      ],
+      note: 'Generate captions from live words.'
+    }
+  }
+  if (/lower[- ]thirds?|chapter titles/.test(lower)) {
+    return { commands: [{ type: 'addLowerThirds' }], note: 'Add scene lower thirds.' }
+  }
   if (/rebuild|re-?analy/.test(lower)) {
     return { commands: [{ type: 'rebuildSuggestions' }], note: 'Rebuild suggestions from analysis + words.' }
   }

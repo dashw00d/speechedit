@@ -32,7 +32,7 @@ export function wordsFromCues(
     text: c.text,
     start: c.start,
     end: c.end,
-    speaker,
+    speaker: c.speaker || speaker,
     deleted: false
   }))
 }

@@ -1,4 +1,4 @@
-import type { Command, Project, SuggestionType, TagKind } from '../types'
+import type { Command, Project, SuggestionType, TagKind, TitlePreset } from '../types'
 import {
   EMPTY_SESSION,
   buildAgentContext,
@@ -371,16 +371,6 @@ export const MCP_TOOLS: ToolSpec[] = [
     inputSchema: { type: 'object', properties: { intent: { type: 'string' } } }
   },
   {
-    name: 'infer_scenes',
-    description: 'Local (no LLM) scene/retake grouping from the transcript and analysis cache.',
-    inputSchema: { type: 'object', properties: {} }
-  },
-  {
-    name: 'collapse_retakes',
-    description: 'Cut superseded takes. Same as the Collapse retakes button. Undo via revert_suggestion or undo.',
-    inputSchema: { type: 'object', properties: {} }
-  },
-  {
     name: 'apply_model_suggestions',
     description: 'Apply unblocked model-type cuts from the intelligence pass.',
     inputSchema: { type: 'object', properties: {} }
@@ -418,6 +408,66 @@ export const MCP_TOOLS: ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: { source: { type: 'number' }, program: { type: 'number' } }
+    }
+  },
+  {
+    name: 'generate_captions',
+    description: 'Build V3 captions from live transcript words (command bus).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxWords: { type: 'number' },
+        speakerPrefix: { type: 'boolean' },
+        emphasize: { type: 'boolean' }
+      }
+    }
+  },
+  {
+    name: 'add_lower_thirds',
+    description: 'Add scene titles as lower thirds on the overlay track.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'add_title',
+    description: 'Add a title, lower-third, or chapter card at program time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: { type: 'number' },
+        duration: { type: 'number' },
+        text: { type: 'string' },
+        preset: { type: 'string' }
+      },
+      required: ['start', 'text']
+    }
+  },
+  {
+    name: 'import_captions',
+    description: 'Replace the caption track from SRT or VTT text.',
+    inputSchema: {
+      type: 'object',
+      properties: { filename: { type: 'string' }, text: { type: 'string' } },
+      required: ['text']
+    }
+  },
+  {
+    name: 'apply_diarization',
+    description: 'Map provider speaker labels onto transcript speakers via the command bus.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assignments: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              start: { type: 'number' },
+              end: { type: 'number' },
+              speaker: { type: 'string' }
+            }
+          }
+        }
+      }
     }
   }
 ]
@@ -640,6 +690,48 @@ export async function runTool(
       const turn = await runAgent(project, String(args.intent ?? ''), session, intel)
       return { project: turn.project, message: turn.message, data: turn.calls }
     }
+    case 'generate_captions':
+      return apply(
+        {
+          type: 'generateCaptions',
+          maxWords: args.maxWords == null ? undefined : num(args.maxWords, 5),
+          speakerPrefix: Boolean(args.speakerPrefix),
+          emphasize: args.emphasize == null ? true : Boolean(args.emphasize)
+        },
+        'Generated captions.'
+      )
+    case 'add_lower_thirds':
+      return apply({ type: 'addLowerThirds' }, 'Added scene lower thirds.')
+    case 'add_title':
+      return apply(
+        {
+          type: 'addTitle',
+          start: num(args.start),
+          duration: args.duration == null ? 3 : num(args.duration, 3),
+          text: String(args.text ?? 'Title'),
+          preset: args.preset ? (String(args.preset) as TitlePreset) : 'title'
+        },
+        'Added title.'
+      )
+    case 'import_captions':
+      return apply(
+        {
+          type: 'importCaptions',
+          filename: String(args.filename ?? 'captions.srt'),
+          text: String(args.text ?? '')
+        },
+        'Imported captions.'
+      )
+    case 'apply_diarization':
+      return apply(
+        {
+          type: 'applyDiarization',
+          assignments: Array.isArray(args.assignments)
+            ? (args.assignments as Array<{ start: number; end: number; speaker: string }>)
+            : undefined
+        },
+        'Applied diarization.'
+      )
     case 'run_intelligence': {
       const draft = await runSceneIntelligence(
         project,

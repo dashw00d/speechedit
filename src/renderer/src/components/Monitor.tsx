@@ -175,16 +175,25 @@ export function Monitor() {
             <div
               key={caption.id}
               className="caption-burn"
+              data-pos={caption.style?.position ?? 'lower'}
+              data-align={caption.style?.align ?? 'center'}
               style={{
                 fontSize: caption.style?.fontSize,
                 textAlign: caption.style?.align,
                 color: caption.style?.fill,
+                WebkitTextStrokeColor: caption.style?.stroke,
                 opacity:
                   caption.transform.opacity *
                   fadeGain(programTime - caption.start, caption.duration, caption.fadeIn, caption.fadeOut)
               }}
             >
-              {caption.text}
+              {caption.text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+                part.startsWith('**') && part.endsWith('**') ? (
+                  <strong key={i}>{part.slice(2, -2)}</strong>
+                ) : (
+                  <span key={i}>{part}</span>
+                )
+              )}
             </div>
           ) : null
         )}

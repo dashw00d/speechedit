@@ -141,8 +141,24 @@ export function Palette() {
         name: 'Caption remaining words',
         run: () =>
           dispatch({
-            type: 'replaceProject',
-            project: withGeneratedCaptions(useEditor.getState().project)
+            type: 'generateCaptions',
+            maxWords: 5,
+            emphasize: true
+          })
+      },
+      {
+        name: 'Scene lower thirds',
+        run: () => dispatch({ type: 'addLowerThirds' })
+      },
+      {
+        name: 'Add lower third',
+        run: () =>
+          dispatch({
+            type: 'addTitle',
+            start: usePlayback.getState().programTime,
+            duration: 3,
+            text: 'Lower third',
+            preset: 'lower-third'
           })
       },
       {

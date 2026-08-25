@@ -14,6 +14,7 @@ export interface AsrCue {
   text: string
   start: number
   end: number
+  speaker?: string
 }
 
 export interface AsrResult {
@@ -317,7 +318,12 @@ export function expandAsrCues(
   const keepTimes = wordLevel ?? looksWordLevel(cues)
   if (keepTimes) {
     return cues
-      .map((c) => ({ text: c.text.trim(), start: c.start, end: Math.max(c.end, c.start) }))
+      .map((c) => ({
+        text: c.text.trim(),
+        start: c.start,
+        end: Math.max(c.end, c.start),
+        speaker: c.speaker
+      }))
       .filter((c) => c.text)
   }
   const out: AsrCue[] = []
@@ -329,7 +335,8 @@ export function expandAsrCues(
       out.push({
         text,
         start: seg.start + (span * i) / n,
-        end: seg.start + (span * (i + 1)) / n
+        end: seg.start + (span * (i + 1)) / n,
+        speaker: seg.speaker
       })
     })
   }
