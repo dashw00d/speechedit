@@ -162,6 +162,28 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             Razor at playhead
           </Item>
           <Item onClick={() => dispatch({ type: 'rippleDeleteMarks' })}>Ripple delete I/O</Item>
+          <Item
+            onClick={() =>
+              dispatch({
+                type: 'rippleTrimToPlayhead',
+                edge: 'in',
+                time: usePlayback.getState().programTime
+              })
+            }
+          >
+            Q · ripple trim in
+          </Item>
+          <Item
+            onClick={() =>
+              dispatch({
+                type: 'rippleTrimToPlayhead',
+                edge: 'out',
+                time: usePlayback.getState().programTime
+              })
+            }
+          >
+            W · ripple trim out
+          </Item>
         </Menu>
         <Menu label="Sequence">
           <Item

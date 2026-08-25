@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { applyCommand, programLength } from './commands'
+import { applyCommand, findMovableClip, isPrimaryLane, programLength } from './commands'
 import { buildExportJob, duckGainAt } from './exportJob'
 import { createDemoProject } from './demo'
-import { resolveSegments } from './resolver'
+import { resolveSegments, snapTime, sourceToProgramOf, wordSnapTimes } from './resolver'
 import { parseSrt } from './transcript'
+import type { Asset } from '../types'
 
 describe('command bus', () => {
   test('safe edits ripple the program shorter', () => {
@@ -368,5 +369,94 @@ describe('intelligence and MCP', () => {
     expect(um).toBeTruthy()
     const back = applyCommand(safe, { type: 'revertAt', start: um!.start, end: um!.end })
     expect(back.suggestions.find((s) => s.id === um!.id)?.applied).toBe(false)
+  })
+})
+
+const bedAsset = (id = 'mus1'): Asset => ({
+  id,
+  path: '/tmp/bed.wav',
+  name: 'bed.wav',
+  kind: 'audio',
+  duration: 8,
+  waveform: []
+})
+
+describe('timeline snap and Q/W', () => {
+  test('snapTime locks to words, I/O marks, and clip edges', () => {
+    const demo = createDemoProject()
+    const today = demo.transcript.words.find((w) => w.text === 'today')
+    expect(today).toBeTruthy()
+    const wordProg = sourceToProgramOf(demo, today!.start)
+    expect(snapTime(demo, wordProg + 0.04)).toBeCloseTo(wordProg, 2)
+
+    const snaps = wordSnapTimes(demo)
+    expect(snaps.some((t) => Math.abs(t - wordProg) < 1e-6)).toBe(true)
+
+    const marked = applyCommand(demo, { type: 'setMarks', markIn: 12, markOut: 14 })
+    expect(snapTime(marked, 12.07)).toBeCloseTo(12, 2)
+    expect(snapTime(marked, 13.94)).toBeCloseTo(14, 2)
+
+    const zoom = demo.tracks.find((t) => t.type === 'overlay')?.clips[0]
+    expect(zoom).toBeTruthy()
+    const zoomOut = zoom!.start + zoom!.duration
+    expect(snapTime(demo, zoomOut - 0.05)).toBeCloseTo(zoomOut, 2)
+    expect(snapTime(demo, 10, [], 0.08)).toBeCloseTo(10, 2)
+  })
+
+  test('Q and W ripple-trim the active primary segment to the playhead', () => {
+    const demo = createDemoProject()
+    const before = programLength(demo)
+    const first = resolveSegments(demo)[0]
+    expect(first).toBeTruthy()
+
+    const q = applyCommand(demo, { type: 'rippleTrimToPlayhead', edge: 'in', time: 2 })
+    expect(programLength(q)).toBeCloseTo(before - 2, 1)
+    expect(resolveSegments(q)[0].inPoint).toBeGreaterThan(first.inPoint + 1.5)
+
+    const w = applyCommand(demo, { type: 'rippleTrimToPlayhead', edge: 'out', time: 2 })
+    const pictureOut = resolveSegments(w).reduce((max, seg) => Math.max(max, seg.start + seg.duration), 0)
+    expect(pictureOut).toBeCloseTo(2, 1)
+    expect(resolveSegments(w)[0].outPoint).toBeCloseTo(2, 1)
+
+    const withBed = applyCommand(demo, {
+      type: 'addAudio',
+      start: 12,
+      duration: 8,
+      asset: bedAsset('musq')
+    })
+    const afterQ = applyCommand(withBed, { type: 'rippleTrimToPlayhead', edge: 'in', time: 2 })
+    const bed = afterQ.tracks.flatMap((t) => t.clips).find((c) => c.assetId === 'musq')
+    expect(bed?.start).toBeCloseTo(10, 1)
+  })
+
+  test('music beds move, trim, and razor without touching derived V1/A1', () => {
+    const withBed = applyCommand(createDemoProject(), {
+      type: 'addAudio',
+      start: 12,
+      duration: 8,
+      asset: bedAsset()
+    })
+    const bedTrack = withBed.tracks.find((t) => t.type === 'audio' && t.id !== 'a1')
+    expect(bedTrack && !isPrimaryLane(bedTrack)).toBe(true)
+    const bed = bedTrack?.clips.find((c) => c.assetId === 'mus1')
+    expect(bed).toBeTruthy()
+    expect(findMovableClip(withBed, bed!.id)?.id).toBe(bed!.id)
+    expect(findMovableClip(withBed, resolveSegments(withBed)[0].id)).toBeUndefined()
+
+    const moved = applyCommand(withBed, { type: 'moveClip', clipId: bed!.id, start: 4 })
+    expect(moved.tracks.flatMap((t) => t.clips).find((c) => c.assetId === 'mus1')?.start).toBe(4)
+
+    const trimmed = applyCommand(moved, { type: 'trimClip', clipId: bed!.id, edge: 'in', time: 6 })
+    const afterTrim = trimmed.tracks.flatMap((t) => t.clips).find((c) => c.assetId === 'mus1')
+    expect(afterTrim?.start).toBeCloseTo(6, 2)
+    expect(afterTrim?.duration).toBeCloseTo(6, 2)
+
+    const razored = applyCommand(withBed, { type: 'splitAt', time: 14 })
+    const pieces = razored.tracks
+      .find((t) => t.id === bedTrack!.id)
+      ?.clips.filter((c) => c.assetId === 'mus1')
+    expect(pieces).toHaveLength(2)
+    expect(withBed.tracks.find((t) => t.id === 'v1')?.clips).toHaveLength(0)
+    expect(withBed.tracks.find((t) => t.id === 'a1')?.clips).toHaveLength(0)
   })
 })

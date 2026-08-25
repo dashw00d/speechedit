@@ -253,6 +253,7 @@ export type Command =
   | { type: 'moveClip'; clipId: string; start: number; trackId?: string }
   | { type: 'trimClip'; clipId: string; edge: 'in' | 'out'; time: number }
   | { type: 'trimPrimary'; segmentId: string; edge: 'in' | 'out'; sourceTime: number }
+  | { type: 'rippleTrimToPlayhead'; edge: 'in' | 'out'; time: number }
   | { type: 'setTransform'; clipId: string; transform: Partial<Transform> }
   | { type: 'setSegmentStyle'; segmentId: string; patch: Partial<Omit<SegmentStyle, 'id' | 'start' | 'end'>> }
   | { type: 'addKeyframe'; segmentId: string; time: number; transform: Partial<Transform> }

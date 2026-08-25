@@ -93,7 +93,7 @@ export function programLengthOf(project: Project): number {
   const segs = resolveSegments(project)
   const kept = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].duration : 0
   const extras = project.tracks
-    .filter((t) => t.type === 'overlay' || t.type === 'caption')
+    .filter((t) => t.id !== 'v1' && t.id !== 'a1')
     .flatMap((t) => t.clips)
     .reduce((max, c) => Math.max(max, c.start + c.duration), 0)
   return Math.max(kept, extras, 0.01)
@@ -136,9 +136,30 @@ export function pictureAt(project: Project, programTime: number): Transform {
   return sampleTransform(seg.transform, seg.keyframes, local)
 }
 
-export function snapTime(project: Project, time: number, extras: number[] = [], threshold = 0.12): number {
+export function wordSnapTimes(project: Project): number[] {
   const segs = resolveSegments(project)
-  const points = [
+  return project.transcript.words.flatMap((word) => [
+    sourceToProgramCached(segs, word.start),
+    sourceToProgramCached(segs, word.end)
+  ])
+}
+
+function sourceToProgramCached(
+  segs: ResolvedSegment[],
+  sourceTime: number
+): number {
+  let program = 0
+  for (const seg of segs) {
+    if (sourceTime < seg.inPoint) return program
+    if (sourceTime <= seg.outPoint) return program + (sourceTime - seg.inPoint) / seg.speed
+    program += seg.duration - seg.overlapNext
+  }
+  return program
+}
+
+export function snapCandidates(project: Project, extras: number[] = []): number[] {
+  const segs = resolveSegments(project)
+  return [
     0,
     programLengthOf(project),
     project.markIn ?? -1,
@@ -146,14 +167,14 @@ export function snapTime(project: Project, time: number, extras: number[] = [], 
     ...extras,
     ...segs.flatMap((s) => [s.start, s.start + s.duration]),
     ...project.tracks.flatMap((t) => t.clips.flatMap((c) => [c.start, c.start + c.duration])),
-    ...project.transcript.words.flatMap((w) => [
-      sourceToProgramOf(project, w.start),
-      sourceToProgramOf(project, w.end)
-    ])
+    ...wordSnapTimes(project)
   ].filter((n) => n >= 0)
+}
+
+export function snapTime(project: Project, time: number, extras: number[] = [], threshold = 0.12): number {
   let best = time
   let dist = threshold
-  for (const point of points) {
+  for (const point of snapCandidates(project, extras)) {
     const d = Math.abs(point - time)
     if (d < dist) {
       dist = d
@@ -161,6 +182,16 @@ export function snapTime(project: Project, time: number, extras: number[] = [], 
     }
   }
   return clamp(best, 0, programLengthOf(project) + 60)
+}
+
+export function snapSourceTime(
+  project: Project,
+  sourceTime: number,
+  extras: number[] = [],
+  threshold = 0.12
+): number {
+  const program = sourceToProgramOf(project, sourceTime)
+  return programToSourceOf(project, snapTime(project, program, extras, threshold))
 }
 
 export function asVideoClips(project: Project): Clip[] {
