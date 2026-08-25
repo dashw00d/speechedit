@@ -24,15 +24,12 @@ export function Palette() {
         run: () => dispatch({ type: 'rebuildSuggestions' })
       },
       {
+        name: 'Open agent (⌘J)',
+        run: () => useEditor.getState().setAgentOpen(true)
+      },
+      {
         name: 'Ask model to edit…',
-        run: () => {
-          const intent = window.prompt('What should SpeechEdit do?')
-          if (!intent) return
-          void import('../lib/askModel').then(async ({ askEditor }) => {
-            const result = await askEditor(useEditor.getState().project, intent)
-            dispatch({ type: 'replaceProject', project: result.project })
-          })
-        }
+        run: () => useEditor.getState().setAgentOpen(true)
       },
       {
         name: 'Find scenes and retakes',
@@ -40,12 +37,16 @@ export function Palette() {
           void import('../lib/askModel').then(async ({ askEditor }) => {
             const result = await askEditor(
               useEditor.getState().project,
-              'Group scenes and mark retakes. Do not cut yet.'
+              'Find scenes and mark retakes. Do not cut yet.'
             )
             dispatch({ type: 'replaceProject', project: result.project })
           })
         }
       },
+      { name: 'Local scene pass', run: () => dispatch({ type: 'inferScenes' }) },
+      { name: 'Collapse retakes', run: () => dispatch({ type: 'collapseRetakes' }) },
+      { name: 'Apply model cuts', run: () => dispatch({ type: 'applyModelSuggestions' }) },
+      { name: 'Open agent', run: () => useEditor.getState().setInspectorTab('agent') },
       {
         name: 'Cut this sentence',
         run: () => {

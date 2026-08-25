@@ -4,13 +4,15 @@ import { primarySegments, programLength } from '../lib/commands'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { EncoderOption } from '../types'
+import { AgentPanel } from './AgentPanel'
 import { ModelsPanel } from './ModelsPanel'
 
 const TABS = [
   ['transform', 'Transform'],
   ['audio', 'Audio'],
   ['caption', 'Caption'],
-  ['project', 'Project']
+  ['project', 'Project'],
+  ['agent', 'Agent']
 ] as const
 
 export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
@@ -46,6 +48,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         ))}
       </div>
       <div className="fields">
+        {tab === 'agent' && <AgentPanel onToast={onToast ?? (() => undefined)} />}
         {tab === 'project' && (
           <>
             <Field label="Reel name">
@@ -334,7 +337,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           </>
         )}
 
-        {!clip && tab !== 'project' && tab !== 'audio' && (
+        {!clip && tab !== 'project' && tab !== 'audio' && tab !== 'agent' && (
           <p className="help">Select a picture segment or overlay on the tape.</p>
         )}
       </div>

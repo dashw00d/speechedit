@@ -287,24 +287,16 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             Paint guards
           </Item>
           <Item
-            onClick={async () => {
-              const intent = window.prompt('Ask SpeechEdit (or a local/API model) to edit this reel.')
-              if (!intent) return
-              try {
-                const result = await askEditor(project, intent)
-                dispatch({ type: 'replaceProject', project: result.project })
-                onToast(result.message)
-              } catch (err) {
-                onToast(err instanceof Error ? err.message : 'Ask failed.')
-              }
+            onClick={() => {
+              useEditor.getState().setAgentOpen(true)
             }}
           >
-            Ask model…
+            Ask agent… ⌘J
           </Item>
           <Item
             onClick={async () => {
               try {
-                const result = await askEditor(project, 'Group scenes and mark retakes. Do not cut yet.')
+                const result = await askEditor(project, 'Find scenes and mark retakes. Do not cut yet.')
                 dispatch({ type: 'replaceProject', project: result.project })
                 onToast(result.message)
               } catch (err) {
@@ -314,8 +306,12 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           >
             Find scenes / retakes
           </Item>
+          <Item onClick={() => dispatch({ type: 'inferScenes' })}>Local scene pass</Item>
+          <Item onClick={() => dispatch({ type: 'collapseRetakes' })}>Collapse retakes</Item>
+          <Item onClick={() => dispatch({ type: 'applyModelSuggestions' })}>Apply model cuts</Item>
           <Item onClick={() => dispatch({ type: 'rebuildSuggestions' })}>Rebuild suggestions</Item>
           <Item onClick={() => dispatch({ type: 'applySafeSuggestions' })}>Apply safe cuts</Item>
+          <Item onClick={() => useEditor.getState().setInspectorTab('agent')}>Open agent</Item>
           <Item onClick={() => useEditor.getState().setReviewing(true)}>Review suggestions</Item>
           <Item
             onClick={() => {

@@ -14,6 +14,7 @@ import {
   type Transform
 } from '../types'
 import { buildSuggestions, cutMinusProtected, suggestionsFromSilence } from './analysis'
+import { inferScenesLocal, retakeRanges } from './sceneAnalysis'
 import { previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
@@ -649,7 +650,7 @@ export function applyCommand(project: Project, command: Command): Project {
     case 'setCutMargin': {
       const margin = clamp(command.margin, 0, 0.45)
       const raw = current.analysis?.silence ?? []
-      const silence = (raw.length ? suggestionsFromSilence(raw, margin) : []).filter(
+      const silence = (raw.length ? suggestionsFromSilence(raw, margin, current.analysis.staticRegions) : []).filter(
         (s) => !current.cuts.some((cut) => overlap(cut, s) > (s.end - s.start) * 0.8)
       )
       return touch({
@@ -842,6 +843,38 @@ export function applyCommand(project: Project, command: Command): Project {
       if (hit) return revertSuggestion(current, hit.id)
       return restoreSourceRange(current, command.start, command.end)
     }
+    case 'inferScenes': {
+      const draft = inferScenesLocal(current)
+      return applyCommand(current, {
+        type: 'mergeIntelligence',
+        scenes: draft.scenes,
+        suggestions: draft.suggestions
+      })
+    }
+    case 'collapseRetakes': {
+      const ranges = retakeRanges(current)
+      let next = current
+      for (const span of ranges) {
+        const already = next.cuts.some((c) => overlap(c, span) > (span.end - span.start) * 0.7)
+        if (already) continue
+        const pieces = cutMinusProtected(span, next.tags ?? [])
+        next = pieces.reduce((acc, piece) => deleteSourceRange(acc, piece.start, piece.end, 'repeat'), next)
+      }
+      const leftovers = next.suggestions.filter((s) => s.type === 'repeat' && !s.applied)
+      next = leftovers.reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), next)
+      return touch(next)
+    }
+    case 'applyModelSuggestions':
+      return current.suggestions
+        .filter((s) => s.type === 'model' && !s.applied && !s.blockedBy && s.action === 'cut')
+        .reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), current)
+    case 'setTrackFlag':
+      return touch({
+        ...current,
+        tracks: current.tracks.map((track) =>
+          track.id === command.trackId ? { ...track, ...command.patch } : track
+        )
+      })
     default:
       return current
   }

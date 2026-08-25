@@ -1,4 +1,4 @@
-export type ProviderKind = 'off' | 'whisper-cli' | 'openai-compatible'
+export type ProviderKind = 'off' | 'whisper-cli' | 'whisper-cpp' | 'faster-whisper' | 'openai-compatible'
 
 export interface ModelEndpoint {
   kind: ProviderKind
@@ -29,6 +29,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export const TRANSCRIPT_PRESETS = [
   { id: 'whisper-cli', label: 'Whisper CLI (PATH)', kind: 'whisper-cli' as const, baseUrl: '', model: '' },
+  { id: 'whisper-cpp', label: 'whisper.cpp (local OSS)', kind: 'whisper-cpp' as const, baseUrl: '', model: '' },
+  {
+    id: 'faster-whisper',
+    label: 'faster-whisper (local OSS)',
+    kind: 'faster-whisper' as const,
+    baseUrl: '',
+    model: ''
+  },
   {
     id: 'local',
     label: 'Local OpenAI-compatible',

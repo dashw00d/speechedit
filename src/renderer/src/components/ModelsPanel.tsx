@@ -1,8 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { host, isElectron } from '../host'
-import { extractJson } from '../lib/providers'
-import { intelligencePrompt, parseIntelligence } from '../lib/intelligence'
-import { planIntent } from '../lib/intent'
+import { askEditor } from '../lib/askModel'
+import { currentEditorSession } from '../lib/editorSession'
 import {
   INTEL_PRESETS,
   TRANSCRIPT_PRESETS,
@@ -10,7 +9,6 @@ import {
   saveSettings,
   type AppSettings
 } from '../lib/settings'
-import { applyCommand } from '../lib/commands'
 import { useEditor } from '../store'
 
 export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
@@ -56,35 +54,18 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   async function ask(intent?: string) {
     const promptIntent =
       intent ?? window.prompt('What should SpeechEdit do? (scenes, retakes, or “cut the ums”)') ?? ''
-    if (!promptIntent && settings.intelligence.kind === 'off') {
+    if (!promptIntent) {
       onToast('Type a request, or turn on a local/API model.')
       return
     }
     setBusy('intel')
     try {
-      if (settings.intelligence.kind === 'openai-compatible' && settings.intelligence.baseUrl) {
-        const prompt = intelligencePrompt(project, promptIntent || undefined)
-        const text = await host.complete({
-          endpoint: settings.intelligence,
-          messages: [
-            { role: 'system', content: prompt.system },
-            { role: 'user', content: prompt.user }
-          ]
-        })
-        const draft = parseIntelligence(extractJson(text))
-        let next = applyCommand(project, {
-          type: 'mergeIntelligence',
-          scenes: draft.scenes,
-          suggestions: draft.suggestions
-        })
-        next = draft.commands.reduce((acc, command) => applyCommand(acc, command), next)
-        dispatch({ type: 'replaceProject', project: next })
-        onToast(draft.notes || `Model · ${draft.scenes.length} scenes · ${draft.suggestions.length} cuts`)
-        return
+      const before = useEditor.getState().project
+      const result = await askEditor(before, promptIntent, currentEditorSession())
+      if (result.project !== before) {
+        dispatch({ type: 'replaceProject', project: result.project })
       }
-      const plan = planIntent(project, promptIntent)
-      plan.commands.forEach((command) => dispatch(command))
-      onToast(plan.note)
+      onToast(result.message)
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Model failed.')
     } finally {
@@ -95,14 +76,15 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   return (
     <>
       <p className="help">
-        Transcribe with Whisper on PATH, or any OpenAI-compatible API (Speaches, faster-whisper,
-        Groq, OpenAI). A second model groups scenes and retakes. MCP agents use the same command bus.
+        Transcribe with a local OSS CLI (Whisper, whisper.cpp, faster-whisper) or any
+        OpenAI-compatible HTTP API. A second model — or a local heuristic — groups scenes and
+        retakes. MCP agents call the same command bus as these buttons.
       </p>
       <Field label="Transcript">
         <select
-          value={settings.transcript.kind === 'whisper-cli' ? 'whisper-cli' : settings.transcript.baseUrl}
+          value={TRANSCRIPT_PRESETS.find((p) => p.kind === settings.transcript.kind && (p.kind !== 'openai-compatible' || p.baseUrl === settings.transcript.baseUrl))?.id ?? settings.transcript.kind}
           onChange={(e) => {
-            const preset = TRANSCRIPT_PRESETS.find((p) => p.id === e.target.value || p.baseUrl === e.target.value)
+            const preset = TRANSCRIPT_PRESETS.find((p) => p.id === e.target.value)
             if (!preset) return
             update({
               ...settings,
@@ -116,7 +98,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           }}
         >
           {TRANSCRIPT_PRESETS.map((p) => (
-            <option key={p.id} value={p.id === 'local' ? p.baseUrl : p.id}>
+            <option key={p.id} value={p.id}>
               {p.label}
             </option>
           ))}
@@ -214,7 +196,11 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         <button className="chip" disabled={Boolean(busy)} onClick={() => void ask()}>
           {busy === 'intel' ? 'Thinking…' : 'Ask model…'}
         </button>
-        <button className="chip" disabled={Boolean(busy)} onClick={() => void ask('Group scenes and mark retakes. Do not cut yet.')}>
+        <button
+          className="chip"
+          disabled={Boolean(busy)}
+          onClick={() => void ask('Find scenes and mark retakes. Do not cut yet.')}
+        >
           Find scenes
         </button>
       </div>

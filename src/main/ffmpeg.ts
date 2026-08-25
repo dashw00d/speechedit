@@ -637,24 +637,85 @@ export async function thumbnails(file: string, count = 20): Promise<string[]> {
   }
 }
 
-export async function transcribe(file: string): Promise<
+function parseAsrJson(raw: string): { text: string; start: number; end: number }[] | null {
+  const match = raw.match(/\{[\s\S]*\}/)
+  if (!match) return null
+  try {
+    const json = JSON.parse(match[0]) as {
+      segments?: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[]
+      words?: { word?: string; text?: string; start: number; end: number }[]
+      transcription?: {
+        text: string
+        offsets?: { from: number; to: number }
+        timestamps?: { from: string; to: string }
+      }[]
+    }
+    if (json.words?.length) {
+      return json.words
+        .map((w) => ({ text: String(w.word ?? w.text ?? '').trim(), start: w.start, end: w.end }))
+        .filter((w) => w.text)
+    }
+    const fromSegs = json.segments?.flatMap((s) =>
+      s.words?.length
+        ? s.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
+        : [{ text: s.text.trim(), start: s.start, end: s.end }]
+    )
+    if (fromSegs?.length) return fromSegs.filter((w) => w.text)
+    const fromCpp = json.transcription?.map((s) => ({
+      text: s.text.trim(),
+      start: (s.offsets?.from ?? 0) / 1000,
+      end: (s.offsets?.to ?? 0) / 1000
+    }))
+    if (fromCpp?.length) return fromCpp.filter((w) => w.text)
+  } catch {
+    return null
+  }
+  return null
+}
+
+async function transcribePythonStyle(bin: string, file: string): Promise<
   { text: string; start: number; end: number }[] | null
 > {
-  const binaries = ['whisper', 'whisper-ctranslate2', 'faster-whisper']
-  for (const bin of binaries) {
+  const out = await run(bin, [file, '--output_format', 'json', '--output_dir', tmpdir()])
+  return parseAsrJson(out)
+}
+
+async function transcribeWhisperCpp(bin: string, file: string): Promise<
+  { text: string; start: number; end: number }[] | null
+> {
+  const dir = await mkdtemp(join(tmpdir(), 'speechedit-wcpp-'))
+  const prefix = join(dir, 'out')
+  try {
+    await run(bin, ['-f', file, '-oj', '-of', prefix])
+    const raw = await readFile(`${prefix}.json`, 'utf8').catch(async () => {
+      const names = await readdir(dir)
+      const hit = names.find((n) => n.endsWith('.json'))
+      return hit ? readFile(join(dir, hit), 'utf8') : ''
+    })
+    return raw ? parseAsrJson(raw) : null
+  } catch {
+    return null
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+export async function transcribe(
+  file: string,
+  prefer?: string[]
+): Promise<{ text: string; start: number; end: number }[] | null> {
+  const python = prefer?.length ? prefer : ['whisper', 'whisper-ctranslate2', 'faster-whisper']
+  const cpp = ['whisper-cli', 'whisper-cpp', 'whisper.cpp']
+  const order = prefer?.some((b) => cpp.includes(b)) ? [...prefer, ...python] : [...python, ...cpp]
+  const tried = new Set<string>()
+  for (const bin of order) {
+    if (tried.has(bin)) continue
+    tried.add(bin)
     try {
-      const out = await run(bin, [file, '--output_format', 'json', '--output_dir', tmpdir()])
-      const match = out.match(/\{[\s\S]*"segments"[\s\S]*\}/)
-      if (!match) continue
-      const json = JSON.parse(match[0]) as {
-        segments?: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[]
-      }
-      const words = json.segments?.flatMap((s) =>
-        s.words?.length
-          ? s.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-          : [{ text: s.text.trim(), start: s.start, end: s.end }]
-      )
-      if (words?.length) return words.filter((w) => w.text)
+      const words = cpp.includes(bin)
+        ? await transcribeWhisperCpp(bin, file)
+        : await transcribePythonStyle(bin, file)
+      if (words?.length) return words
     } catch {
       continue
     }
@@ -713,7 +774,13 @@ export async function transcribeMedia(
       await rm(dir, { recursive: true, force: true })
     }
   }
-  return transcribe(file)
+  const bins =
+    opts?.kind === 'whisper-cpp'
+      ? ['whisper-cli', 'whisper-cpp', 'whisper.cpp']
+      : opts?.kind === 'faster-whisper'
+        ? ['faster-whisper']
+        : ['whisper', 'whisper-ctranslate2', 'faster-whisper']
+  return transcribe(file, bins)
 }
 
 export async function completeChat(

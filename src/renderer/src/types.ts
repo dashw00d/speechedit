@@ -296,6 +296,10 @@ export type Command =
   | { type: 'setScenes'; scenes: EditorialScene[] }
   | { type: 'mergeIntelligence'; scenes?: EditorialScene[]; suggestions?: EditSuggestion[] }
   | { type: 'revertAt'; start: number; end: number }
+  | { type: 'inferScenes' }
+  | { type: 'collapseRetakes' }
+  | { type: 'applyModelSuggestions' }
+  | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked'>> }
 
 export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes' | 'effect'> {
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }

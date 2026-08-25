@@ -28,14 +28,15 @@ export interface EditorState {
   selectedWordIds: string[]
   selectedClipId: string | null
   selectedSuggestionId: string | null
-  inspectorTab: 'transform' | 'audio' | 'caption' | 'project'
+  inspectorTab: 'transform' | 'audio' | 'caption' | 'project' | 'agent'
   reviewing: boolean
   palette: boolean
+  agentOpen: boolean
   dirty: boolean
   analyzing: string | null
   snap: boolean
   ripple: boolean
-  tool: 'select' | 'guard'
+  tool: 'select' | 'guard' | 'blade'
   guardKind: Extract<TagKind, 'keep' | 'demo'>
   dispatch: (command: Command) => void
   undo: () => void
@@ -46,6 +47,7 @@ export interface EditorState {
   setInspectorTab: (tab: EditorState['inspectorTab']) => void
   setReviewing: (value: boolean) => void
   setPalette: (value: boolean) => void
+  setAgentOpen: (value: boolean) => void
   setAnalyzing: (value: string | null) => void
   setSnap: (value: boolean) => void
   setRipple: (value: boolean) => void
@@ -87,6 +89,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   inspectorTab: 'project',
   reviewing: false,
   palette: false,
+  agentOpen: false,
   dirty: false,
   analyzing: null,
   snap: true,
@@ -152,6 +155,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
   setReviewing: (value) => set({ reviewing: value }),
   setPalette: (value) => set({ palette: value }),
+  setAgentOpen: (value) => set({ agentOpen: value }),
   setAnalyzing: (value) => set({ analyzing: value }),
   setSnap: (value) => set({ snap: value }),
   setRipple: (value) => set({ ripple: value }),

@@ -325,6 +325,8 @@ import { buildAgentContext } from './agentContext'
 import { parseIntelligence } from './intelligence'
 import { planIntent } from './intent'
 import { runTool } from './mcpTools'
+import { inferScenesLocal } from './sceneAnalysis'
+import { suggestionsFromSilence } from './analysis'
 
 describe('intelligence and MCP', () => {
   test('intent cuts a quoted phrase and applies safe edits', () => {
@@ -368,5 +370,79 @@ describe('intelligence and MCP', () => {
     expect(um).toBeTruthy()
     const back = applyCommand(safe, { type: 'revertAt', start: um!.start, end: um!.end })
     expect(back.suggestions.find((s) => s.id === um!.id)?.applied).toBe(false)
+  })
+
+  test('local scene pass marks the demo retake without an LLM', () => {
+    const demo = createDemoProject()
+    const draft = inferScenesLocal({ ...demo, scenes: [] })
+    expect(draft.scenes.some((s) => s.kind === 'retake')).toBe(true)
+    expect(draft.scenes.some((s) => s.kind === 'demo')).toBe(true)
+    const next = applyCommand(demo, { type: 'inferScenes' })
+    expect(next.scenes.some((s) => s.kind === 'retake')).toBe(true)
+  })
+
+  test('collapse retakes cuts the false take and keeps the keeper', () => {
+    const demo = createDemoProject()
+    const next = applyCommand(demo, { type: 'collapseRetakes' })
+    expect(next.transcript.words.some((w) => w.text === 'Cut' && w.start < 32 && w.deleted)).toBe(true)
+    expect(next.transcript.words.find((w) => w.text === "That's")?.deleted).toBe(false)
+    expect(programLength(next)).toBeLessThan(programLength(demo) - 1)
+  })
+
+  test('auto-cut the reel is safe edits only unless the user asks to collapse takes', () => {
+    const demo = createDemoProject()
+    expect(planIntent(demo, 'auto-cut the reel').commands.map((c) => c.type)).toEqual([
+      'applySafeSuggestions'
+    ])
+    expect(
+      planIntent(demo, 'auto-cut the reel and collapse retakes').commands.map((c) => c.type)
+    ).toEqual(['applySafeSuggestions', 'collapseRetakes'])
+  })
+
+  test('find scenes / do not cut infers scenes and never cuts the reel', () => {
+    const demo = createDemoProject()
+    const find = planIntent(demo, 'Find scenes and mark retakes. Do not cut yet.')
+    expect(find.commands.map((c) => c.type)).toEqual(['inferScenes'])
+    const hold = planIntent(demo, "don't cut yet")
+    expect(hold.commands).toEqual([])
+    const refuse = planIntent(demo, 'cut the reel. Do not cut yet.')
+    expect(refuse.commands.some((c) => c.type === 'applySafeSuggestions' || c.type === 'collapseRetakes')).toBe(
+      false
+    )
+  })
+
+  test('MCP collapse_retakes and infer_scenes use the command bus', async () => {
+    const cut = await runTool(createDemoProject(), 'collapse_retakes', {})
+    expect(cut.project.cuts.some((c) => c.source === 'repeat')).toBe(true)
+    const mapped = await runTool(cut.project, 'get_mapping', { source: 32.1 })
+    expect((mapped.data as { program: number }).program).toBeGreaterThan(0)
+  })
+
+  test('silence over a still frame is not a safe cut', () => {
+    const hits = suggestionsFromSilence([{ start: 10, end: 16 }], 0.12, [{ start: 10, end: 16 }])
+    expect(hits[0].safe).toBe(false)
+    expect(hits[0].action).toBe('review')
+  })
+
+  test('apply model suggestions cuts only model-type rows', () => {
+    const demo = createDemoProject()
+    const merged = applyCommand(demo, {
+      type: 'mergeIntelligence',
+      suggestions: [
+        {
+          id: 'sug_model_x',
+          type: 'model',
+          start: 40.2,
+          end: 40.7,
+          action: 'cut',
+          label: 'Shotcut',
+          safe: false,
+          applied: false
+        }
+      ]
+    })
+    const next = applyCommand(merged, { type: 'applyModelSuggestions' })
+    expect(next.suggestions.find((s) => s.id === 'sug_model_x')?.applied).toBe(true)
+    expect(next.transcript.words.some((w) => w.text === 'Shotcut' && w.deleted)).toBe(true)
   })
 })

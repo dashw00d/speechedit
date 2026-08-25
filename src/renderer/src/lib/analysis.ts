@@ -55,17 +55,27 @@ export function withCutMargin(gaps: Interval[], margin = 0.12): Interval[] {
     .filter((g) => g.end - g.start >= 0.25)
 }
 
-export function suggestionsFromSilence(gaps: Interval[], margin = 0.12): EditSuggestion[] {
-  return withCutMargin(gaps, margin).map((g) => ({
-    id: uid('sug'),
-    type: 'silence' as const,
-    start: g.start,
-    end: g.end,
-    action: 'cut' as const,
-    label: `Dead air ${(g.end - g.start + margin * 2).toFixed(1)}s · ${Math.round(margin * 1000)}ms pad`,
-    safe: g.end - g.start >= 0.55,
-    applied: false
-  }))
+export function suggestionsFromSilence(
+  gaps: Interval[],
+  margin = 0.12,
+  staticRegions: Interval[] = []
+): EditSuggestion[] {
+  return withCutMargin(gaps, margin).map((g) => {
+    const still = staticRegions.some((s) => overlap(s, g) > (g.end - g.start) * 0.35)
+    const hold = g.end - g.start + margin * 2
+    return {
+      id: uid('sug'),
+      type: 'silence' as const,
+      start: g.start,
+      end: g.end,
+      action: still ? ('review' as const) : ('cut' as const),
+      label: still
+        ? `Silent still ${hold.toFixed(1)}s · maybe a demo — tag before cutting`
+        : `Dead air ${hold.toFixed(1)}s · ${Math.round(margin * 1000)}ms pad`,
+      safe: !still && g.end - g.start >= 0.55,
+      applied: false
+    }
+  })
 }
 
 export function suggestionsFromStatic(hits: Interval[]): EditSuggestion[] {
@@ -215,7 +225,7 @@ export function detectRepeats(words: Word[]): EditSuggestion[] {
 
 export function buildSuggestions(input: AnalysisInput): EditSuggestion[] {
   return [
-    ...suggestionsFromSilence(input.silence, input.margin ?? 0.12),
+    ...suggestionsFromSilence(input.silence, input.margin ?? 0.12, input.sceneHits ?? []),
     ...detectFillers(input.words),
     ...detectRepeats(input.words),
     ...suggestionsFromStatic(input.sceneHits ?? []),
