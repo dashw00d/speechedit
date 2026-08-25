@@ -14,6 +14,14 @@ import {
   type Transform
 } from '../types'
 import { buildSuggestions, cutMinusProtected, protectIntervals, suggestionsFromGaps } from './analysis'
+import {
+  commandForScene,
+  inferScenesLocal,
+  normalizeScenes,
+  retakeRanges,
+  suggestionsFromScenes,
+  takeFamily
+} from './sceneAnalysis'
 import { coveringAppliedSuggestion, previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
@@ -854,24 +862,78 @@ export function applyCommand(project: Project, command: Command): Project {
     case 'tightenRange':
       return tightenRange(current, command.start, command.end)
     case 'setScenes':
-      return touch({ ...current, scenes: command.scenes })
+      return touch({ ...current, scenes: normalizeScenes(command.scenes) })
     case 'mergeIntelligence': {
       const incoming = command.suggestions ?? []
-      const keep = current.suggestions.filter(
-        (s) =>
-          s.applied ||
-          s.type !== 'model' ||
-          incoming.some((n) => overlap(n, s) > (s.end - s.start) * 0.6)
-      )
+      const scenes = command.scenes ? normalizeScenes(command.scenes) : current.scenes
+      const keep = current.suggestions.filter((s) => {
+        if (s.applied) return true
+        if (s.type === 'model' && incoming.some((n) => n.type === 'model' && overlap(n, s) > (s.end - s.start) * 0.6)) {
+          return false
+        }
+        if (s.type === 'repeat' && incoming.some((n) => n.type === 'repeat' && overlap(n, s) > (s.end - s.start) * 0.6)) {
+          return false
+        }
+        return true
+      })
       const fresh = incoming.filter(
         (s) =>
-          !keep.some((k) => k.type === 'model' && overlap(k, s) > (s.end - s.start) * 0.6)
+          !keep.some((k) => k.type === s.type && overlap(k, s) > (s.end - s.start) * 0.6)
       )
+      const merged = [...keep, ...fresh]
       return touch({
         ...current,
-        scenes: command.scenes ?? current.scenes,
-        suggestions: [...keep, ...fresh]
+        scenes,
+        suggestions: [...merged, ...suggestionsFromScenes(scenes, merged)]
       })
+    }
+    case 'inferScenes': {
+      const draft = inferScenesLocal(current)
+      return applyCommand(current, {
+        type: 'mergeIntelligence',
+        scenes: draft.scenes,
+        suggestions: draft.suggestions
+      })
+    }
+    case 'rebuildIntelligence': {
+      const applied = current.suggestions.filter((s) => s.applied)
+      const fresh = buildSuggestions({
+        duration: current.sourceDuration,
+        silence: current.analysis.silence,
+        sceneHits: current.analysis.staticRegions,
+        loudnessWindows: current.analysis.loudness,
+        words: current.transcript.words,
+        margin: current.cutMargin
+      }).filter((s) => !applied.some((a) => overlap(a, s) > (s.end - s.start) * 0.6))
+      const draft = inferScenesLocal({ ...current, suggestions: [...applied, ...fresh] })
+      return touch({
+        ...current,
+        scenes: draft.scenes,
+        suggestions: [...applied, ...fresh, ...draft.suggestions]
+      })
+    }
+    case 'collapseRetakes': {
+      const ranges = retakeRanges(current)
+      let next = current
+      for (const span of ranges) {
+        const already = next.cuts.some((c) => overlap(c, span) > (span.end - span.start) * 0.7)
+        if (already) continue
+        const pieces = cutMinusProtected(span, next.tags ?? [])
+        next = pieces.reduce((acc, piece) => deleteSourceRange(acc, piece.start, piece.end, 'repeat'), next)
+      }
+      const leftovers = next.suggestions.filter((s) => s.type === 'repeat' && !s.applied && !s.blockedBy)
+      return leftovers.reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), next)
+    }
+    case 'keepTake': {
+      const scene = current.scenes.find((s) => s.id === command.sceneId)
+      if (!scene) return current
+      const family = takeFamily(current.scenes, scene.id)
+      let next = current
+      for (const sibling of family) {
+        if (sibling.id === scene.id) continue
+        next = applyCommand(next, commandForScene(next, sibling, 'apply'))
+      }
+      return next
     }
     case 'revertAt': {
       const hit = coveringAppliedSuggestion(current, command.start, command.end)

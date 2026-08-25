@@ -25,6 +25,18 @@ export function Palette() {
         run: () => dispatch({ type: 'rebuildSuggestions' })
       },
       {
+        name: 'Rebuild intelligence',
+        run: () => dispatch({ type: 'rebuildIntelligence' })
+      },
+      {
+        name: 'Local scene pass',
+        run: () => dispatch({ type: 'inferScenes' })
+      },
+      {
+        name: 'Collapse retakes',
+        run: () => dispatch({ type: 'collapseRetakes' })
+      },
+      {
         name: 'Ask model to edit…',
         run: () => {
           const intent = window.prompt('What should SpeechEdit do?')

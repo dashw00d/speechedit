@@ -267,8 +267,13 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.scene-head {
-  display: block;
+.scene-head,
+.scene-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
   margin: 16px 0 6px;
   font-family: var(--sans);
   font-size: 11px;
@@ -276,8 +281,24 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   text-transform: uppercase;
   color: var(--paper-mute);
 }
-.scene-head[data-kind='demo'] { color: #b4532a; }
-.scene-head[data-kind='retake'] { color: var(--oxide); }
+.scene-chip {
+  border: 1px solid var(--line);
+  background: #2a241c;
+  color: var(--paper-mute);
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.scene-head[data-kind='demo'],
+.scene-chip[data-kind='demo'] { color: #b4532a; border-color: #b4532a; }
+.scene-head[data-kind='retake'],
+.scene-chip[data-kind='retake'] { color: var(--oxide); border-color: var(--oxide); }
+.drawer-row[data-kind='retake'] .kind { color: var(--oxide); }
+.drawer-row[data-kind='demo'] .kind { color: #b4532a; }
 .word[data-sug='filler'],
 .word[data-sug='silence'],
 .word[data-sug='repeat'],

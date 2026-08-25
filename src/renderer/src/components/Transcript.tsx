@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { appliedSuggestionAt } from '../lib/analysis'
 import { parseAnyTranscript, isFillerToken } from '../lib/transcript'
 import { currentWord } from '../lib/edl'
+import { commandForScene, suggestionForScene, takeFamily } from '../lib/sceneAnalysis'
 import { programToSourceOf } from '../lib/resolver'
 import {
   appliedForWord,
@@ -226,9 +227,38 @@ export function Transcript() {
           return (
             <span key={word.id}>
               {sceneStart && scene && (
-                <span className="scene-head" data-kind={scene.kind} title={scene.summary}>
-                  {scene.title}
-                  {scene.kind === 'retake' ? ' · retake' : ''}
+                <span className="scene-chip-row">
+                  <button
+                    className="scene-chip"
+                    data-kind={scene.kind}
+                    title={scene.summary}
+                    onClick={() => seekSource(scene.start)}
+                  >
+                    {scene.takeIndex ? `Take ${scene.takeIndex} · ` : ''}
+                    {scene.title}
+                    {scene.kind === 'retake' ? ' · retake' : ''}
+                  </button>
+                  {scene.kind === 'retake' || takeFamily(project.scenes, scene.id).length > 1 ? (
+                    suggestionForScene(project, scene)?.applied ? (
+                      <button
+                        className="chip"
+                        onClick={() => dispatch(commandForScene(project, scene, 'revert'))}
+                      >
+                        Put back
+                      </button>
+                    ) : scene.kind === 'retake' ? (
+                      <button
+                        className="chip"
+                        onClick={() => dispatch(commandForScene(project, scene, 'apply'))}
+                      >
+                        Drop take
+                      </button>
+                    ) : (
+                      <button className="chip" onClick={() => dispatch({ type: 'keepTake', sceneId: scene.id })}>
+                        Keep this take
+                      </button>
+                    )
+                  ) : null}
                 </span>
               )}
               {gap > 0.45 && prev && (

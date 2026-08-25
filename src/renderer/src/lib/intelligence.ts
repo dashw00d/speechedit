@@ -1,6 +1,7 @@
 import type { Command, EditSuggestion, EditorialScene, Project } from '../types'
 import { renderAgentBrief } from './agentContext'
-import { completeOpenAI, extractJson } from './providers'
+import { completeOpenAI, endpointReady, extractJson } from './providers'
+import { inferScenesLocal, normalizeScenes, suggestionsFromScenes } from './sceneAnalysis'
 import type { ModelEndpoint } from './settings'
 import { uid } from './time'
 
@@ -33,7 +34,11 @@ const COMMAND_TYPES = new Set<Command['type']>([
   'cutPreviousSentence',
   'tightenRange',
   'setScenes',
-  'revertAt'
+  'revertAt',
+  'inferScenes',
+  'rebuildIntelligence',
+  'collapseRetakes',
+  'keepTake'
 ])
 
 export function parseIntelligence(raw: unknown): IntelligenceDraft {
@@ -54,7 +59,8 @@ export function parseIntelligence(raw: unknown): IntelligenceDraft {
         title: String(s.title),
         summary: String(s.summary ?? ''),
         kind: (s.kind as EditorialScene['kind']) || 'talk',
-        takeOf: s.takeOf
+        takeOf: s.takeOf,
+        takeIndex: typeof s.takeIndex === 'number' ? s.takeIndex : undefined
       }
     ]
   })
@@ -87,7 +93,18 @@ export function parseIntelligence(raw: unknown): IntelligenceDraft {
     ...fromCuts
   ]
   const commands = (data.commands ?? []).filter((c) => c && COMMAND_TYPES.has(c.type))
-  return { scenes, suggestions, commands, notes: String(data.notes ?? '') }
+  const normalized = normalizeScenes(scenes)
+  const decorated = suggestions.map((s) => {
+    const retake = normalized.find((sc) => sc.kind === 'retake' && s.start < sc.end && s.end > sc.start)
+    if (!retake) return s
+    return { ...s, type: 'repeat' as const, safe: false }
+  })
+  return {
+    scenes: normalized,
+    suggestions: [...decorated, ...suggestionsFromScenes(normalized, decorated)],
+    commands,
+    notes: String(data.notes ?? '')
+  }
 }
 
 export function intelligencePrompt(project: Project, intent?: string): { system: string; user: string } {
@@ -96,16 +113,17 @@ export function intelligencePrompt(project: Project, intent?: string): { system:
 Return ONLY JSON with this shape:
 {
   "notes": "one paragraph",
-  "scenes": [{"id":"sc1","start":0,"end":8.2,"title":"...","summary":"...","kind":"talk|demo|retake|broll|other","takeOf":"optional scene id"}],
+  "scenes": [{"id":"sc1","start":0,"end":8.2,"title":"...","summary":"...","kind":"talk|demo|retake|broll|other","takeOf":"optional keeper id","takeIndex":1}],
+  "suggestions": [{"type":"repeat","start":1.2,"end":2.4,"action":"cut","label":"drop take 1","safe":false}],
   "cuts": [{"start":1.2,"end":1.5,"label":"why","safe":false}],
   "commands": [{"type":"deleteRange","start":1.2,"end":1.5,"source":"model"}]
 }
 Rules:
 - Times are SOURCE seconds, not program time.
 - Never cut ranges tagged keep or demo unless the user explicitly says to.
-- A retake scene should set takeOf to the keeper scene id and prefer cutting the worse take.
+- A retake scene should set takeOf to the keeper scene id, takeIndex on every take, and prefer cutting the worse take as type repeat, safe:false.
 - Prefer specific commands when the user asked to change the cut. Prefer cuts/scenes when analyzing.
-- Allowed command types: deleteRange, restoreRange, toggleWords, applySafeSuggestions, applySuggestion, revertSuggestion, revertSuggestionType, addTag, tightenRange, cutSentence, rebuildSuggestions, revertAt.
+- Allowed command types: deleteRange, restoreRange, toggleWords, applySafeSuggestions, applySuggestion, revertSuggestion, revertSuggestionType, addTag, tightenRange, cutSentence, rebuildSuggestions, revertAt, inferScenes, rebuildIntelligence, collapseRetakes, keepTake.
 - Do not invent word ids. Use deleteRange for time spans.`,
     user: `${intent ? `User request:\n${intent}\n\n` : 'Analyze this reel. Group scenes, mark retakes, and propose cuts a human would make.\n\n'}${renderAgentBrief(project)}`
   }
@@ -122,4 +140,26 @@ export async function runIntelligence(
     { role: 'user', content: prompt.user }
   ])
   return parseIntelligence(extractJson(text))
+}
+
+/** Heuristic always. Optional OpenAI-compatible /v1/chat/completions when the endpoint is ready. */
+export async function runSceneIntelligence(
+  project: Project,
+  endpoint?: ModelEndpoint,
+  intent?: string
+): Promise<IntelligenceDraft> {
+  if (endpoint && endpointReady(endpoint)) {
+    try {
+      return await runIntelligence(project, endpoint, intent ?? 'Group scenes and mark retakes. Do not cut yet.')
+    } catch {
+      /* fall through to local */
+    }
+  }
+  const local = inferScenesLocal(project)
+  return {
+    scenes: local.scenes,
+    suggestions: local.suggestions,
+    commands: [],
+    notes: `Local intelligence · ${local.scenes.length} scenes · ${local.suggestions.length} retake cuts (no LLM).`
+  }
 }

@@ -2,7 +2,7 @@ import type { Command, Project, SuggestionType, TagKind } from '../types'
 import { buildAgentContext, renderAgentBrief } from './agentContext'
 import { applyCommand, programLength } from './commands'
 import { planIntent } from './intent'
-import { runIntelligence } from './intelligence'
+import { runSceneIntelligence } from './intelligence'
 import { endpointReady } from './providers'
 import type { ModelEndpoint } from './settings'
 import { wordRange, wordsMatchingPhrase } from './transcriptEdit'
@@ -229,6 +229,26 @@ export const MCP_TOOLS: ToolSpec[] = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'rebuild_intelligence',
+    description: 'Local heuristic: regroup scenes, mark retakes, rebuild suggestions. Keeps applied cuts.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'infer_scenes',
+    description: 'Group transcript words into scenes and mark retakes (offline heuristic).',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'collapse_retakes',
+    description: 'Cut superseded takes. Suggestions stay revertible.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'keep_take',
+    description: 'Keep one scene in a retake family and cut the others.',
+    inputSchema: { type: 'object', properties: { sceneId: { type: 'string' } }, required: ['sceneId'] }
+  },
+  {
     name: 'set_scenes',
     description: 'Replace editorial scenes.',
     inputSchema: { type: 'object', properties: { scenes: { type: 'array' } }, required: ['scenes'] }
@@ -241,7 +261,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'run_intelligence',
-    description: 'Ask the configured model to group scenes, find retakes, and propose cuts.',
+    description: 'Group scenes and retakes. Uses the configured LLM, or a local heuristic if none is set.',
     inputSchema: { type: 'object', properties: { intent: { type: 'string' } } }
   }
 ]
@@ -391,6 +411,14 @@ export async function runTool(
       )
     case 'rebuild_suggestions':
       return apply({ type: 'rebuildSuggestions' }, 'Rebuilt suggestions.')
+    case 'rebuild_intelligence':
+      return apply({ type: 'rebuildIntelligence' }, 'Rebuilt scenes and retakes.')
+    case 'infer_scenes':
+      return apply({ type: 'inferScenes' }, 'Inferred scenes and retakes.')
+    case 'collapse_retakes':
+      return apply({ type: 'collapseRetakes' }, 'Collapsed retakes.')
+    case 'keep_take':
+      return apply({ type: 'keepTake', sceneId: String(args.sceneId) }, 'Kept that take.')
     case 'set_scenes':
       return apply({ type: 'setScenes', scenes: (args.scenes as Project['scenes']) ?? [] }, 'Set scenes.')
     case 'edit_with_intent': {
@@ -400,33 +428,35 @@ export async function runTool(
         const next = local.commands.reduce((acc, command) => applyCommand(acc, command), project)
         return { project: next, message: local.note, data: local.commands }
       }
-      if (intel && endpointReady(intel)) {
-        const draft = await runIntelligence(project, intel, intent)
-        let next = applyCommand(project, {
-          type: 'mergeIntelligence',
-          scenes: draft.scenes,
-          suggestions: draft.suggestions
-        })
-        next = draft.commands.reduce((acc, command) => applyCommand(acc, command), next)
-        return {
-          project: next,
-          message: draft.notes || 'Model edited the reel.',
-          data: draft
-        }
+      const draft = await runSceneIntelligence(
+        project,
+        intel && endpointReady(intel) ? intel : undefined,
+        intent
+      )
+      let next = applyCommand(project, {
+        type: 'mergeIntelligence',
+        scenes: draft.scenes,
+        suggestions: draft.suggestions
+      })
+      next = draft.commands.reduce((acc, command) => applyCommand(acc, command), next)
+      return {
+        project: next,
+        message: draft.notes || local.note || 'Proposed scenes and cuts.',
+        data: draft
       }
-      return { project, message: local.note, data: local }
     }
     case 'run_intelligence': {
-      if (!intel || !endpointReady(intel)) {
-        return { project, message: 'No intelligence model configured. Set SPEECHEDIT_LLM_BASE_URL or the Inspector.' }
-      }
-      const draft = await runIntelligence(project, intel, args.intent ? String(args.intent) : undefined)
+      const draft = await runSceneIntelligence(
+        project,
+        intel && endpointReady(intel) ? intel : undefined,
+        args.intent ? String(args.intent) : undefined
+      )
       const next = applyCommand(project, {
         type: 'mergeIntelligence',
         scenes: draft.scenes,
         suggestions: draft.suggestions
       })
-      return { project: next, message: draft.notes || 'Model proposed scenes and cuts.', data: draft }
+      return { project: next, message: draft.notes || 'Proposed scenes and cuts.', data: draft }
     }
     default:
       return { project, message: `Unknown tool ${name}` }

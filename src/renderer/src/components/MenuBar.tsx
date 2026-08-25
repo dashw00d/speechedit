@@ -340,6 +340,9 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           >
             Find scenes / retakes
           </Item>
+          <Item onClick={() => dispatch({ type: 'inferScenes' })}>Local scene pass</Item>
+          <Item onClick={() => dispatch({ type: 'rebuildIntelligence' })}>Rebuild intelligence</Item>
+          <Item onClick={() => dispatch({ type: 'collapseRetakes' })}>Collapse retakes</Item>
           <Item onClick={() => dispatch({ type: 'rebuildSuggestions' })}>Rebuild suggestions</Item>
           <Item onClick={() => dispatch({ type: 'applySafeSuggestions' })}>Apply safe cuts</Item>
           <Item onClick={() => useEditor.getState().setReviewing(true)}>Review suggestions</Item>
