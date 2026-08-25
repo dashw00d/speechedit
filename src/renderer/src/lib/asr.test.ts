@@ -92,6 +92,27 @@ describe('ASR parse — word timestamps win', () => {
     expect(expanded[1].start).toBe(0.45)
   })
 
+  test('WhisperX speaker labels stay on word cues', () => {
+    const result = parseAsrPayload({
+      segments: [
+        {
+          start: 0,
+          end: 2,
+          text: 'Hello world',
+          speaker: 'SPEAKER_00',
+          words: [
+            { word: 'Hello', start: 0.2, end: 0.5, speaker: 'SPEAKER_00' },
+            { word: 'world', start: 0.6, end: 1.1, speaker: 'SPEAKER_01' }
+          ]
+        }
+      ]
+    })
+    expect(result?.cues.map((c) => [c.text, c.speaker])).toEqual([
+      ['Hello', 'SPEAKER_00'],
+      ['world', 'SPEAKER_01']
+    ])
+  })
+
   test('prefers top-level OpenAI/Groq words[] over segment phrases', () => {
     const result = parseAsrPayload(openaiVerbose, 'openai-compatible')
     expect(result?.wordLevel).toBe(true)

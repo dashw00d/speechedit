@@ -292,12 +292,13 @@ export const useEditor = create<EditorState>((set, get) => ({
   selectWords: (ids, additive) =>
     set((state) => ({
       selectedWordIds: additive ? Array.from(new Set([...state.selectedWordIds, ...ids])) : ids,
-      selectedClipId: null
+      selectedClipId: null,
+      selectedSuggestionId: null
     })),
   selectClip: (id) => {
     const clip = get().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)
     const tab = clip?.text ? 'caption' : id ? 'transform' : 'project'
-    set({ selectedClipId: id, selectedWordIds: [], inspectorTab: tab })
+    set({ selectedClipId: id, selectedWordIds: [], selectedSuggestionId: null, inspectorTab: tab })
   },
   selectSuggestion: (id) => set({ selectedSuggestionId: id }),
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
@@ -344,15 +345,10 @@ export const useEditor = create<EditorState>((set, get) => ({
       })
     )
   },
-  loadTranscript: (words) =>
-    set((state) => {
-      const project = applyCommand(
-        { ...state.project, transcript: { ...state.project.transcript, words } },
-        { type: 'rebuildSuggestions' }
-      )
-      persist(project, { dirty: true })
-      return { project, dirty: true, selectedWordIds: [] }
-    }),
+  loadTranscript: (words) => {
+    get().dispatch({ type: 'setTranscript', words })
+    set({ selectedWordIds: [] })
+  },
   markClean: (info) => {
     const documentPath = info?.path ?? get().documentPath
     const lastSavedAt = info?.savedAt ?? Date.now()

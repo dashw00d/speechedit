@@ -58,13 +58,6 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
       if (!words.length) throw new Error(`${whisperMissingMessage()} Or use speech islands.`)
       useEditor.getState().loadTranscript(words)
-      const labeled = Array.isArray(cues) ? cues.filter((c) => c.speaker) : []
-      if (labeled.length) {
-        useEditor.getState().dispatch({
-          type: 'applyDiarization',
-          assignments: labeled.map((c) => ({ start: c.start, end: c.end, speaker: c.speaker as string }))
-        })
-      }
       onToast(`Transcript · ${words.length} words`)
     } catch (err) {
       onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Transcribe failed.')
@@ -100,10 +93,9 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   return (
     <>
       <p className="help">
-        File → Open media uses this provider and lands Word[] on the project. Local OSS CLIs spawn
-        from PATH; Groq / OpenAI / Speaches use the same OpenAI-spec HTTP call. Missing ASR falls
-        back to speech islands. Intelligence is Off (local scene/retake heuristic) or an
-        OpenAI-compatible /v1/chat/completions JSON call. MCP agents use the same command bus.
+        File → Open media uses this provider and lands Word[] on the project. Default Whisper CLI
+        falls through to whisper.cpp in ~/.speechedit when that binary and ggml-tiny.en.bin exist.
+        Groq / OpenAI / Speaches use the same HTTP call. Missing ASR falls back to speech islands.
       </p>
       <Field label="Transcript">
         <select
@@ -124,12 +116,16 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         >
           {TRANSCRIPT_PRESETS.map((p) => {
             const status = pathStatus.find((s) => s.kind === p.kind)
-            const mark =
-              p.kind === 'whisper-cpp' || p.kind === 'mlx-whisper'
-                ? status?.available
-                  ? ''
-                  : ' — not on PATH'
-                : ''
+            const cli = p.kind !== 'off' && p.kind !== 'openai-compatible'
+            const mark = !status
+              ? ''
+              : status.available
+                ? p.kind === 'whisper-cpp'
+                  ? ' — ready'
+                  : ''
+                : cli
+                  ? ' — not installed'
+                  : ''
             return (
               <option key={p.id} value={p.id}>
                 {p.label}

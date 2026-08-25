@@ -14,10 +14,10 @@ import {
   tagAt,
   wordRange
 } from '../lib/transcriptEdit'
+import { transcriptChoices } from '../lib/contextActions'
 import { useEditor, usePlayback } from '../store'
-import type { TagKind } from '../types'
 
-export function Transcript() {
+export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
   const selected = useEditor((s) => s.selectedWordIds)
   const selectWords = useEditor((s) => s.selectWords)
@@ -34,24 +34,9 @@ export function Transcript() {
   const pendingDouble = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tool = useEditor((s) => s.tool)
   const guardKind = useEditor((s) => s.guardKind)
-  const setTool = useEditor((s) => s.setTool)
-  const setGuardKind = useEditor((s) => s.setGuardKind)
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const words = project.transcript.words
-  const range = wordRange(words, selected)
-
-  function tagKind(kind: TagKind) {
-    const span =
-      range ??
-      (project.markIn != null && project.markOut != null
-        ? {
-            start: programToSourceOf(project, Math.min(project.markIn, project.markOut)),
-            end: programToSourceOf(project, Math.max(project.markIn, project.markOut))
-          }
-        : null)
-    if (!span) return
-    dispatch({ type: 'addTag', start: span.start, end: span.end, kind })
-  }
+  const { summary, choices } = transcriptChoices(project, selected)
 
   return (
     <section
@@ -62,9 +47,11 @@ export function Transcript() {
         const file = e.dataTransfer.files[0]
         if (!file) return
         try {
-          loadTranscript(parseAnyTranscript(file.name, await file.text()))
+          const words = parseAnyTranscript(file.name, await file.text())
+          loadTranscript(words)
+          onToast?.(`Transcript · ${words.length} words`)
         } catch (err) {
-          console.error(err)
+          onToast?.(err instanceof Error ? err.message : 'Could not read that transcript.')
         }
       }}
     >
@@ -98,74 +85,24 @@ export function Transcript() {
           </button>
         </div>
       </div>
-      {words.length > 0 && (
-        <div className="script-tools">
-          <button className="chip" disabled={!selected.length} onClick={() => dispatch({ type: 'toggleWords', wordIds: selected })}>
-            Cut
-          </button>
-          <button
-            className="chip"
-            disabled={!selected[0] && !active}
-            onClick={() => {
-              const id = selected[0] ?? active?.id
-              if (id) dispatch({ type: 'cutSentence', wordId: id })
-            }}
-          >
-            Cut sentence
-          </button>
-          <button
-            className="chip"
-            disabled={!selected[0] && !active}
-            onClick={() => {
-              const id = selected[0] ?? active?.id
-              if (id) dispatch({ type: 'cutPreviousSentence', wordId: id })
-            }}
-          >
-            Cut false start
-          </button>
-          <button
-            className="chip"
-            disabled={!range}
-            onClick={() => range && dispatch({ type: 'tightenRange', start: range.start, end: range.end })}
-          >
-            Tighten
-          </button>
-          <button
-            className="chip"
-            disabled={!range}
-            onClick={() => range && dispatch({ type: 'restoreRange', start: range.start, end: range.end })}
-          >
-            Restore
-          </button>
-          <button className="chip" data-active={tool === 'guard'} onClick={() => setTool(tool === 'guard' ? 'select' : 'guard')}>
-            Paint {guardKind === 'demo' ? 'demo' : 'keep'}
-          </button>
-          <button className="chip" data-active={guardKind === 'keep'} onClick={() => setGuardKind('keep')}>
-            Keep
-          </button>
-          <button className="chip" data-active={guardKind === 'demo'} onClick={() => setGuardKind('demo')}>
-            Demo
-          </button>
-          <button className="chip" disabled={!range && (project.markIn == null || project.markOut == null)} onClick={() => tagKind('keep')}>
-            Tag keep
-          </button>
-          <button className="chip" disabled={!range && (project.markIn == null || project.markOut == null)} onClick={() => tagKind('demo')}>
-            This is a demo
-          </button>
-          {project.tags.map((tag) => (
-            <button
-              key={tag.id}
-              className="chip tag-chip"
-              data-kind={tag.kind}
-              onClick={() => {
-                seekSource(tag.start)
-                dispatch({ type: 'removeTag', tagId: tag.id })
-              }}
-              title="Click to remove"
-            >
-              {tag.kind} ×
-            </button>
-          ))}
+      {selected.length > 0 && (
+        <div className="context-helper">
+          <p className="context-copy">
+            {summary}
+            {choices[0] ? ` — ${choices[0].consequence}` : ''}
+          </p>
+          <div className="context-actions">
+            {choices.map((choice) => (
+              <button
+                key={choice.id}
+                className="chip"
+                title={choice.consequence}
+                onClick={() => dispatch(choice.command)}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
       <div

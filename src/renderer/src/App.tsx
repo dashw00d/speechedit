@@ -166,7 +166,7 @@ export function App() {
           </div>
         )}
         <main className="workspace">
-          <Transcript />
+          <Transcript onToast={setToast} />
           <Monitor />
           <Inspector onToast={setToast} />
         </main>

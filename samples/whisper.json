@@ -1,0 +1,17 @@
+{
+  "text": "Hello there um world",
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.1,
+      "end": 1.4,
+      "text": " Hello there um world",
+      "words": [
+        { "word": "Hello", "start": 0.1, "end": 0.32, "probability": 0.99 },
+        { "word": "there", "start": 0.36, "end": 0.55, "probability": 0.98 },
+        { "word": "um", "start": 0.62, "end": 0.78, "probability": 0.91 },
+        { "word": "world", "start": 0.9, "end": 1.35, "probability": 0.97 }
+      ]
+    }
+  ]
+}

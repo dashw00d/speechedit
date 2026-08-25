@@ -38,14 +38,14 @@ export function isJobBusy(err: unknown): boolean {
 }
 
 export function whisperMissingMessage(): string {
-  return 'Whisper is not on PATH. Install whisper-cli or whisper.cpp, or pick an OpenAI-compatible endpoint in Models.'
+  return 'No local Whisper. Put whisper-cli on PATH, drop Whisper JSON on the transcript, set an OpenAI-compatible URL in Models, or install whisper.cpp into ~/.speechedit/bin with ggml-tiny.en.bin in ~/.speechedit/models.'
 }
 
 export function isWhisperUnavailable(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
   return (
     err instanceof Error && err.name === 'WhisperUnavailable'
-  ) || /Whisper is not on PATH|whisper.*not (found|on PATH)|Set a transcription/i.test(msg)
+  ) || /No local Whisper|Need a ggml Whisper model|Whisper is not on PATH|whisper.*not (found|on PATH)|Set a transcription/i.test(msg)
 }
 
 export class WhisperUnavailable extends Error {

@@ -112,6 +112,14 @@ describe('MCP read/write tools', () => {
     expect(COMMAND_BUS).not.toContain('setTrackFlag')
     expect(MCP_TOOLS.some((t) => t.name === 'get_snapshot')).toBe(true)
     expect(MCP_TOOLS.some((t) => t.name === 'toggle_words')).toBe(true)
+    expect(COMMAND_BUS).toContain('setTranscript')
+    const landed = await runTool(demo, 'set_transcript', {
+      filename: 'whisper.json',
+      text: JSON.stringify({
+        segments: [{ start: 0, end: 1, text: 'Hi', words: [{ word: 'Hi', start: 0.1, end: 0.4 }] }]
+      })
+    })
+    expect(landed.project.transcript.words.some((w) => w.text === 'Hi')).toBe(true)
   })
 
   test('edit_with_intent uses runAgent so find-scenes infers instead of no-op', async () => {

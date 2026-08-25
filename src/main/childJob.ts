@@ -33,6 +33,7 @@ export interface RunChildOptions {
   allowFailure?: boolean
   missing?: string
   fail?: (code: number | null, stderr: string, stdout: string) => Error
+  env?: NodeJS.ProcessEnv
 }
 
 export function runChild(cmd: string, args: string[], opts: RunChildOptions = {}): Promise<string> {
@@ -43,7 +44,10 @@ export function runChild(cmd: string, args: string[], opts: RunChildOptions = {}
       reject(err)
       return
     }
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(cmd, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: opts.env ? { ...process.env, ...opts.env } : undefined
+    })
     opts.onSpawn?.(child)
     let stdout = ''
     let stderr = ''

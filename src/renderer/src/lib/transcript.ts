@@ -1,25 +1,58 @@
 import type { Word } from '../types'
+import { parseAsrPayload } from '../../../shared/asr'
+import { wordsFromAsr } from './asr'
 import { uid } from './time'
 
-export function parseTranscriptJson(raw: unknown): Word[] {
-  const data = raw as { words?: Array<Partial<Word> & { word?: string }> }
-  const list = Array.isArray(raw) ? raw : data.words
-  if (!Array.isArray(list)) throw new Error('Transcript JSON needs a words array.')
+function mapNativeWords(list: unknown[]): Word[] {
   return list
     .map((item) => {
-      const text = String(item.text ?? item.word ?? '')
-      const start = Number(item.start ?? 0)
-      const end = Number(item.end ?? start + 0.2)
+      if (!item || typeof item !== 'object') {
+        return { id: uid('w'), text: '', start: 0, end: 0, speaker: 'ryan', deleted: false }
+      }
+      const row = item as Partial<Word> & { word?: string }
+      const text = String(row.text ?? row.word ?? '').trim()
+      const start = Number(row.start ?? 0)
+      const end = Number(row.end ?? start + 0.2)
       return {
-        id: typeof item.id === 'string' ? item.id : uid('w'),
+        id: typeof row.id === 'string' ? row.id : uid('w'),
         text,
         start,
         end,
-        speaker: item.speaker ?? 'ryan',
-        deleted: Boolean(item.deleted)
+        speaker: row.speaker ?? 'ryan',
+        deleted: Boolean(row.deleted)
       }
     })
     .filter((w) => w.text)
+}
+
+function looksNativeWordRow(item: unknown): boolean {
+  if (!item || typeof item !== 'object') return false
+  const row = item as { id?: unknown; deleted?: unknown; word?: unknown; text?: unknown }
+  return typeof row.id === 'string' || typeof row.deleted === 'boolean' || (typeof row.text === 'string' && row.word == null)
+}
+
+/** SpeechEdit words[] stays native. Whisper / OpenAI / whisper.cpp go through parseAsrPayload. */
+function nativeWords(raw: unknown): Word[] | null {
+  if (Array.isArray(raw)) {
+    const mapped = mapNativeWords(raw)
+    return mapped.length ? mapped : null
+  }
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as { words?: unknown; segments?: unknown; transcription?: unknown }
+  if (Array.isArray(obj.segments) || Array.isArray(obj.transcription)) return null
+  if (!Array.isArray(obj.words) || !obj.words.length) return null
+  if (!obj.words.every(looksNativeWordRow)) return null
+  return mapNativeWords(obj.words)
+}
+
+export function parseTranscriptJson(raw: unknown): Word[] {
+  const native = nativeWords(raw)
+  if (native?.length) return native
+  const asr = parseAsrPayload(raw)
+  if (asr?.cues.length) return wordsFromAsr(asr)
+  throw new Error(
+    'Transcript JSON needs a SpeechEdit words array, Whisper segments, OpenAI words[], or whisper.cpp transcription.'
+  )
 }
 
 function parseTimestamp(value: string): number {
@@ -62,13 +95,26 @@ export function parseVtt(text: string): Word[] {
 }
 
 export function parseAnyTranscript(name: string, text: string): Word[] {
-  if (name.endsWith('.json')) return parseTranscriptJson(JSON.parse(text))
-  if (name.endsWith('.vtt')) return parseVtt(text)
-  if (name.endsWith('.srt')) return parseSrt(text)
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.json')) {
+    try {
+      return parseTranscriptJson(JSON.parse(text))
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error('That JSON is not valid. Drop Whisper JSON or a SpeechEdit words array.')
+      }
+      throw err
+    }
+  }
+  if (lower.endsWith('.vtt')) return parseVtt(text)
+  if (lower.endsWith('.srt')) return parseSrt(text)
   try {
     return parseTranscriptJson(JSON.parse(text))
-  } catch {
-    return parseSrt(text)
+  } catch (err) {
+    if (err instanceof Error && /Transcript JSON needs/.test(err.message)) throw err
+    const srt = parseSrt(text)
+    if (srt.length) return srt
+    throw err instanceof Error ? err : new Error('Could not read that transcript.')
   }
 }
 

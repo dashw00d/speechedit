@@ -239,6 +239,29 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   color: #5a4a32;
   background: rgba(255, 255, 255, 0.4);
 }
+.context-helper {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 0 18px 8px;
+}
+.context-copy {
+  margin: 0;
+  flex: 1 1 220px;
+  color: #6b5a44;
+  font-size: 12px;
+}
+.context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.context-helper .chip {
+  border-color: #c9b79a;
+  color: #5a4a32;
+  background: rgba(255, 255, 255, 0.4);
+}
 .tag-chip[data-kind='keep'],
 .word[data-tag='keep'] { box-shadow: inset 3px 0 0 var(--spk, transparent), inset 0 -2px 0 #3d7a52; }
 .tag-chip[data-kind='demo'],

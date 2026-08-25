@@ -83,6 +83,8 @@ export function commandToTool(command: Command): PlannedCall {
       return { name: 'set_marks', args: { markIn: command.markIn, markOut: command.markOut } }
     case 'rebuildSuggestions':
       return { name: 'rebuild_suggestions', args: {} }
+    case 'setTranscript':
+      return { name: 'set_transcript', args: { words: command.words } }
     case 'cutSentence':
       return { name: 'cut_sentence', args: { wordId: command.wordId } }
     case 'cutPreviousSentence':

@@ -305,6 +305,7 @@ export type Command =
   | { type: 'addSpeaker'; name?: string }
   | { type: 'renameSpeaker'; speakerId: string; name: string }
   | { type: 'rebuildSuggestions' }
+  | { type: 'setTranscript'; words: Word[] }
   | { type: 'cutSentence'; wordId: string }
   | { type: 'cutPreviousSentence'; wordId: string }
   | { type: 'tightenRange'; start: number; end: number }

@@ -522,4 +522,50 @@ describe('lavfi smoke', () => {
     expect(info.duration).toBeGreaterThan(1.1)
     expect(info.duration).toBeLessThan(2.05)
   }, 90000)
+
+  test('dropped Whisper JSON → setTranscript → filler cut → export', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for export smoke')
+
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=320x240:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 2 -pix_fmt yuv420p /tmp/se-src.mp4`.quiet()
+
+    const { exportProgram, probe } = await import('../../../main/ffmpeg.ts')
+    const { parseAnyTranscript } = await import('./transcript.ts')
+    const whisper = await Bun.file(new URL('../../../../samples/whisper.json', import.meta.url)).text()
+    let project = createEmptyProject('whisper-drop')
+    project = {
+      ...project,
+      sourceDuration: 2,
+      width: 320,
+      height: 240,
+      fps: 30,
+      assets: {
+        src: {
+          id: 'src',
+          path: '/tmp/se-src.mp4',
+          name: 'src.mp4',
+          kind: 'video',
+          duration: 2,
+          waveform: []
+        }
+      }
+    }
+    project = applyCommand(project, { type: 'setTranscript', words: parseAnyTranscript('whisper.json', whisper) })
+    expect(project.transcript.words.map((w) => w.text)).toEqual(['Hello', 'there', 'um', 'world'])
+    const filler = project.suggestions.find((s) => s.type === 'filler')
+    expect(filler).toBeTruthy()
+    project = applyCommand(project, { type: 'applySuggestion', suggestionId: filler!.id })
+    expect(project.transcript.words.find((w) => w.text === 'um')?.deleted).toBe(true)
+
+    const job = buildExportJob(project, '/tmp/se-whisper-drop.mp4')!
+    job.encoder = 'libx264'
+    job.normalize = false
+    await exportProgram(job)
+    const info = await probe('/tmp/se-whisper-drop.mp4')
+    expect(info.hasVideo).toBe(true)
+    expect(info.hasAudio).toBe(true)
+    expect(info.duration).toBeGreaterThan(1.4)
+    expect(info.duration).toBeLessThan(2.05)
+  }, 90000)
 })

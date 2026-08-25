@@ -7,6 +7,7 @@ import {
   type EditorSession
 } from './agentContext'
 import { applyCommand, programLength } from './commands'
+import { parseAnyTranscript, parseTranscriptJson } from './transcript'
 import { runSceneIntelligence } from './intelligence'
 import { endpointReady } from './providers'
 import { programToSourceOf, sourceToProgramOf } from './resolver'
@@ -33,6 +34,7 @@ export const COMMAND_BUS: Command['type'][] = [
   'setMarks',
   'addCaption',
   'rebuildSuggestions',
+  'setTranscript',
   'cutSentence',
   'cutPreviousSentence',
   'tightenRange',
@@ -455,6 +457,19 @@ export const MCP_TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: 'set_transcript',
+    description:
+      'Replace the transcript from SpeechEdit words[], Whisper/OpenAI JSON, SRT, or VTT. Same command bus as File → Open transcript.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filename: { type: 'string' },
+        text: { type: 'string', description: 'File body (JSON, SRT, or VTT)' },
+        words: { type: 'array', description: 'Already-parsed Word[] or Whisper words[]' }
+      }
+    }
+  },
+  {
     name: 'apply_diarization',
     description: 'Map provider speaker labels onto transcript speakers via the command bus.',
     inputSchema: {
@@ -726,6 +741,12 @@ export async function runTool(
         },
         'Imported captions.'
       )
+    case 'set_transcript': {
+      const words = Array.isArray(args.words)
+        ? parseTranscriptJson(args.words)
+        : parseAnyTranscript(String(args.filename ?? 'transcript.json'), String(args.text ?? ''))
+      return apply({ type: 'setTranscript', words }, `Transcript · ${words.length} words`)
+    }
     case 'apply_diarization':
       return apply(
         {

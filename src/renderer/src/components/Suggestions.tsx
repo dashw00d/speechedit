@@ -1,4 +1,5 @@
 import { blockedByLabel } from '../lib/analysis'
+import { PACE_PRESETS, paceFromMargin, suggestTask } from '../lib/contextActions'
 import { commandForScene, suggestionForScene, takeFamily } from '../lib/sceneAnalysis'
 import { sourceToProgramOf } from '../lib/resolver'
 import { formatClock } from '../lib/time'
@@ -23,19 +24,12 @@ export function Suggestions() {
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const dispatch = useEditor((s) => s.dispatch)
   const seekProgram = usePlayback((s) => s.seekProgram)
+  const playFromSource = usePlayback((s) => s.playFromSource)
+  const task = suggestTask(project)
+  const pace = paceFromMargin(project.cutMargin)
 
   const pending = project.suggestions.filter((s) => !s.applied)
   const applied = project.suggestions.filter((s) => s.applied)
-  const safe = pending.filter((s) => s.safe && !s.blockedBy && (s.action === 'cut' || s.action === 'normalize'))
-  const blocked = pending.filter((s) => s.blockedBy)
-  const counts = {
-    silence: pending.filter((s) => s.type === 'silence').length,
-    filler: pending.filter((s) => s.type === 'filler').length,
-    repeat: pending.filter((s) => s.type === 'repeat').length,
-    static: pending.filter((s) => s.type === 'static' || s.type === 'low-motion').length,
-    pace: pending.filter((s) => s.type === 'pace' || s.type === 'loud').length,
-    model: pending.filter((s) => s.type === 'model').length
-  }
 
   function park(s: EditSuggestion) {
     selectSuggestion(s.id)
@@ -46,44 +40,39 @@ export function Suggestions() {
     <>
       <footer className="suggest-bar">
         <span className="spark">✦</span>
-        <span className="suggest-copy">
-          {pending.length} automatic edits
-          {safe.length ? ` · ${safe.length} safe` : ''}
-          {blocked.length ? ` · ${blocked.length} protected` : ''}
-          {applied.length ? ` · ${applied.length} applied` : ''}
-          {project.scenes.length ? ` · ${project.scenes.length} scenes` : ''}
-        </span>
+        <span className="suggest-copy">{task.headline}</span>
         <div className="chips">
-          <span className="chip">
-            <strong>{counts.silence}</strong> silence
-          </span>
-          <span className="chip">
-            <strong>{counts.filler}</strong> fillers
-          </span>
-          <span className="chip">
-            <strong>{counts.repeat}</strong> retakes
-          </span>
-          {counts.model > 0 && (
-            <span className="chip">
-              <strong>{counts.model}</strong> model
-            </span>
-          )}
-          <span className="chip">
-            <strong>{counts.static}</strong> static
-          </span>
-          <span className="chip">
-            <strong>{counts.pace}</strong> pace
-          </span>
+          {PACE_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              className="chip"
+              data-active={pace === preset.id}
+              title={`Cut pad ${preset.margin}s`}
+              onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
+            >
+              {preset.label}
+            </button>
+          ))}
         </div>
+        {task.findRetakes && (
+          <button className="review-btn" onClick={() => dispatch({ type: 'inferScenes' })}>
+            Find retakes
+          </button>
+        )}
         <button className="review-btn" onClick={() => setReviewing(!reviewing)}>
-          {reviewing ? 'Hide review' : 'Review'}
+          {reviewing ? 'Hide review' : task.reviewLabel}
         </button>
+        {task.showWatch && (
+          <button className="review-btn" type="button" onClick={() => playFromSource(0)}>
+            Watch
+          </button>
+        )}
         <button
           className="safe-btn"
-          disabled={!safe.length}
+          disabled={!task.applyLabel}
           onClick={() => dispatch({ type: 'applySafeSuggestions' })}
         >
-          Apply safe edits
+          {task.applyLabel ?? 'Nothing safe'}
         </button>
       </footer>
       {reviewing && (

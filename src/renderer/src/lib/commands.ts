@@ -447,6 +447,19 @@ function eraseTag(project: Project, start: number, end: number, kind?: TagKind):
   return touch({ ...project, tags })
 }
 
+function rebuildSuggestionList(project: Project): Project {
+  const applied = project.suggestions.filter((s) => s.applied)
+  const fresh = buildSuggestions({
+    duration: project.sourceDuration,
+    silence: project.analysis.silence,
+    sceneHits: project.analysis.staticRegions,
+    loudnessWindows: project.analysis.loudness,
+    words: project.transcript.words,
+    margin: project.cutMargin
+  }).filter((s) => !applied.some((a) => overlap(a, s) > (s.end - s.start) * 0.6))
+  return touch({ ...project, suggestions: [...applied, ...fresh] })
+}
+
 function applyDiarization(
   project: Project,
   assignments?: { start: number; end: number; speaker: string }[]
@@ -946,19 +959,14 @@ export function applyCommand(project: Project, command: Command): Project {
           )
         }
       })
-    case 'rebuildSuggestions': {
-      const applied = current.suggestions.filter((s) => s.applied)
-      const fresh = buildSuggestions({
-        duration: current.sourceDuration,
-        silence: current.analysis.silence,
-        sceneHits: current.analysis.staticRegions,
-        loudnessWindows: current.analysis.loudness,
-        words: current.transcript.words,
-        margin: current.cutMargin
-      }).filter(
-        (s) => !applied.some((a) => overlap(a, s) > (s.end - s.start) * 0.6)
-      )
-      return touch({ ...current, suggestions: [...applied, ...fresh] })
+    case 'rebuildSuggestions':
+      return rebuildSuggestionList(current)
+    case 'setTranscript': {
+      const next = {
+        ...current,
+        transcript: { ...current.transcript, words: command.words }
+      }
+      return rebuildSuggestionList(applyDiarization(next))
     }
     case 'cutSentence': {
       const span = sentenceRange(current.transcript.words, command.wordId)

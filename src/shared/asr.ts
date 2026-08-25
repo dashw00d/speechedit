@@ -81,7 +81,7 @@ export const TRANSCRIPT_PROVIDERS: TranscriptProviderSpec[] = [
     label: 'whisper.cpp (if on PATH)',
     backend: 'cli',
     binaries: ['whisper-cli', 'whisper-cpp', 'whisper.cpp'],
-    hint: 'ggerganov/whisper.cpp. Optional — only used when a binary exists.',
+    hint: 'ggerganov/whisper.cpp. PATH or ~/.speechedit/bin/whisper-cli plus ggml-tiny.en.bin in ~/.speechedit/models.',
     baseUrl: '',
     model: ''
   },
@@ -171,12 +171,20 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-function cue(text: unknown, start: unknown, end: unknown): AsrCue | null {
+function speakerOf(value: unknown): string | undefined {
+  const label = typeof value === 'string' ? value.trim() : ''
+  return label || undefined
+}
+
+function cue(text: unknown, start: unknown, end: unknown, speaker?: unknown): AsrCue | null {
   const trimmed = String(text ?? '').trim()
   const t0 = num(start)
   const t1 = num(end)
   if (!trimmed || t0 == null || t1 == null) return null
-  return { text: trimmed, start: t0, end: Math.max(t1, t0) }
+  const who = speakerOf(speaker)
+  return who
+    ? { text: trimmed, start: t0, end: Math.max(t1, t0), speaker: who }
+    : { text: trimmed, start: t0, end: Math.max(t1, t0) }
 }
 
 function fromWordList(list: unknown): AsrCue[] {
@@ -184,8 +192,8 @@ function fromWordList(list: unknown): AsrCue[] {
   const out: AsrCue[] = []
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
-    const w = item as { word?: unknown; text?: unknown; start?: unknown; end?: unknown }
-    const next = cue(w.word ?? w.text, w.start, w.end)
+    const w = item as { word?: unknown; text?: unknown; start?: unknown; end?: unknown; speaker?: unknown }
+    const next = cue(w.word ?? w.text, w.start, w.end, w.speaker)
     if (next) out.push(next)
   }
   return out
@@ -225,8 +233,10 @@ function segmentWordLists(data: Record<string, unknown>): AsrCue[] {
   let anyWords = false
   for (const seg of segs) {
     if (!seg || typeof seg !== 'object') continue
-    const s = seg as { words?: unknown; tokens?: unknown }
-    const words = fromWordList(s.words)
+    const s = seg as { words?: unknown; tokens?: unknown; speaker?: unknown }
+    const words = fromWordList(s.words).map((w) =>
+      w.speaker || !speakerOf(s.speaker) ? w : { ...w, speaker: speakerOf(s.speaker) }
+    )
     if (words.length) {
       anyWords = true
       out.push(...words)
@@ -247,8 +257,8 @@ function segmentPhrases(data: Record<string, unknown>): AsrCue[] {
   const out: AsrCue[] = []
   for (const seg of segs) {
     if (!seg || typeof seg !== 'object') continue
-    const s = seg as { text?: unknown; start?: unknown; end?: unknown }
-    const next = cue(s.text, s.start, s.end)
+    const s = seg as { text?: unknown; start?: unknown; end?: unknown; speaker?: unknown }
+    const next = cue(s.text, s.start, s.end, s.speaker)
     if (next) out.push(next)
   }
   return out

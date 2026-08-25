@@ -1,26 +1,24 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { host } from '../host'
 import { primarySegments, programLength } from '../lib/commands'
+import { inspectorFocus, inspectorTabs, transcriptChoices } from '../lib/contextActions'
 import { currentDocumentTitle, relinkAssetInteractive } from '../lib/documentIo'
+import { cancelExport, cancelImport } from '../lib/mediaJobs'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { EncoderOption } from '../types'
 import { AgentPanel } from './AgentPanel'
 import { ModelsPanel } from './ModelsPanel'
 
-const TABS = [
-  ['transform', 'Transform'],
-  ['audio', 'Audio'],
-  ['caption', 'Caption'],
-  ['project', 'Project'],
-  ['agent', 'Agent']
-] as const
-
 export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
   const tab = useEditor((s) => s.inspectorTab)
   const setTab = useEditor((s) => s.setInspectorTab)
   const selectedClipId = useEditor((s) => s.selectedClipId)
+  const selectedWordIds = useEditor((s) => s.selectedWordIds)
+  const selectedSuggestionId = useEditor((s) => s.selectedSuggestionId)
+  const exporting = useEditor((s) => s.exporting)
+  const analyzing = useEditor((s) => s.analyzing)
   const dispatch = useEditor((s) => s.dispatch)
   const documentPath = useEditor((s) => s.documentPath)
   const missingAssets = useEditor((s) => s.missingAssets)
@@ -30,9 +28,30 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     { id: 'libx264', label: 'x264 (CPU)', hardware: false }
   ])
   const overlayClip = project.tracks.flatMap((t) => t.clips).find((c) => c.id === selectedClipId)
+  const ownerTrack = project.tracks.find((t) => t.clips.some((c) => c.id === selectedClipId))
   const segments = primarySegments(project)
   const clip = overlayClip ?? segments.find((c) => c.id === selectedClipId)
   const isPrimary = Boolean(clip && segments.some((s) => s.id === clip.id))
+  const clipKind =
+    ownerTrack?.type === 'caption' || (overlayClip && overlayClip.text)
+      ? 'caption'
+      : ownerTrack
+        ? ownerTrack.type === 'audio'
+          ? 'audio'
+          : 'picture'
+        : null
+  const focus = inspectorFocus({
+    exporting,
+    analyzing,
+    selectedWordIds,
+    selectedClipId,
+    selectedSuggestionId,
+    clipKind
+  })
+  const tabs = inspectorTabs(focus)
+  const pane = tab === 'agent' ? 'agent' : focus
+  const wordChoices = transcriptChoices(project, selectedWordIds)
+  const suggestion = project.suggestions.find((s) => s.id === selectedSuggestionId)
 
   useEffect(() => {
     void host.encoders().then((list) => {
@@ -44,15 +63,94 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     <aside className="panel inspector">
       <div className="panel-head">Inspector</div>
       <div className="tabs">
-        {TABS.map(([id, label]) => (
-          <button key={id} className="tab" data-on={tab === id} onClick={() => setTab(id)}>
-            {label}
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            className="tab"
+            data-on={pane === item.id}
+            onClick={() => {
+              if (item.id === 'agent') setTab('agent')
+              else if (item.id === 'caption') setTab('caption')
+              else if (item.id === 'clip') setTab('transform')
+              else setTab('project')
+            }}
+          >
+            {item.label}
           </button>
         ))}
       </div>
       <div className="fields">
-        {tab === 'agent' && <AgentPanel onToast={onToast ?? (() => undefined)} />}
-        {tab === 'project' && (
+        {pane === 'agent' && <AgentPanel onToast={onToast ?? (() => undefined)} />}
+        {pane === 'job' && (
+          <>
+            <p className="help">
+              {exporting ? 'Export is writing the program you see.' : `Analyzing · ${analyzing}`}
+            </p>
+            <button
+              className="chip"
+              type="button"
+              onClick={() => {
+                if (exporting) void cancelExport()
+                else void cancelImport()
+              }}
+            >
+              {exporting ? 'Cancel export' : 'Cancel import'}
+            </button>
+          </>
+        )}
+        {pane === 'words' && (
+          <>
+            <p className="help">{wordChoices.summary || 'Selected words.'}</p>
+            {wordChoices.choices.map((choice) => (
+              <button
+                key={choice.id}
+                className="chip"
+                title={choice.consequence}
+                onClick={() => dispatch(choice.command)}
+              >
+                {choice.label}
+              </button>
+            ))}
+            {wordChoices.choices[0] && <p className="help">{wordChoices.choices[0].consequence}</p>}
+            {project.transcript.speakers.map((speaker) => (
+              <button
+                key={speaker.id}
+                className="chip"
+                type="button"
+                onClick={() =>
+                  dispatch({ type: 'setSpeaker', wordIds: selectedWordIds, speakerId: speaker.id })
+                }
+              >
+                Speaker · {speaker.name}
+              </button>
+            ))}
+          </>
+        )}
+        {pane === 'suggestion' && suggestion && (
+          <>
+            <p className="help">{suggestion.label}</p>
+            <p className="help">
+              {formatClock(suggestion.start)}–{formatClock(suggestion.end)}
+              {suggestion.safe ? ' · safe' : ' · review'}
+            </p>
+            {suggestion.applied ? (
+              <button
+                className="chip"
+                onClick={() => dispatch({ type: 'revertSuggestion', suggestionId: suggestion.id })}
+              >
+                Put back
+              </button>
+            ) : (
+              <button
+                className="chip"
+                onClick={() => dispatch({ type: 'applySuggestion', suggestionId: suggestion.id })}
+              >
+                Apply
+              </button>
+            )}
+          </>
+        )}
+        {(pane === 'project' || pane === 'job') && (
           <>
             <Field label="Reel name">
               <input
@@ -134,7 +232,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           </>
         )}
 
-        {tab === 'transform' && clip && (
+        {pane === 'clip' && clip && (
           <>
             <Slider
               label="X"
@@ -243,10 +341,18 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </button>
               </>
             )}
+            <Slider
+              label="Clip volume"
+              value={clip.volume}
+              min={0}
+              max={2}
+              step={0.01}
+              onChange={(volume) => dispatch({ type: 'setVolume', clipId: clip.id, volume })}
+            />
           </>
         )}
 
-        {tab === 'audio' && (
+        {pane === 'project' && (
           <>
             <Slider
               label="Master"
@@ -325,20 +431,10 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 }
               />
             </label>
-            {clip && (
-              <Slider
-                label="Clip volume"
-                value={clip.volume}
-                min={0}
-                max={2}
-                step={0.01}
-                onChange={(volume) => dispatch({ type: 'setVolume', clipId: clip.id, volume })}
-              />
-            )}
           </>
         )}
 
-        {tab === 'caption' && (
+        {pane === 'caption' && (
           <>
             <button
               className="chip"
@@ -450,9 +546,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           </>
         )}
 
-        {!clip && tab !== 'project' && tab !== 'audio' && tab !== 'agent' && tab !== 'caption' && (
-          <p className="help">Select a picture segment or overlay on the tape.</p>
-        )}
+        {pane === 'clip' && !clip && <p className="help">Select a picture segment or overlay on the tape.</p>}
       </div>
     </aside>
   )

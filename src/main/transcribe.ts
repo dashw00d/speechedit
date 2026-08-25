@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process'
 import { readdir, readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   cliBinariesFor,
@@ -11,6 +11,13 @@ import {
   type TranscriptKind
 } from '../shared/asr'
 import { WhisperUnavailable, isJobCancelled, throwIfAborted } from '../shared/mediaJob'
+import {
+  defaultWhisperCppModel,
+  findCliBin,
+  resolveBin,
+  whisperCppReady,
+  whisperSpawnEnv
+} from './asrLocal'
 import { runChild, withTempDir } from './childJob'
 
 export interface ModelEndpointOpts {
@@ -30,6 +37,7 @@ export interface AsrPathStatus {
   binaries: string[]
   found: string[]
   available: boolean
+  model?: string
 }
 
 type ProgressFn = (info: TranscribeProgress) => void
@@ -38,19 +46,11 @@ function run(cmd: string, args: string[], signal?: AbortSignal): Promise<string>
   return runChild(cmd, args, {
     signal,
     kind: 'import',
+    env: whisperSpawnEnv(cmd),
     missing:
       cmd === 'ffmpeg' || cmd === 'ffprobe'
         ? 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
         : `${cmd} did not start. Install whisper-cli or whisper.cpp, or pick an OpenAI-compatible endpoint in Models.`
-  })
-}
-
-function hasBin(name: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const finder = process.platform === 'win32' ? 'where' : 'which'
-    const child = spawn(finder, [name], { stdio: ['ignore', 'pipe', 'pipe'] })
-    child.on('error', () => resolve(false))
-    child.on('close', (code) => resolve(code === 0))
   })
 }
 
@@ -61,9 +61,17 @@ export async function listAsrPath(): Promise<AsrPathStatus[]> {
     const binaries = cliBinariesFor(kind)
     const found: string[] = []
     for (const bin of binaries) {
-      if (await hasBin(bin)) found.push(bin)
+      const resolved = await resolveBin(bin)
+      if (resolved) found.push(resolved)
     }
-    out.push({ kind, binaries, found, available: found.length > 0 })
+    const model = kind === 'whisper-cpp' ? defaultWhisperCppModel() : undefined
+    out.push({
+      kind,
+      binaries,
+      found,
+      available: found.length > 0 && (kind !== 'whisper-cpp' || Boolean(model)),
+      model
+    })
   }
   return out
 }
@@ -143,19 +151,39 @@ async function transcribeMlx(
   })
 }
 
+function ggmlModelPath(model?: string): string | undefined {
+  if (model && (model.endsWith('.bin') || model.includes('/') || model.includes('\\')) && existsSync(model)) {
+    return model
+  }
+  return defaultWhisperCppModel()
+}
+
+async function extractWav(file: string, dir: string, signal?: AbortSignal): Promise<string> {
+  const wav = join(dir, 'audio.wav')
+  await run('ffmpeg', ['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav], signal)
+  return wav
+}
+
 async function transcribeWhisperCpp(
   bin: string,
   file: string,
   model?: string,
   signal?: AbortSignal
 ): Promise<AsrResult | null> {
+  const modelPath = ggmlModelPath(model)
+  if (!modelPath) {
+    throw new WhisperUnavailable(
+      'Need a ggml Whisper model. Put ggml-tiny.en.bin in ~/.speechedit/models or set the path in Models.'
+    )
+  }
   return withTempDir('speechedit-wcpp-', async (dir) => {
+    const wav = await extractWav(file, dir, signal)
     const prefix = join(dir, 'out')
-    const modelArgs =
-      model && (model.endsWith('.bin') || model.includes('/') || model.includes('\\')) ? ['-m', model] : []
+    const modelArgs = ['-m', modelPath]
     const attempts = [
-      ['-f', file, '-oj', '-ojf', '-of', prefix, '-ml', '1', ...modelArgs],
-      ['-f', file, '-oj', '-of', prefix, ...modelArgs]
+      ['-f', wav, '-oj', '-ojf', '-of', prefix, '-ml', '1', ...modelArgs],
+      ['-f', wav, '-oj', '-of', prefix, ...modelArgs],
+      ['-f', wav, '--output-json', '--output-file', prefix, ...modelArgs]
     ]
     for (const args of attempts) {
       try {
@@ -177,8 +205,9 @@ async function tryBins(
   runOne: (bin: string) => Promise<AsrResult | null>
 ): Promise<AsrResult | null> {
   for (const bin of bins) {
-    if (!(await hasBin(bin))) continue
-    const result = await runOne(bin)
+    const resolved = await resolveBin(bin)
+    if (!resolved) continue
+    const result = await runOne(resolved)
     if (result?.cues.length) return result
   }
   return null
@@ -190,14 +219,7 @@ async function transcribeCli(
   model?: string,
   signal?: AbortSignal
 ): Promise<AsrResult | null> {
-  const bins =
-    kind === 'whisper-cpp'
-      ? cliBinariesFor('whisper-cpp')
-      : kind === 'mlx-whisper'
-        ? cliBinariesFor('mlx-whisper')
-        : kind === 'faster-whisper'
-          ? cliBinariesFor('faster-whisper')
-          : cliBinariesFor('whisper-cli')
+  const bins = cliBinariesFor(kind)
   const runOne =
     kind === 'whisper-cpp'
       ? (bin: string) => transcribeWhisperCpp(bin, file, model, signal)
@@ -208,11 +230,7 @@ async function transcribeCli(
           : (bin: string) => transcribePythonStyle(bin, file, pythonModelArgs(model), 'whisper-cli', signal)
   const result = await tryBins(bins, runOne)
   if (result?.cues.length) return result
-  const found = []
-  for (const bin of bins) {
-    if (await hasBin(bin)) found.push(bin)
-  }
-  if (!found.length) throw new WhisperUnavailable()
+  if (!(await findCliBin(kind))) throw new WhisperUnavailable()
   return null
 }
 
@@ -302,14 +320,35 @@ export async function transcribeMedia(
       return flatten(result)
     }
 
-    note('run', 0.35)
-    const result = await transcribeCli(kind, file, opts?.model, signal)
-    if (result?.cues.length) {
-      note('parse', 0.9)
-      note('done', 1)
-      return flatten(result)
+    note('audio', 0.2)
+    const order: TranscriptKind[] =
+      kind === 'whisper-cli'
+        ? ['whisper-cli', 'whisper-cpp', 'faster-whisper', 'mlx-whisper']
+        : [kind]
+    let lastUnavailable: Error | null = null
+    for (const next of order) {
+      if (next === 'whisper-cpp' && !(await whisperCppReady()) && !(await findCliBin('whisper-cpp'))) {
+        lastUnavailable = new WhisperUnavailable()
+        continue
+      }
+      try {
+        note('run', 0.35)
+        const result = await transcribeCli(next, file, opts?.model, signal)
+        if (result?.cues.length) {
+          note('parse', 0.9)
+          note('done', 1)
+          return flatten(result)
+        }
+      } catch (err) {
+        if (isJobCancelled(err)) throw err
+        if (err instanceof WhisperUnavailable) {
+          lastUnavailable = err
+          continue
+        }
+        throw err
+      }
     }
-
+    if (lastUnavailable) throw lastUnavailable
     note('done', 1)
     return null
   } catch (err) {

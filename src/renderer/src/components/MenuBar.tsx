@@ -1,22 +1,7 @@
 import type { ReactNode } from 'react'
 import { host, isElectron } from '../host'
 import { importRecording } from '../lib/importMedia'
-import {
-  applyInterchange,
-  downloadText,
-  pickInterchange,
-  projectToAutoEditor,
-  projectToChapters,
-  projectToFcpxml,
-  projectToKdenlive,
-  projectToMlt,
-  projectToOtio,
-  projectToPremiere,
-  projectToSrt,
-  projectToTranscriptMd,
-  projectToTranscriptTxt,
-  projectToVtt
-} from '../lib/interchange'
+import { applyInterchange, pickInterchange } from '../lib/interchange'
 import { askEditor } from '../lib/askModel'
 import { programLength } from '../lib/commands'
 import { pickAudio, pickBroll } from '../lib/pickFile'
@@ -141,24 +126,13 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
     }
   }
 
-  async function exportInterchange(kind: string, body: string, filename: string) {
-    if (isElectron) {
-      const path = await host.chooseTextExport(filename)
-      if (!path) return
-      await host.writeText(path, body)
-      onToast(`Wrote ${kind.toUpperCase()}.`)
-      return
-    }
-    downloadText(filename, body)
-    onToast(`Downloaded ${filename}`)
-  }
-
   async function openTranscript() {
     try {
       const result = await host.openTranscript()
       if (!result) return
-      useEditor.getState().loadTranscript(parseAnyTranscript(result.name, result.text))
-      onToast('Transcript loaded.')
+      const words = parseAnyTranscript(result.name, result.text)
+      useEditor.getState().loadTranscript(words)
+      onToast(`Transcript · ${words.length} words`)
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Transcript import failed.')
     }
@@ -387,65 +361,6 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             onClick={exporting ? () => void cancelExport() : onExport}
           >
             {exporting ? 'Cancel export' : 'Program MP4…'}
-          </Item>
-          <Item onClick={() => void exportInterchange('srt', projectToSrt(project), `${project.name}.srt`)}>
-            Captions SRT
-          </Item>
-          <Item onClick={() => void exportInterchange('vtt', projectToVtt(project), `${project.name}.vtt`)}>
-            Captions VTT
-          </Item>
-          <Item
-            onClick={() =>
-              void exportInterchange('transcript', projectToTranscriptMd(project), `${project.name}.md`)
-            }
-          >
-            Transcript Markdown
-          </Item>
-          <Item
-            onClick={() =>
-              void exportInterchange('transcript', projectToTranscriptTxt(project), `${project.name}.txt`)
-            }
-          >
-            Transcript TXT
-          </Item>
-          <Item
-            onClick={() =>
-              void exportInterchange('chapters', projectToChapters(project), `${project.name}.chapters.json`)
-            }
-          >
-            Chapters JSON
-          </Item>
-          <Item onClick={() => void exportInterchange('otio', projectToOtio(project), `${project.name}.otio`)}>
-            OpenTimelineIO
-          </Item>
-          <Item
-            onClick={() => void exportInterchange('fcpxml', projectToFcpxml(project), `${project.name}.fcpxml`)}
-          >
-            FCPXML
-          </Item>
-          <Item
-            onClick={() => void exportInterchange('premiere', projectToPremiere(project), `${project.name}.xml`)}
-          >
-            Premiere XML
-          </Item>
-          <Item
-            onClick={() =>
-              void exportInterchange('auto-editor', projectToAutoEditor(project), `${project.name}.autoeditor.json`)
-            }
-          >
-            Auto-Editor JSON
-          </Item>
-          <Item
-            onClick={() => void exportInterchange('mlt', projectToMlt(project), `${project.name}.mlt`)}
-          >
-            Shotcut MLT
-          </Item>
-          <Item
-            onClick={() =>
-              void exportInterchange('kdenlive', projectToKdenlive(project), `${project.name}.kdenlive`)
-            }
-          >
-            Kdenlive
           </Item>
         </Menu>
         <Menu label="Auto Edit">
