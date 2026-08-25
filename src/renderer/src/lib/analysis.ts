@@ -106,11 +106,25 @@ const STOPWORDS = new Set([
   'very'
 ])
 
+function tokenKey(text: string): string {
+  return text.toLowerCase().replace(/[.,!?'"]/g, '')
+}
+
+function hesitationGap(words: Word[], i: number): boolean {
+  const prev = words[i - 1]
+  const next = words[i + 1]
+  const before = prev ? words[i].start - prev.end : 1
+  const after = next ? next.start - words[i].end : 1
+  return before >= 0.14 || after >= 0.18
+}
+
 export function detectFillers(words: Word[]): EditSuggestion[] {
   const out: EditSuggestion[] = []
   for (let i = 0; i < words.length; i++) {
     const w = words[i]
-    if (isFillerToken(w.text)) {
+    const key = tokenKey(w.text)
+    // Discourse "like" / "Like this" is not a cut. Only um/uh-class tokens.
+    if (isFillerToken(w.text) && (key === 'um' || key === 'uh' || key === 'uhm' || key === 'uhh' || hesitationGap(words, i))) {
       out.push({
         id: uid('sug'),
         type: 'filler',
@@ -123,10 +137,7 @@ export function detectFillers(words: Word[]): EditSuggestion[] {
       })
     }
     const next = words[i + 1]
-    if (
-      w.text.toLowerCase().replace(/[.,!?]/g, '') === 'you' &&
-      next?.text.toLowerCase().replace(/[.,!?]/g, '') === 'know'
-    ) {
+    if (key === 'you' && next && tokenKey(next.text) === 'know') {
       out.push({
         id: uid('sug'),
         type: 'filler',
@@ -326,11 +337,20 @@ export function suggestionsFromStatic(hits: Interval[], words: Word[] = []): Edi
     })
 }
 
-export function suggestionsFromPace(words: Word[], duration: number): EditSuggestion[] {
+export function talkingDuration(words: Word[], duration: number, silence: Interval[] = []): number {
+  const live = words.filter((w) => !w.deleted)
+  if (!live.length) return Math.max(0.5, duration)
+  const span = { start: live[0].start, end: live[live.length - 1].end }
+  const quiet = silence.reduce((sum, g) => sum + overlap(g, span), 0)
+  return Math.max(0.5, span.end - span.start - quiet)
+}
+
+export function suggestionsFromPace(words: Word[], duration: number, silence: Interval[] = []): EditSuggestion[] {
   const live = words.filter((w) => !w.deleted)
   if (live.length < 8 || duration < 8) return []
-  const wpm = (live.length / duration) * 60
-  if (wpm >= 130) return []
+  const talk = talkingDuration(words, duration, silence)
+  const wpm = (live.length / talk) * 60
+  if (wpm >= 105) return []
   return [
     {
       id: uid('sug'),
@@ -338,7 +358,7 @@ export function suggestionsFromPace(words: Word[], duration: number): EditSugges
       start: live[0].start,
       end: live[live.length - 1].end,
       action: 'review',
-      label: `Slow pace · ${Math.round(wpm)} wpm`,
+      label: `Slow pace · ${Math.round(wpm)} wpm talking`,
       safe: false,
       applied: false
     }
@@ -380,9 +400,13 @@ export function isProtectTag(tag: RangeTag): boolean {
   return tag.kind === 'keep' || tag.kind === 'demo'
 }
 
-export function cutMinusProtected(range: Interval, tags: RangeTag[]): Interval[] {
+export function protectIntervals(tags: RangeTag[]): Interval[] {
+  return tags.filter(isProtectTag)
+}
+
+export function cutMinusProtected(range: Interval, tags: Interval[]): Interval[] {
   let pieces: Interval[] = [{ start: range.start, end: range.end }]
-  for (const tag of tags.filter(isProtectTag)) {
+  for (const tag of tags) {
     pieces = pieces.flatMap((piece) => {
       if (overlap(piece, tag) === 0) return [piece]
       const out: Interval[] = []
@@ -395,9 +419,10 @@ export function cutMinusProtected(range: Interval, tags: RangeTag[]): Interval[]
 }
 
 export function annotateProtected(suggestions: EditSuggestion[], tags: RangeTag[]): EditSuggestion[] {
+  const guards = protectIntervals(tags)
   return suggestions.map((s) => {
     if (s.action === 'normalize' || s.applied) return { ...s, blockedBy: undefined }
-    const remain = cutMinusProtected(s, tags)
+    const remain = cutMinusProtected(s, guards)
     if (remain.length === 0) {
       return { ...s, safe: false, blockedBy: tags.find((t) => isProtectTag(t) && overlap(t, s) > 0)?.id }
     }
@@ -405,12 +430,27 @@ export function annotateProtected(suggestions: EditSuggestion[], tags: RangeTag[
   })
 }
 
-export function speechIslands(duration: number, silence: Interval[]): Interval[] {
-  return invertIntervals(mergeIntervals(silence), duration).filter((s) => s.end - s.start > 0.35)
+export function blockedByLabel(tags: RangeTag[], blockedBy?: string): string | undefined {
+  if (!blockedBy) return undefined
+  const tag = tags.find((t) => t.id === blockedBy)
+  if (!tag) return 'protected'
+  if (tag.label?.trim()) return tag.label
+  return tag.kind === 'demo' ? 'Silent demo' : 'Keep'
 }
 
-function tokenKey(text: string): string {
-  return text.toLowerCase().replace(/[.,!?'"]/g, '')
+export function appliedSuggestionAt(
+  suggestions: EditSuggestion[],
+  start: number,
+  end: number
+): EditSuggestion | undefined {
+  const span = { start, end }
+  return suggestions
+    .filter((s) => s.applied && s.action !== 'normalize' && overlap(s, span) > 0.02)
+    .sort((a, b) => overlap(b, span) - overlap(a, span))[0]
+}
+
+export function speechIslands(duration: number, silence: Interval[]): Interval[] {
+  return invertIntervals(mergeIntervals(silence), duration).filter((s) => s.end - s.start > 0.35)
 }
 
 function isContentToken(token: string): boolean {
@@ -486,7 +526,7 @@ export function buildSuggestions(input: AnalysisInput): EditSuggestion[] {
     ...detectRepeats(input.words),
     ...suggestionsFromStatic(input.sceneHits ?? [], input.words),
     ...suggestionsFromLoudness(input.loudnessWindows ?? [], input.duration),
-    ...suggestionsFromPace(input.words, input.duration)
+    ...suggestionsFromPace(input.words, input.duration, input.silence)
   ]
 }
 

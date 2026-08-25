@@ -8,7 +8,7 @@ import {
   type Project,
   type Word
 } from '../types'
-import { detectFillers, detectRepeats, suggestionsFromSilence } from './analysis'
+import { detectRepeats, suggestionsFromSilence } from './analysis'
 import { parseTranscriptJson } from './transcript'
 import { uid } from './time'
 
@@ -259,27 +259,7 @@ export function createDemoProject(): Project {
         safe: true,
         applied: false
       },
-      {
-        id: 'sug_fill_3',
-        type: 'filler',
-        start: 22.72,
-        end: 23.0,
-        action: 'cut',
-        label: 'Like',
-        safe: true,
-        applied: false
-      },
-      ...detectRepeats(words),
-      {
-        id: 'sug_static_1',
-        type: 'static',
-        start: 16.2,
-        end: 22.4,
-        action: 'speed',
-        label: 'Low motion while talking over desktop',
-        safe: false,
-        applied: false
-      }
+      ...detectRepeats(words)
     ],
     tracks: project.tracks.map((track) => {
       if (track.id === 'v3') {
@@ -330,4 +310,4 @@ export function createDemoProject(): Project {
   }
 }
 
-export { detectFillers, parseTranscriptJson, suggestionsFromSilence }
+export { parseTranscriptJson, suggestionsFromSilence }

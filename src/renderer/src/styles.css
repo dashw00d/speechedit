@@ -213,9 +213,15 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .word[data-tag='keep'] { box-shadow: inset 3px 0 0 var(--spk, transparent), inset 0 -2px 0 #3d7a52; }
 .tag-chip[data-kind='demo'],
 .word[data-tag='demo'] { box-shadow: inset 3px 0 0 var(--spk, transparent), inset 0 -2px 0 #b4532a; }
+.gap-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 4px;
+  vertical-align: middle;
+}
 .gap-chip {
   display: inline-block;
-  margin: 0 4px;
   padding: 0 6px;
   border: 1px dashed #b7a48a;
   background: transparent;
@@ -230,8 +236,15 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   border-style: solid;
   color: #b09d86;
 }
-.gap-chip[data-tag='demo'],
+.gap-chip[data-sug] {
+  cursor: alias;
+  border-color: var(--brass);
+}
 .gap-chip[data-tag='keep'] {
+  border-color: #3d7a52;
+  color: #2d5a3c;
+}
+.gap-chip[data-tag='demo'] {
   border-color: #b4532a;
   color: #8a3d1c;
 }
@@ -243,6 +256,16 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 }
 .gap-chip.put-back:hover {
   background: rgba(196, 69, 45, 0.12);
+}
+.gap-demo {
+  border: 1px solid #b4532a;
+  background: rgba(180, 83, 42, 0.12);
+  color: #8a3d1c;
+  padding: 0 5px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .scene-head {
   display: block;
@@ -473,7 +496,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 }
 .ruler-gutter { height: auto; min-height: 28px; flex-wrap: wrap; gap: 4px; padding: 4px 8px; }
 .track-label[data-kind='guard'] {
-  height: 28px;
+  height: 32px;
   gap: 4px;
   color: #c4a574;
 }
@@ -515,9 +538,29 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   border-bottom: 1px solid var(--hair);
 }
 .lane.guard-lane {
-  height: 28px;
-  background: #1b1711;
+  height: 32px;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      #1b1711,
+      #1b1711 12px,
+      #201b14 12px,
+      #201b14 24px
+    );
   cursor: crosshair;
+}
+.guard-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6d5c48;
+  pointer-events: none;
 }
 .guard-block {
   position: absolute;
@@ -554,6 +597,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .guard-block[data-erase='true'] { opacity: 0.35; filter: grayscale(1); }
 .tape[data-tool='guard'] { cursor: crosshair; }
 .word[data-paint='true'] { background: rgba(180, 83, 42, 0.28); }
+.script[data-guard='keep'] .word[data-paint='true'] { background: rgba(61, 122, 82, 0.32); }
 .script[data-tool='guard'] { cursor: crosshair; }
 .clip {
   position: absolute;
@@ -676,6 +720,14 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 }
 .sug-mark[data-safe='true'] { background: var(--safe); }
 .sug-mark[data-type='filler'] { background: var(--brass); }
+.sug-mark[data-applied='true'] {
+  background: var(--brass-hot);
+  top: 0;
+  height: 8px;
+  cursor: alias;
+  box-shadow: 0 0 0 1px #2a2418;
+}
+.sug-mark[data-blocked='true'] { opacity: 0.35; }
 .tag-mark {
   position: absolute;
   top: 8px;
@@ -732,7 +784,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   left: 14px;
   right: 14px;
   bottom: 56px;
-  max-height: 240px;
+  max-height: 320px;
   overflow: auto;
   background: #221e16;
   border: 1px solid var(--line);
@@ -752,6 +804,16 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 .drawer-row[data-blocked='true'] { opacity: 0.72; }
 .drawer-row[data-applied='true'] { background: rgba(125, 190, 106, 0.06); }
 .drawer-row.applied-head { color: var(--steel); font-size: 12px; }
+.drawer-group { border-bottom: 1px solid var(--line); }
+.drawer-head { background: #1b1812; font-size: 12px; color: var(--steel); }
+.blocked-by {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-style: italic;
+  color: #c4a48c;
+}
 .kind {
   font-family: var(--mono);
   font-size: 10px;

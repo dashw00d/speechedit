@@ -13,7 +13,7 @@ import {
   type TrackType,
   type Transform
 } from '../types'
-import { buildSuggestions, cutMinusProtected, suggestionsFromGaps } from './analysis'
+import { buildSuggestions, cutMinusProtected, protectIntervals, suggestionsFromGaps } from './analysis'
 import { coveringAppliedSuggestion, previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
@@ -292,7 +292,7 @@ function applySuggestion(project: Project, suggestionId: string): Project {
           : suggestion.type === 'model'
             ? 'model'
             : 'manual'
-  const pieces = cutMinusProtected(suggestion, project.tags ?? [])
+  const pieces = cutMinusProtected(suggestion, protectIntervals(project.tags ?? []))
   if (!pieces.length) return project
   const next = pieces.reduce(
     (acc, piece) => deleteSourceRange(acc, piece.start, piece.end, source),
@@ -352,7 +352,7 @@ function tightenRange(project: Project, start: number, end: number): Project {
     if (gapEnd - gapStart >= 0.25) gaps.push({ start: gapStart, end: gapEnd })
   }
   return gaps.reduce((acc, gap) => {
-    const pieces = cutMinusProtected(gap, acc.tags ?? [])
+    const pieces = cutMinusProtected(gap, protectIntervals(acc.tags ?? []))
     return pieces.reduce((next, piece) => deleteSourceRange(next, piece.start, piece.end, 'silence'), acc)
   }, project)
 }
@@ -378,10 +378,14 @@ function addTag(project: Project, start: number, end: number, kind: TagKind, lab
     kind,
     label: label?.trim() || mergeable[0]?.label || TAG_LABELS[kind]
   }
-  return touch({
+  const next = {
     ...project,
     tags: [...existing.filter((t) => !mergeable.some((m) => m.id === t.id)), tag]
-  })
+  }
+  if (kind === 'keep' || kind === 'demo') {
+    return restoreSourceRange(next, lo, hi)
+  }
+  return touch(next)
 }
 
 function eraseTag(project: Project, start: number, end: number, kind?: TagKind): Project {

@@ -184,7 +184,13 @@ function useHotkeys(setToast: (msg: string) => void) {
         const next = editor.tool === 'guard' ? 'select' : 'guard'
         editor.setTool(next)
         if (e.shiftKey) editor.setGuardKind('demo')
-        setToast(next === 'guard' ? 'Guard brush — drag the tape or words before Auto Edit.' : 'Select tool')
+        setToast(
+          next === 'guard'
+            ? e.shiftKey
+              ? 'Guard brush — silent demo. Drag the tape or words; already-cut air comes back.'
+              : 'Guard brush — drag the tape or words. Shift = silent demo.'
+            : 'Select tool'
+        )
         return
       }
       if ((e.key === '.' || e.key === '>') && !typing && !meta) {

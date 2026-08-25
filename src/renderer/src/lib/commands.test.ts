@@ -91,7 +91,7 @@ world
   })
 })
 
-import { withCutMargin } from './analysis'
+import { blockedByLabel, detectFillers, suggestionsFromStatic, withCutMargin } from './analysis'
 import {
   applyInterchange,
   projectToAutoEditor,
@@ -217,6 +217,48 @@ describe('production edit tools', () => {
     const back = applyCommand(cut, { type: 'revertSuggestion', suggestionId: retake!.id })
     expect(back.suggestions.find((s) => s.id === retake!.id)?.applied).toBe(false)
     expect(programLength(back)).toBeCloseTo(programLength(demo), 1)
+  })
+
+  test('revertSuggestionType puts back only that class', () => {
+    const cut = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    expect(cut.suggestions.some((s) => s.type === 'silence' && s.applied)).toBe(true)
+    expect(cut.suggestions.some((s) => s.type === 'filler' && s.applied)).toBe(true)
+    const back = applyCommand(cut, { type: 'revertSuggestionType', suggestionType: 'silence' })
+    expect(back.suggestions.filter((s) => s.type === 'silence').every((s) => !s.applied)).toBe(true)
+    expect(back.suggestions.filter((s) => s.type === 'filler' && s.applied).length).toBeGreaterThan(0)
+    expect(programLength(back)).toBeGreaterThan(programLength(cut))
+  })
+
+  test('painting a demo guard on applied silence puts that cut back', () => {
+    const cut = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const silence = cut.suggestions.find((s) => s.type === 'silence' && s.applied && s.start < 10)
+    expect(silence).toBeTruthy()
+    const guarded = applyCommand(cut, {
+      type: 'addTag',
+      start: silence!.start,
+      end: silence!.end,
+      kind: 'demo',
+      label: 'Silent product demo'
+    })
+    const repaired = guarded.suggestions.find((s) => s.id === silence!.id)
+    expect(repaired?.applied).toBe(false)
+    expect(repaired?.blockedBy).toBeTruthy()
+    expect(blockedByLabel(guarded.tags, repaired?.blockedBy)).toBe('Silent product demo')
+    expect(programLength(guarded)).toBeGreaterThan(programLength(cut))
+    const fillersStillCut = guarded.suggestions.filter((s) => s.type === 'filler' && s.applied)
+    expect(fillersStillCut.length).toBeGreaterThan(0)
+  })
+
+  test('detectFillers skips discourse like and static-while-talking is not a speed-up', () => {
+    const demo = createDemoProject()
+    const fillers = detectFillers(demo.transcript.words)
+    expect(fillers.some((s) => /like/i.test(s.label))).toBe(false)
+    expect(fillers.some((s) => s.label === 'um')).toBe(true)
+    expect(demo.suggestions.some((s) => /like/i.test(s.label) && s.type === 'filler')).toBe(false)
+    const talkingStatic = suggestionsFromStatic([{ start: 16.2, end: 22.4 }], demo.transcript.words)
+    expect(talkingStatic.filter((s) => s.action === 'speed')).toHaveLength(0)
+    const quietStatic = suggestionsFromStatic([{ start: 24, end: 28.5 }], demo.transcript.words)
+    expect(quietStatic.some((s) => s.action === 'speed')).toBe(true)
   })
 
   test('speakers assign and rebuild keeps applied cuts', () => {

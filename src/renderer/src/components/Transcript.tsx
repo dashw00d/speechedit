@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { appliedSuggestionAt } from '../lib/analysis'
 import { parseAnyTranscript, isFillerToken } from '../lib/transcript'
 import { currentWord } from '../lib/edl'
 import { programToSourceOf } from '../lib/resolver'
@@ -33,6 +34,8 @@ export function Transcript() {
   const tool = useEditor((s) => s.tool)
   const guardKind = useEditor((s) => s.guardKind)
   const setTool = useEditor((s) => s.setTool)
+  const setGuardKind = useEditor((s) => s.setGuardKind)
+  const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const words = project.transcript.words
   const range = wordRange(words, selected)
 
@@ -134,13 +137,19 @@ export function Transcript() {
             Restore
           </button>
           <button className="chip" data-active={tool === 'guard'} onClick={() => setTool(tool === 'guard' ? 'select' : 'guard')}>
-            Paint guard
+            Paint {guardKind === 'demo' ? 'demo' : 'keep'}
           </button>
-          <button className="chip" disabled={!range && (project.markIn == null || project.markOut == null)} onClick={() => tagKind('keep')}>
+          <button className="chip" data-active={guardKind === 'keep'} onClick={() => setGuardKind('keep')}>
             Keep
           </button>
-          <button className="chip" disabled={!range && (project.markIn == null || project.markOut == null)} onClick={() => tagKind('demo')}>
+          <button className="chip" data-active={guardKind === 'demo'} onClick={() => setGuardKind('demo')}>
             Demo
+          </button>
+          <button className="chip" disabled={!range && (project.markIn == null || project.markOut == null)} onClick={() => tagKind('keep')}>
+            Tag keep
+          </button>
+          <button className="chip" disabled={!range && (project.markIn == null || project.markOut == null)} onClick={() => tagKind('demo')}>
+            This is a demo
           </button>
           {project.tags.map((tag) => (
             <button
@@ -161,6 +170,7 @@ export function Transcript() {
       <div
         className="script"
         data-tool={tool}
+        data-guard={guardKind}
         onMouseUp={() => {
           if (!paintIds?.length) {
             setPaintIds(null)
@@ -198,8 +208,13 @@ export function Transcript() {
           const prev = words[i - 1]
           const gap = prev ? word.start - prev.end : 0
           const tag = tagAt(project.tags, word.start)
-          const gapCut = project.cuts.some(
-            (c) => prev && c.start <= prev.end + 0.05 && c.end >= word.start - 0.05
+          const gapSpan = prev ? { start: prev.end, end: word.start } : null
+          const ate = gapSpan ? appliedSuggestionAt(project.suggestions, gapSpan.start, gapSpan.end) : undefined
+          const gapCut = Boolean(
+            ate ||
+              project.cuts.some(
+                (c) => prev && c.start <= prev.end + 0.05 && c.end >= word.start - 0.05
+              )
           )
           const scene = (project.scenes ?? []).find((s) => word.start >= s.start && word.start < s.end)
           const sceneStart = scene && (!prev || prev.start < scene.start)
@@ -207,6 +222,7 @@ export function Transcript() {
           const prevApplied = prev?.deleted ? appliedForWord(project, prev) : undefined
           const putBackLead = Boolean(applied && applied.id !== prevApplied?.id)
           const gapSuggestion = prev ? coveringAppliedSuggestion(project, prev.end, word.start) : undefined
+          const gapTag = prev ? tagAt(project.tags, (prev.end + word.start) / 2) : undefined
           return (
             <span key={word.id}>
               {sceneStart && scene && (
@@ -215,41 +231,69 @@ export function Transcript() {
                   {scene.kind === 'retake' ? ' · retake' : ''}
                 </span>
               )}
-              {gap > 0.45 && prev && gapSuggestion && (
-                <button
-                  type="button"
-                  className="gap-chip put-back"
-                  data-cut={gapCut}
-                  data-sug={gapSuggestion.id}
-                  title={`${gapSuggestion.label} · put this auto-edit back`}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    dispatch({ type: 'revertSuggestion', suggestionId: gapSuggestion.id })
-                  }}
-                >
-                  {gap.toFixed(1)}s · Put back
-                </button>
-              )}
-              {gap > 0.45 && prev && !gapSuggestion && (
-                <button
-                  type="button"
-                  className="gap-chip"
-                  data-cut={gapCut}
-                  data-tag={tagAt(project.tags, (prev.end + word.start) / 2)?.kind ?? ''}
-                  title={gapCut ? 'Double-click to put this air back' : 'Double-click to cut this air'}
-                  onClick={() => seekSource(prev.end)}
-                  onDoubleClick={(e) => {
-                    e.preventDefault()
-                    dispatch(
-                      gapCut
-                        ? { type: 'revertAt', start: prev.end, end: word.start }
-                        : { type: 'deleteRange', start: prev.end, end: word.start, source: 'transcript' }
-                    )
-                  }}
-                >
-                  {gap.toFixed(1)}s
-                </button>
+              {gap > 0.45 && prev && (
+                <span className="gap-cluster">
+                  {gapSuggestion ? (
+                    <button
+                      type="button"
+                      className="gap-chip put-back"
+                      data-cut={gapCut}
+                      data-sug={gapSuggestion.id}
+                      title={`${gapSuggestion.label} · put this auto-edit back`}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        selectSuggestion(gapSuggestion.id)
+                        dispatch({ type: 'revertSuggestion', suggestionId: gapSuggestion.id })
+                      }}
+                    >
+                      {gap.toFixed(1)}s · Put back
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="gap-chip"
+                      data-cut={gapCut}
+                      data-tag={gapTag?.kind ?? ''}
+                      data-sug={ate?.type}
+                      title={
+                        gapCut
+                          ? 'Click to put this air back'
+                          : 'Click to park · Demo marks a silent walkthrough · double-click to cut'
+                      }
+                      onClick={() => {
+                        seekSource(prev.end)
+                        if (gapCut) dispatch({ type: 'revertAt', start: prev.end, end: word.start })
+                      }}
+                      onDoubleClick={(e) => {
+                        e.preventDefault()
+                        if (gapCut) return
+                        dispatch({ type: 'deleteRange', start: prev.end, end: word.start, source: 'transcript' })
+                      }}
+                    >
+                      {gap.toFixed(1)}s
+                    </button>
+                  )}
+                  {!gapTag && (
+                    <button
+                      type="button"
+                      className="gap-demo"
+                      title="This silence is a demo — keep it and put the cut back"
+                      onClick={() => {
+                        seekSource(prev.end)
+                        dispatch({
+                          type: 'addTag',
+                          start: prev.end,
+                          end: word.start,
+                          kind: 'demo',
+                          label: 'Silent product demo'
+                        })
+                      }}
+                    >
+                      demo
+                    </button>
+                  )}
+                </span>
               )}
               {gap > PARAGRAPH_GAP && <span className="para-gap" />}
               {putBackLead && applied && (
@@ -288,9 +332,16 @@ export function Transcript() {
                   data-sel={selected.includes(word.id)}
                   data-deleted={word.deleted}
                   data-filler={isFillerToken(word.text)}
-                  data-tag={tag?.kind ?? ''}
-                  data-sug={applied?.type ?? ''}
+                  data-tag={tag?.kind}
+                  data-sug={applied?.type}
                   data-paint={paintIds?.includes(word.id) ?? false}
+                  title={
+                    applied
+                      ? `${applied.label} · double-click puts this cut back`
+                      : tag
+                        ? `${tag.label}`
+                        : undefined
+                  }
                   style={{ ['--spk' as string]: project.transcript.speakers.find((s) => s.id === word.speaker)?.color ?? '#C4452D' }}
                   onMouseDown={(e) => {
                     if (editing) return
@@ -364,9 +415,9 @@ export function Transcript() {
         {words.length > 0 && (
           <p className="script-hint">
             Click a word to play from it. P plays I/O or the selection. C blades at the word.
-            Triple-click or A selects a paragraph (gap over 1.2s). M marks words, / loops I/O.
-            . cuts this sentence, , cuts the false start, T tightens gaps. Put back chips revert that auto-edit.
-            G paints a keep/demo guard. X cuts, U puts back. Drag speaker chips onto a selection.
+            Triple-click or A selects a paragraph. M marks words, / loops I/O. . cuts this sentence,
+            , cuts the false start, T tightens gaps. Put back chips revert that auto-edit. Demo on a
+            pause marks a silent walkthrough. G paints a keep/demo guard. X cuts, U puts back.
           </p>
         )}
       </div>
