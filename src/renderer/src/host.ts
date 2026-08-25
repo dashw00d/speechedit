@@ -44,7 +44,7 @@ export interface SpeechHost {
   }>
   encoders: () => Promise<{ id: string; label: string; hardware: boolean }[]>
   exportProgram: (job: unknown) => Promise<string>
-  onExportProgress: (fn: (ratio: number) => void) => () => void
+  onExportProgress: (fn: (info: { ratio: number; stage: string }) => void) => () => void
   onAnalyzeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
   onTranscribeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
 }

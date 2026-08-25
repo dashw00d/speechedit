@@ -43,8 +43,8 @@ const api = {
   analyze: (file: string) => ipcRenderer.invoke('media:analyze', file),
   encoders: () => ipcRenderer.invoke('media:encoders'),
   exportProgram: (job: unknown) => ipcRenderer.invoke('media:export', job) as Promise<string>,
-  onExportProgress: (fn: (ratio: number) => void) => {
-    const listener = (_e: unknown, ratio: number) => fn(ratio)
+  onExportProgress: (fn: (info: { ratio: number; stage: string }) => void) => {
+    const listener = (_e: unknown, info: { ratio: number; stage: string }) => fn(info)
     ipcRenderer.on('media:export-progress', listener)
     return () => ipcRenderer.removeListener('media:export-progress', listener)
   },

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { mediaUrl } from '../host'
 import { programLength } from '../lib/commands'
 import { currentWord } from '../lib/edl'
-import { audioBeds, duckGainAt } from '../lib/exportJob'
+import { audioBeds, programVolume, visibleGraphicClips } from '../lib/exportJob'
 import { cssTransform, fadeGain } from '../lib/keyframes'
 import { pictureAt, programToSourceOf, segmentAtProgram, segmentsAtProgram } from '../lib/resolver'
 import { formatTimecode } from '../lib/time'
@@ -26,29 +26,33 @@ export function Monitor() {
   const segment = segmentAtProgram(project, programTime)
   const stack = segmentsAtProgram(project, programTime)
   const outgoing = stack.length > 1 ? stack[0] : undefined
-  const volume =
-    (project.audioMaster.muted ? 0 : project.audioMaster.volume) *
-    (segment?.volume ?? 1) *
-    duckGainAt(project, programTime)
+  const { gain: volume, ducked, duckAmount } = programVolume(project, programTime)
 
   useEffect(() => {
     const video = videoRef.current
-    if (video) video.volume = Math.min(1, Math.max(0, volume))
-  }, [volume])
+    if (!video) return
+    video.muted = project.audioMaster.muted || volume <= 0.0001
+    video.volume = Math.min(1, Math.max(0, volume))
+  }, [volume, project.audioMaster.muted])
 
-  const caption = project.tracks
-    .filter((t) => t.type === 'caption' && !t.hidden)
-    .flatMap((t) => t.clips)
-    .find((c) => programTime >= c.start && programTime < c.start + c.duration)
-  const overlays = project.tracks
-    .filter((t) => t.type === 'overlay' && !t.hidden)
-    .flatMap((t) => t.clips)
-    .filter((c) => programTime >= c.start && programTime < c.start + c.duration)
+  const captions = visibleGraphicClips(project, programTime, 'caption')
+  const overlays = visibleGraphicClips(project, programTime, 'overlay')
   const pictureFade = segment
     ? fadeGain(programTime - segment.start, segment.duration, segment.fadeIn, segment.fadeOut)
     : 1
   const crop = picture.crop
   const angle = useMemo(() => 18 + sourceTime * 37, [sourceTime])
+
+  function onPlayClick() {
+    const willPlay = !playing
+    const video = videoRef.current
+    if (video && willPlay) {
+      video.muted = project.audioMaster.muted
+      video.volume = Math.min(1, Math.max(0, volume))
+      void video.play().catch(() => undefined)
+    }
+    toggle()
+  }
 
   return (
     <section className="panel monitor">
@@ -93,7 +97,10 @@ export function Monitor() {
                 clipPath: `inset(${(crop?.y ?? 0) * 100}% ${(1 - (crop?.x ?? 0) - (crop?.w ?? 1)) * 100}% ${(1 - (crop?.y ?? 0) - (crop?.h ?? 1)) * 100}% ${(crop?.x ?? 0) * 100}%)`
               }}
               onPlay={() => usePlayback.setState({ playing: true })}
-              onPause={() => usePlayback.setState({ playing: false })}
+              onPause={() => {
+                if (usePlayback.getState().playing) return
+                usePlayback.setState({ playing: false })
+              }}
             />
           </>
         ) : (
@@ -126,11 +133,11 @@ export function Monitor() {
             return media.kind === 'video' ? (
               <video
                 key={overlay.id}
+                data-overlay={overlay.id}
                 className="broll"
                 src={url}
                 muted
-                autoPlay
-                loop
+                playsInline
                 style={{
                   transform: cssTransform(overlay.transform),
                   opacity: overlay.transform.opacity * fade
@@ -163,22 +170,28 @@ export function Monitor() {
             </div>
           )
         })}
-        {caption?.text && (
-          <div
-            className="caption-burn"
-            style={{
-              fontSize: caption.style?.fontSize,
-              textAlign: caption.style?.align,
-              color: caption.style?.fill
-            }}
-          >
-            {caption.text}
-          </div>
+        {captions.map((caption) =>
+          caption.text ? (
+            <div
+              key={caption.id}
+              className="caption-burn"
+              style={{
+                fontSize: caption.style?.fontSize,
+                textAlign: caption.style?.align,
+                color: caption.style?.fill,
+                opacity:
+                  caption.transform.opacity *
+                  fadeGain(programTime - caption.start, caption.duration, caption.fadeIn, caption.fadeOut)
+              }}
+            >
+              {caption.text}
+            </div>
+          ) : null
         )}
         {word && <div className="now-word">{word.text}</div>}
       </div>
       <div className="transport">
-        <button className="play" onClick={toggle} aria-label={playing ? 'Pause' : 'Play'}>
+        <button className="play" onClick={onPlayClick} aria-label={playing ? 'Pause' : 'Play'}>
           {playing ? '❙❙' : '▶'}
         </button>
         <span className="timecode">
@@ -187,6 +200,11 @@ export function Monitor() {
         </span>
         <span>src {formatTimecode(sourceTime, project.fps)}</span>
         <span>vol {Math.round(volume * 100)}</span>
+        {ducked && (
+          <span className="duck-flag" title="Voice is ducked under B-roll">
+            duck −{Math.round(duckAmount * 100)}
+          </span>
+        )}
         <LoopButton />
         <MarkButtons />
         <div className="beds" hidden>

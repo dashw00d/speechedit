@@ -1,6 +1,7 @@
-import type { Project } from '../types'
+import type { Clip, Project } from '../types'
+import { fadeGain } from './keyframes'
 import { normalizeProject } from './normalize'
-import { programLengthOf, resolveSegments } from './resolver'
+import { programLengthOf, resolveSegments, segmentAtProgram } from './resolver'
 
 export interface ExportLayer {
   kind: 'caption' | 'overlay' | 'image' | 'blur'
@@ -15,6 +16,8 @@ export interface ExportLayer {
   path?: string
   fadeIn: number
   fadeOut: number
+  inPoint: number
+  loop: boolean
 }
 
 export interface ProgramExportJob {
@@ -91,6 +94,44 @@ export function duckGainAt(project: Project, programTime: number): number {
   return hit ? Math.max(0, 1 - duck) : 1
 }
 
+export function visibleGraphicClips(
+  project: Project,
+  programTime: number,
+  type: 'overlay' | 'caption'
+): Clip[] {
+  return project.tracks
+    .filter((t) => t.type === type && !t.hidden && !t.muted)
+    .flatMap((t) => t.clips)
+    .filter((c) => !c.muted && programTime >= c.start && programTime < c.start + c.duration)
+}
+
+export function bedGainAt(
+  project: Project,
+  bed: { start: number; duration: number; volume: number; fadeIn: number; fadeOut: number },
+  programTime: number
+): number {
+  const master = project.audioMaster.muted ? 0 : project.audioMaster.volume
+  const local = programTime - bed.start
+  return master * bed.volume * fadeGain(local, bed.duration, bed.fadeIn, bed.fadeOut)
+}
+
+export function programVolume(project: Project, programTime: number) {
+  const segment = segmentAtProgram(project, programTime)
+  const duck = duckGainAt(project, programTime)
+  const master = project.audioMaster.muted ? 0 : project.audioMaster.volume
+  const fade = fadeGain(
+    programTime,
+    programLengthOf(project),
+    project.audioMaster.fadeIn,
+    project.audioMaster.fadeOut
+  )
+  return {
+    gain: master * (segment?.volume ?? 1) * duck * fade,
+    ducked: duck < 0.999,
+    duckAmount: project.audioMaster.duck ?? 0
+  }
+}
+
 export function buildExportJob(project: Project, output: string): ProgramExportJob | null {
   const current = normalizeProject(project)
   const asset = Object.values(current.assets).find((a) => a.path)
@@ -128,31 +169,35 @@ export function buildExportJob(project: Project, output: string): ProgramExportJ
       overlapNext: s.overlapNext
     })),
     layers: current.tracks
-      .filter((t) => t.type === 'caption' || t.type === 'overlay')
+      .filter((t) => (t.type === 'caption' || t.type === 'overlay') && !t.hidden && !t.muted)
       .flatMap((t) =>
-        t.clips.map((c) => {
-          const asset = c.assetId ? current.assets[c.assetId] : undefined
-          const kind =
-            c.effect === 'blur'
-              ? ('blur' as const)
-              : asset?.kind === 'image' || asset?.kind === 'video'
-                ? ('image' as const)
-                : (t.type as 'caption' | 'overlay')
-          return {
-            kind,
-            start: c.start,
-            end: c.start + c.duration,
-            text: c.text ?? '',
-            fontSize: c.style?.fontSize ?? 42,
-            x: c.transform.x,
-            y: c.transform.y,
-            scale: c.transform.scale,
-            opacity: c.transform.opacity,
-            path: asset?.path,
-            fadeIn: c.fadeIn,
-            fadeOut: c.fadeOut
-          }
-        })
+        t.clips
+          .filter((c) => !c.muted)
+          .map((c) => {
+            const asset = c.assetId ? current.assets[c.assetId] : undefined
+            const kind =
+              c.effect === 'blur'
+                ? ('blur' as const)
+                : asset?.kind === 'image' || asset?.kind === 'video'
+                  ? ('image' as const)
+                  : (t.type as 'caption' | 'overlay')
+            return {
+              kind,
+              start: c.start,
+              end: c.start + c.duration,
+              text: c.text ?? '',
+              fontSize: c.style?.fontSize ?? 42,
+              x: c.transform.x,
+              y: c.transform.y,
+              scale: c.transform.scale,
+              opacity: c.transform.opacity,
+              path: asset?.path,
+              fadeIn: c.fadeIn,
+              fadeOut: c.fadeOut,
+              inPoint: c.inPoint,
+              loop: asset?.kind === 'image'
+            }
+          })
       )
   }
 }
