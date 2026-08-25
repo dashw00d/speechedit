@@ -4,6 +4,7 @@ import { host } from '../host'
 import { useEditor } from '../store'
 import { createEmptyProject } from './demo'
 import { hydrateAssetLooks } from './documentIo'
+import { openDocumentFromRaw, serializeDocument } from './projectDocument'
 
 function withCacheHome<T>(fn: () => Promise<T>): Promise<T> {
   const prev = process.env.SPEECHEDIT_HOME
@@ -87,6 +88,25 @@ describe('waveform and thumbnail disk cache', () => {
         JSON.stringify({ v: 1, kind: 'whisper-cpp', model: 'tiny', cues })
       )
       expect(await transcribeMedia('/tmp/se-asr.m4a', { kind: 'whisper-cpp', model: 'tiny' })).toEqual(cues)
+    })
+  }, 30000)
+
+  test('default whisper-cpp setting reuses a whisper-cli cache key', async () => {
+    await withCacheHome(async () => {
+      const ffmpeg = Bun.which('ffmpeg')
+      if (!ffmpeg) throw new Error('ffmpeg required for asr cache smoke')
+      await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=440:sample_rate=8000 -t 1 -c:a aac /tmp/se-asr-def.m4a`.quiet()
+      const { transcribeMedia } = await import('../../../main/transcribe.ts')
+      const { asrCachePath } = await import('../../../main/mediaCache.ts')
+      const cues = [{ text: 'default', start: 0.1, end: 0.5 }]
+      mkdirSync(asrCachePath('/tmp/se-asr-def.m4a', 'whisper-cli', 'whisper-1').replace(/[^/]+$/, ''), {
+        recursive: true
+      })
+      writeFileSync(
+        asrCachePath('/tmp/se-asr-def.m4a', 'whisper-cli', 'whisper-1'),
+        JSON.stringify({ v: 1, kind: 'whisper-cli', model: 'whisper-1', cues })
+      )
+      expect(await transcribeMedia('/tmp/se-asr-def.m4a', { kind: 'whisper-cpp', model: '' })).toEqual(cues)
     })
   }, 30000)
 
@@ -175,4 +195,47 @@ describe('waveform and thumbnail disk cache', () => {
       Object.assign(host, prev)
     }
   })
+
+  test('save drops file-backed peaks; open refills them from the disk cache', async () => {
+    await withCacheHome(async () => {
+      const ffmpeg = Bun.which('ffmpeg')
+      if (!ffmpeg) throw new Error('ffmpeg required for slim-waveform smoke')
+      await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=440:sample_rate=8000 -t 1 -c:a aac /tmp/se-slim-peaks.m4a`.quiet()
+      const { waveform } = await import('../../../main/ffmpeg.ts')
+      const peaks = await waveform('/tmp/se-slim-peaks.m4a')
+      expect(peaks.length).toBe(1800)
+      const project = {
+        ...createEmptyProject('slim'),
+        assets: {
+          src: {
+            id: 'src',
+            path: '/tmp/se-slim-peaks.m4a',
+            name: 'take.m4a',
+            kind: 'audio' as const,
+            duration: 1,
+            waveform: peaks
+          }
+        }
+      }
+      const doc = serializeDocument(project, '/tmp/talk.speechedit.json')
+      expect(doc.project.assets.src.waveform).toEqual([])
+      const prev = { waveform: host.waveform, thumbnails: host.thumbnails, mediaExists: host.mediaExists }
+      host.mediaExists = async (paths) => paths.map((path) => ({ path, exists: true }))
+      host.waveform = (file) => waveform(file)
+      host.thumbnails = async () => []
+      try {
+        const opened = openDocumentFromRaw(doc, '/tmp/talk.speechedit.json')
+        useEditor.getState().loadProject(opened.project, {
+          path: '/tmp/talk.speechedit.json',
+          clean: true
+        })
+        useEditor.getState().setMissingAssets([])
+        await hydrateAssetLooks()
+        expect(useEditor.getState().project.assets.src.waveform).toEqual(peaks)
+        expect(useEditor.getState().dirty).toBe(false)
+      } finally {
+        Object.assign(host, prev)
+      }
+    })
+  }, 30000)
 })

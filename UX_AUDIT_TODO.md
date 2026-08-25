@@ -38,22 +38,23 @@ Source: docs (`README.md`, `ux_helper.md`, `plan.md`, `feature_explosion.md`) vs
 
 ## P4 — Preview & batch
 
-- [ ] **Original / Edited preview** toggle or A/B loop before batch apply
+- [x] **Original / Edited preview** toggle or A/B loop before batch apply
 - [x] **Watch** label clarity (edited vs source)
 - [x] **Edits lane summary** when crowded (>10 blocks)
 
 ## P5 — Discoverability
 
-- [ ] **Cross-modal find** (suggestions/scenes)
-- [ ] **Compare takes** — loop A vs B from scene inspector
-- [ ] **Redaction affordance** on overlay selection
-- [ ] **Split at playhead** visible in UI
-- [ ] **Agent edit recipe** preview before apply
+- [x] **Cross-modal find** (suggestions/scenes)
+- [x] **Compare takes** — loop A vs B from scene inspector
+- [x] **Redaction affordance** on overlay selection
+- [x] **Split at playhead** visible in UI
+- [x] **Agent edit recipe** preview before apply
 
 ## P6 — Polish
 
 - [x] **Monitor states** (audio-only vs no video)
-- [ ] **Theme token migration** — remaining hardcoded colors → `theme.css`
+- [x] **Now-word optional** — hidden when captions show; toggle in Project Advanced
+- [x] **Theme token migration** — remaining hardcoded colors → `theme.css`
 
 ---
 
@@ -65,7 +66,9 @@ bun run typecheck
 bun test src/renderer/src/lib/contextActions.test.ts
 ```
 
-Browser: word/gap/scene select · suggest bar before/after safe apply · timeline zoom · click-off deselect · inspector helpers · right-click context menus · empty project cards.
+Browser: word/gap/scene select · suggest bar before/after safe apply · timeline zoom · click-off deselect · inspector helpers · right-click context menus · empty project cards · Original/With cuts preview · cross-modal find.
+
+**Last verified:** Aug 2026 — typecheck green, contextActions + transcriptFind tests pass, browser spot-check on studio demo.
 
 ---
 

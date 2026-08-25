@@ -42,6 +42,8 @@ export interface EditorState {
   selectedGap: { start: number; end: number } | null
   inspectorTab: 'transform' | 'audio' | 'caption' | 'project' | 'agent'
   reviewing: boolean
+  previewSafeCuts: boolean
+  showNowWord: boolean
   palette: boolean
   agentOpen: boolean
   dirty: boolean
@@ -66,6 +68,8 @@ export interface EditorState {
   clearSelection: () => void
   setInspectorTab: (tab: EditorState['inspectorTab']) => void
   setReviewing: (value: boolean) => void
+  setPreviewSafeCuts: (value: boolean) => void
+  setShowNowWord: (value: boolean) => void
   setPalette: (value: boolean) => void
   setAgentOpen: (value: boolean) => void
   setAnalyzing: (value: string | null) => void
@@ -97,6 +101,7 @@ export interface PersistMeta {
 const PROJECT_CACHE = 'speechedit:project'
 const RECOVERY_CACHE = 'speechedit:recovery'
 const SESSION_CACHE = 'speechedit:session'
+const UI_PREFS = 'speechedit:ui'
 const PERSIST_WAIT = 400
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -182,6 +187,26 @@ export function flushWorkspace() {
   void flushPending()
 }
 
+function bootShowNowWord(): boolean {
+  if (typeof localStorage === 'undefined') return true
+  try {
+    const raw = JSON.parse(localStorage.getItem(UI_PREFS) ?? '{}') as { showNowWord?: boolean }
+    return raw.showNowWord !== false
+  } catch {
+    return true
+  }
+}
+
+function writeShowNowWord(value: boolean) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const raw = JSON.parse(localStorage.getItem(UI_PREFS) ?? '{}') as Record<string, unknown>
+    localStorage.setItem(UI_PREFS, JSON.stringify({ ...raw, showNowWord: value }))
+  } catch {
+    /* ignore */
+  }
+}
+
 function bootProject(): Project {
   if (typeof localStorage === 'undefined') return createDemoProject()
   try {
@@ -210,7 +235,16 @@ function resetView(
   extra: PersistMeta & { persistNow?: boolean }
 ): Pick<
   EditorState,
-  'project' | 'past' | 'future' | 'selectedWordIds' | 'selectedClipId' | 'dirty' | 'documentPath' | 'lastSavedAt' | 'recoveryOffer'
+  | 'project'
+  | 'past'
+  | 'future'
+  | 'selectedWordIds'
+  | 'selectedClipId'
+  | 'dirty'
+  | 'documentPath'
+  | 'lastSavedAt'
+  | 'recoveryOffer'
+  | 'previewSafeCuts'
 > {
   persist(next, extra, extra.persistNow ?? true)
   return {
@@ -222,7 +256,8 @@ function resetView(
     dirty: extra.dirty,
     documentPath: extra.documentPath,
     lastSavedAt: extra.lastSavedAt,
-    recoveryOffer: null
+    recoveryOffer: null,
+    previewSafeCuts: false
   }
 }
 
@@ -239,6 +274,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   selectedGap: null,
   inspectorTab: 'project',
   reviewing: false,
+  previewSafeCuts: false,
+  showNowWord: bootShowNowWord(),
   palette: false,
   agentOpen: false,
   dirty: false,
@@ -270,7 +307,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       project: next,
       past: coalesce ? past : [...past, project].slice(-HISTORY_LIMIT),
       future: [],
-      dirty: true
+      dirty: true,
+      ...(command.type === 'applySafeSuggestions' ? { previewSafeCuts: false } : {})
     })
   },
   undo: () => {
@@ -364,6 +402,11 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
   setReviewing: (value) => set({ reviewing: value }),
+  setPreviewSafeCuts: (value) => set({ previewSafeCuts: value }),
+  setShowNowWord: (value) => {
+    writeShowNowWord(value)
+    set({ showNowWord: value })
+  },
   setPalette: (value) => set({ palette: value }),
   setAgentOpen: (value) => set({ agentOpen: value }),
   setAnalyzing: (value) => set({ analyzing: value }),

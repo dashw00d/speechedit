@@ -93,9 +93,9 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   return (
     <>
       <p className="help">
-        File → Open media uses this provider and lands Word[] on the project. Default Whisper CLI
-        falls through to whisper.cpp in ~/.speechedit when that binary and ggml-tiny.en.bin exist.
-        Groq / OpenAI / Speaches use the same HTTP call. Missing ASR falls back to speech islands.
+        File → Open media uses this provider and lands Word[] on the project. Default is local
+        whisper.cpp in ~/.speechedit; other CLIs on PATH are used if that is missing. Groq / OpenAI /
+        Speaches use the same HTTP call. Missing ASR falls back to speech islands.
       </p>
       <Field label="Transcript">
         <select
@@ -109,7 +109,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
                 ...settings.transcript,
                 kind: preset.kind,
                 baseUrl: preset.baseUrl,
-                model: preset.model || settings.transcript.model
+                model: preset.model
               }
             })
           }}

@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { cliBinariesFor, type TranscriptKind } from '../shared/asr'
+import { JobCancelled, isJobCancelled, throwIfAborted } from '../shared/mediaJob'
 
 const execFileAsync = promisify(execFile)
 
@@ -126,14 +127,38 @@ export async function whisperCppReady(): Promise<{ bin: string; model: string } 
   return { bin, model }
 }
 
-async function downloadTo(url: string, dest: string): Promise<void> {
-  const res = await fetch(url, { redirect: 'follow' })
+export function whisperInstallSkipped(): boolean {
+  return process.env.SPEECHEDIT_SKIP_WHISPER_INSTALL === '1'
+}
+
+async function downloadTo(url: string, dest: string, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'import')
+  const res = await fetch(url, { redirect: 'follow', signal })
   if (!res.ok) throw new Error(`Download failed ${res.status}: ${url}`)
+  throwIfAborted(signal, 'import')
   await mkdir(join(dest, '..'), { recursive: true })
   await writeFile(dest, Buffer.from(await res.arrayBuffer()))
 }
 
-export async function ensureLocalWhisper(opts?: { sample?: boolean }): Promise<{
+export async function maybeEnsureLocalWhisper(opts?: {
+  skip?: boolean
+  signal?: AbortSignal
+}): Promise<{ status: 'ready' | 'installed' | 'skipped' | 'failed'; bin?: string; model?: string }> {
+  const existing = await whisperCppReady()
+  if (existing) return { status: 'ready', ...existing }
+  if (opts?.skip || whisperInstallSkipped()) return { status: 'skipped' }
+  try {
+    const ready = await ensureLocalWhisper({ signal: opts?.signal })
+    return { status: 'installed', bin: ready.bin, model: ready.model }
+  } catch (err) {
+    if (isJobCancelled(err) || (err instanceof Error && err.name === 'AbortError')) {
+      throw err instanceof JobCancelled ? err : new JobCancelled('import')
+    }
+    return { status: 'failed' }
+  }
+}
+
+export async function ensureLocalWhisper(opts?: { sample?: boolean; signal?: AbortSignal }): Promise<{
   bin: string
   model: string
   sample?: string
@@ -141,10 +166,11 @@ export async function ensureLocalWhisper(opts?: { sample?: boolean }): Promise<{
   const existing = await whisperCppReady()
   const samplePath = join(asrHome(), 'samples', 'jfk.wav')
   if (existing) {
-    if (opts?.sample && !existsSync(samplePath)) await downloadTo(JFK_URL, samplePath)
+    if (opts?.sample && !existsSync(samplePath)) await downloadTo(JFK_URL, samplePath, opts.signal)
     return { ...existing, sample: opts?.sample ? samplePath : undefined }
   }
 
+  throwIfAborted(opts?.signal, 'import')
   const url = whisperCppReleaseUrl()
   if (!url) {
     throw new Error(
@@ -156,9 +182,9 @@ export async function ensureLocalWhisper(opts?: { sample?: boolean }): Promise<{
   await mkdir(join(asrHome(), 'models'), { recursive: true })
   await mkdir(join(asrHome(), 'opt'), { recursive: true })
   const archive = join(asrHome(), `whisper-${WHISPER_CPP_RELEASE}.tgz`)
-  if (!existsSync(archive)) await downloadTo(url, archive)
+  if (!existsSync(archive)) await downloadTo(url, archive, opts?.signal)
   const modelDest = join(asrHome(), 'models', MODEL_NAME)
-  if (!existsSync(modelDest)) await downloadTo(MODEL_URL, modelDest)
+  if (!existsSync(modelDest)) await downloadTo(MODEL_URL, modelDest, opts?.signal)
 
   const optBin = join(whisperCppOptDir(), 'whisper-cli')
   if (!existsSync(optBin) || !existsSync(join(whisperCppOptDir(), 'libwhisper.so.1'))) {
@@ -179,7 +205,8 @@ export async function ensureLocalWhisper(opts?: { sample?: boolean }): Promise<{
   )
   await chmod(wrapper, 0o755)
 
-  if (opts?.sample && !existsSync(samplePath)) await downloadTo(JFK_URL, samplePath)
+  throwIfAborted(opts?.signal, 'import')
+  if (opts?.sample && !existsSync(samplePath)) await downloadTo(JFK_URL, samplePath, opts.signal)
   const ready = await whisperCppReady()
   if (!ready) throw new Error('whisper.cpp installed but not visible to SpeechEdit.')
   return { ...ready, sample: opts?.sample ? samplePath : undefined }

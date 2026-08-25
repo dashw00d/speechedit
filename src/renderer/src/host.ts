@@ -41,7 +41,7 @@ export interface SpeechHost {
   loudness: (file: string) => Promise<{ start: number; end: number; lufs: number }[]>
   transcribe: (
     file: string,
-    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean }
+    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean; skipInstall?: boolean }
   ) => Promise<{ text: string; start: number; end: number; speaker?: string }[] | null>
   asrPath: () => Promise<
     { kind: string; binaries: string[]; found: string[]; available: boolean }[]

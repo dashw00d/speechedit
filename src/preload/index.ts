@@ -48,7 +48,7 @@ const api = {
   loudness: (file: string) => ipcRenderer.invoke('media:loudness', file),
   transcribe: (
     file: string,
-    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean }
+    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean; skipInstall?: boolean }
   ) =>
     ipcRenderer.invoke('media:transcribe', file, opts),
   asrPath: () => ipcRenderer.invoke('media:asrPath'),

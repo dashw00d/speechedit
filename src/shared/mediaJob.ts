@@ -38,7 +38,7 @@ export function isJobBusy(err: unknown): boolean {
 }
 
 export function whisperMissingMessage(): string {
-  return 'No local Whisper. Put whisper-cli on PATH, drop Whisper JSON on the transcript, set an OpenAI-compatible URL in Models, or install whisper.cpp into ~/.speechedit/bin with ggml-tiny.en.bin in ~/.speechedit/models.'
+  return 'No local Whisper. SpeechEdit looks for whisper.cpp in ~/.speechedit, then whisper / faster-whisper / mlx_whisper on PATH. Drop Whisper JSON on the transcript, or set an OpenAI-compatible URL in Models.'
 }
 
 export function isWhisperUnavailable(err: unknown): boolean {

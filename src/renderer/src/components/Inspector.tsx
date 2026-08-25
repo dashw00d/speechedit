@@ -48,6 +48,9 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const programTime = usePlayback((s) => s.programTime)
   const seekProgram = usePlayback((s) => s.seekProgram)
   const playFromSource = usePlayback((s) => s.playFromSource)
+  const playLoop = usePlayback((s) => s.playLoop)
+  const showNowWord = useEditor((s) => s.showNowWord)
+  const setShowNowWord = useEditor((s) => s.setShowNowWord)
 
   const [advanced, setAdvanced] = useState(false)
   const [encoders, setEncoders] = useState<EncoderOption[]>([
@@ -112,9 +115,12 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     const family = takeFamily(project.scenes ?? [], selectedSceneId)
     if (family.length < 2) return
     const idx = family.findIndex((s) => s.id === selectedSceneId)
-    const next = family[(idx + 1) % family.length]
-    selectScene(next.id)
-    playFromSource(next.start)
+    const a = family[idx]
+    const b = family[(idx + 1) % family.length]
+    const lo = Math.min(sourceToProgramOf(project, a.start), sourceToProgramOf(project, b.start))
+    const hi = Math.max(sourceToProgramOf(project, a.end), sourceToProgramOf(project, b.end))
+    selectScene(a.id)
+    playLoop(lo, hi)
   }
 
   useEffect(() => {
@@ -468,6 +474,16 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   />
                 )}
                 <ModelsPanel onToast={onToast ?? (() => undefined)} />
+                <HelperSection title="Monitor">
+                  <label className="field inline">
+                    <input
+                      type="checkbox"
+                      checked={showNowWord}
+                      onChange={(e) => setShowNowWord(e.target.checked)}
+                    />
+                    <span>Show current word under video</span>
+                  </label>
+                </HelperSection>
               </>
             )}
             </>
@@ -489,6 +505,30 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             <HelperActions
               dispatch={dispatch}
               actions={[
+                ...(clip.effect === 'blur'
+                  ? [
+                      {
+                        id: 'remove-redact',
+                        label: 'Remove redaction',
+                        consequence: 'Deletes this blur region from the timeline.',
+                        command: { type: 'removeClip', clipId: clip.id },
+                        primary: true
+                      } as InspectorAction
+                    ]
+                  : ownerTrack?.type === 'overlay' && !isPrimary
+                    ? [
+                        {
+                          id: 'add-redact',
+                          label: 'Blur/redact here',
+                          consequence: 'Adds a redaction overlay at the playhead.',
+                          command: {
+                            type: 'addRedaction',
+                            start: programToSourceOf(project, programTime),
+                            duration: 2
+                          }
+                        } as InspectorAction
+                      ]
+                    : []),
                 {
                   id: 'trim-in',
                   label: 'Trim to playhead (in)',

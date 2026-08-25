@@ -101,6 +101,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Set mark Out at playhead | Monitor O button; O key | ✅ | **Premiere** — O key (functional standard). |
 | Set both marks to selected words | M with word selection | ✅ | **Premiere** — mark clip (functional). |
 | Watch from beginning (suggest bar) | Suggest bar “Watch” | ✅ | **Descript** — preview full edit (functional). 🔶 label clarity planned (UX audit). |
+| Drive playhead from picture clock | Automatic while primary video is ready | ✅ | **Premiere** — program time tracks the viewer, not wall-clock (functional). Audio-only / unready picture still uses rAF. |
 
 ---
 

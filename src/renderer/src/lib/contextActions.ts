@@ -32,6 +32,7 @@ export interface SuggestTask {
   collapseRetakes: boolean
   showWatch: boolean
   showPace: boolean
+  showPreviewToggle: boolean
 }
 
 export function formatSpan(seconds: number): string {
@@ -204,7 +205,8 @@ export function suggestTask(project: Project): SuggestTask {
       findRetakes: false,
       collapseRetakes: false,
       showWatch: false,
-      showPace: false
+      showPace: false,
+      showPreviewToggle: false
     }
   }
   if (!applied.length && safe.length) {
@@ -217,7 +219,8 @@ export function suggestTask(project: Project): SuggestTask {
       findRetakes,
       collapseRetakes,
       showWatch: false,
-      showPace: true
+      showPace: true,
+      showPreviewToggle: true
     }
   }
   if (applied.length && review.length) {
@@ -230,7 +233,8 @@ export function suggestTask(project: Project): SuggestTask {
       findRetakes: false,
       collapseRetakes,
       showWatch: true,
-      showPace: false
+      showPace: false,
+      showPreviewToggle: false
     }
   }
   if (applied.length && !pending.length) {
@@ -243,7 +247,8 @@ export function suggestTask(project: Project): SuggestTask {
       findRetakes: false,
       collapseRetakes: false,
       showWatch: true,
-      showPace: false
+      showPace: false,
+      showPreviewToggle: false
     }
   }
   return {
@@ -257,7 +262,8 @@ export function suggestTask(project: Project): SuggestTask {
     findRetakes,
     collapseRetakes,
     showWatch: applied.length > 0,
-    showPace: safe.length > 0 && applied.length === 0
+    showPace: safe.length > 0 && applied.length === 0,
+    showPreviewToggle: safe.length > 0 && applied.length === 0
   }
 }
 
@@ -616,8 +622,8 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
     if (family.length > 1) {
       actions.push({
         id: 'compare',
-        label: 'Compare takes',
-        consequence: 'Jump to the next attempt of this line.',
+        label: 'Loop takes A ↔ B',
+        consequence: 'Loops playback across this take and the next attempt.',
         navigate: 'compare-takes'
       })
     }

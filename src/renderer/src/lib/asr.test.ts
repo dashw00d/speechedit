@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  DEFAULT_TRANSCRIPT_KIND,
   coerceTranscriptKind,
   expandAsrCues,
+  localTranscriptOrder,
+  shouldInstallLocalWhisper,
   looksWordLevel,
   parseAsrPayload,
   presetIdFor,
@@ -67,9 +70,23 @@ describe('ASR catalog', () => {
 
   test('coerces unknown kinds and matches presets', () => {
     expect(coerceTranscriptKind('faster-whisper')).toBe('faster-whisper')
-    expect(coerceTranscriptKind('nope')).toBe('whisper-cli')
+    expect(coerceTranscriptKind('nope')).toBe(DEFAULT_TRANSCRIPT_KIND)
+    expect(coerceTranscriptKind(undefined)).toBe('whisper-cpp')
     expect(presetIdFor('openai-compatible', 'https://api.groq.com/openai/v1')).toBe('groq')
     expect(presetIdFor('whisper-cli', '')).toBe('whisper-cli')
+    expect(presetIdFor('whisper-cpp', '')).toBe('whisper-cpp')
+    expect(localTranscriptOrder('whisper-cpp')[0]).toBe('whisper-cpp')
+    expect(localTranscriptOrder('whisper-cli')).toEqual([
+      'whisper-cli',
+      'whisper-cpp',
+      'faster-whisper',
+      'mlx-whisper'
+    ])
+    expect(localTranscriptOrder('off')).toEqual(['off'])
+    expect(shouldInstallLocalWhisper('whisper-cpp')).toBe(true)
+    expect(shouldInstallLocalWhisper('whisper-cli')).toBe(true)
+    expect(shouldInstallLocalWhisper('off')).toBe(false)
+    expect(shouldInstallLocalWhisper('openai-compatible')).toBe(false)
     expect(transcriptionsUrl('http://127.0.0.1:8000/v1/')).toBe(
       'http://127.0.0.1:8000/v1/audio/transcriptions'
     )

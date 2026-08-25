@@ -6,6 +6,7 @@ import { programLength } from '../lib/commands'
 import { currentWord } from '../lib/edl'
 import { projectToExportJob } from '../lib/exportJob'
 import { cssTransform } from '../lib/keyframes'
+import { projectForPlayback } from '../lib/playbackProject'
 import { sampleProgram } from '../lib/programLook'
 import { pictureAt } from '../lib/resolver'
 import { formatTimecode } from '../lib/time'
@@ -17,21 +18,27 @@ export function Monitor() {
   const underRef = useRef<HTMLVideoElement>(null)
   useEngine(videoRef, underRef)
   const project = useEditor((s) => s.project)
+  const previewSafeCuts = useEditor((s) => s.previewSafeCuts)
+  const showNowWord = useEditor((s) => s.showNowWord)
+  const playbackProject = useMemo(
+    () => projectForPlayback(project, previewSafeCuts),
+    [project, previewSafeCuts]
+  )
   const programTime = usePlayback((s) => s.programTime)
   const playing = usePlayback((s) => s.playing)
   const toggle = usePlayback((s) => s.toggle)
-  const job = useMemo(() => projectToExportJob(project), [project])
+  const job = useMemo(() => projectToExportJob(playbackProject), [playbackProject])
   const look = useMemo(() => sampleProgram(job, programTime), [job, programTime])
-  const duration = job.duration && job.duration > 0 ? job.duration : programLength(project)
+  const duration = job.duration && job.duration > 0 ? job.duration : programLength(playbackProject)
   const sourceTime = look.sourceTime
-  const word = currentWord(project.transcript.words, sourceTime)
+  const word = currentWord(playbackProject.transcript.words, sourceTime)
   const asset = Object.values(project.assets)[0]
   const [proxyFailed, setProxyFailed] = useState(false)
   useEffect(() => {
     setProxyFailed(false)
   }, [asset?.id, asset?.path, asset?.proxyPath])
   const src = asset?.path ? mediaUrl(playbackPath(asset, { proxyExists: !proxyFailed })) : ''
-  const picture = pictureAt(project, programTime)
+  const picture = pictureAt(playbackProject, programTime)
   const { gain: volume, ducked, duckAmount, incomingGain } = look.voice
   const captions = look.layers.filter((l) => l.layer.kind === 'caption')
   const overlays = look.layers.filter((l) => l.layer.kind !== 'caption')
@@ -210,7 +217,7 @@ export function Monitor() {
           ) : null
         )}
         </div>
-        {word && <div className="now-word">{word.text}</div>}
+        {showNowWord && word && captions.length === 0 && <div className="now-word">{word.text}</div>}
       </div>
       <div className="transport">
         <button className="play" onClick={onPlayClick} aria-label={playing ? 'Pause' : 'Play'}>

@@ -4,7 +4,6 @@ import { parseAnyTranscript, isFillerToken } from '../lib/transcript'
 import { currentWord } from '../lib/edl'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
-  allWordsMatchingPhrase,
   appliedForWord,
   coveringAppliedSuggestion,
   extendSelection,
@@ -18,6 +17,7 @@ import {
   wordRange
 } from '../lib/transcriptEdit'
 import { transcriptChoices } from '../lib/contextActions'
+import { findInTranscript } from '../lib/transcriptFind'
 import { speakerColor } from '../lib/theme'
 import { useEditor, usePlayback } from '../store'
 import { StartGuide } from './StartGuide'
@@ -58,7 +58,9 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const tool = useEditor((s) => s.tool)
   const guardKind = useEditor((s) => s.guardKind)
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
+  const clearSelection = useEditor((s) => s.clearSelection)
   const selectGap = useEditor((s) => s.selectGap)
+  const seekProgram = usePlayback((s) => s.seekProgram)
   const words = project.transcript.words
   const { choices } = transcriptChoices(project, selected)
   const selectedSet = new Set(selected)
@@ -105,28 +107,32 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
       setFindNote(null)
       return
     }
-    const ids = allWordsMatchingPhrase(words, trimmed)
-    if (!ids.length) {
-      setFindNote(`No “${trimmed}” in transcript`)
+    const hit = findInTranscript(project, words, trimmed)
+    if (!hit) {
+      setFindNote(`No “${trimmed}” in transcript, scenes, or edits`)
       onToast?.(`No matches for “${trimmed}”.`)
       return
     }
-    const tokens = trimmed.split(/\s+/).filter(Boolean)
-    const matchGroups =
-      tokens.length > 1
-        ? (() => {
-            const keys = words.map((w) => w.text.toLowerCase().replace(/[.,!?]/g, ''))
-            let count = 0
-            for (let i = 0; i <= keys.length - tokens.length; i++) {
-              if (tokens.every((token, k) => keys[i + k] === token.toLowerCase().replace(/[.,!?]/g, ''))) count++
-            }
-            return count
-          })()
-        : ids.length
-    applySelection(ids, { anchor: ids[0] })
-    setFindNote(`${matchGroups} match${matchGroups === 1 ? '' : 'es'} · ${ids.length} word${ids.length === 1 ? '' : 's'}`)
-    const first = wordRefs.current.get(ids[0])
-    first?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    if (hit.kind === 'words') {
+      applySelection(hit.ids, { anchor: hit.ids[0] })
+      setFindNote(
+        `${hit.matchGroups} match${hit.matchGroups === 1 ? '' : 'es'} · ${hit.ids.length} word${hit.ids.length === 1 ? '' : 's'}`
+      )
+      const first = wordRefs.current.get(hit.ids[0])
+      first?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      return
+    }
+    if (hit.kind === 'scene') {
+      selectScene(hit.scene.id)
+      clearSelection()
+      seekSource(hit.scene.start)
+      setFindNote(`Scene · ${hit.scene.title}`)
+      return
+    }
+    selectSuggestion(hit.suggestion.id)
+    clearSelection()
+    seekProgram(sourceToProgramOf(project, hit.suggestion.start))
+    setFindNote(`Edit · ${hit.suggestion.label}`)
   }
 
   useEffect(() => {
@@ -210,7 +216,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             type="search"
             className="transcript-find"
             value={findQuery}
-            placeholder="Find phrase in transcript…"
+            placeholder="Find phrase, scene, or edit…"
             onChange={(e) => {
               setFindQuery(e.target.value)
               if (!e.target.value.trim()) setFindNote(null)

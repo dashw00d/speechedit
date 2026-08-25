@@ -72,6 +72,11 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             setAnalyzing('transcript')
             return
           }
+          if (stage === 'transcript:install') {
+            setAnalyzing('whisper')
+            onToast('Installing local Whisper… Cancel import to skip.')
+            return
+          }
           setAnalyzing(stage)
           onToast(`Analyzing · ${stage}`)
         }

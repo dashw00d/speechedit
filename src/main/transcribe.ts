@@ -4,7 +4,9 @@ import { basename, join } from 'node:path'
 import {
   cliBinariesFor,
   coerceTranscriptKind,
+  localTranscriptOrder,
   parseAsrPayload,
+  shouldInstallLocalWhisper,
   transcriptionsUrl,
   type AsrCue,
   type AsrResult,
@@ -14,6 +16,7 @@ import { WhisperUnavailable, isJobCancelled, throwIfAborted } from '../shared/me
 import {
   defaultWhisperCppModel,
   findCliBin,
+  maybeEnsureLocalWhisper,
   resolveBin,
   whisperCppReady,
   whisperSpawnEnv
@@ -27,10 +30,11 @@ export interface ModelEndpointOpts {
   model?: string
   apiKey?: string
   force?: boolean
+  skipInstall?: boolean
 }
 
 export interface TranscribeProgress {
-  stage: 'prepare' | 'audio' | 'run' | 'parse' | 'done'
+  stage: 'prepare' | 'install' | 'audio' | 'run' | 'parse' | 'done'
   ratio: number
 }
 
@@ -52,12 +56,12 @@ function run(cmd: string, args: string[], signal?: AbortSignal): Promise<string>
     missing:
       cmd === 'ffmpeg' || cmd === 'ffprobe'
         ? 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
-        : `${cmd} did not start. Install whisper-cli or whisper.cpp, or pick an OpenAI-compatible endpoint in Models.`
+        : `${cmd} did not start. Install whisper.cpp into ~/.speechedit, put a Whisper CLI on PATH, or pick an OpenAI-compatible endpoint in Models.`
   })
 }
 
 export async function listAsrPath(): Promise<AsrPathStatus[]> {
-  const kinds: TranscriptKind[] = ['whisper-cli', 'faster-whisper', 'whisper-cpp', 'mlx-whisper']
+  const kinds: TranscriptKind[] = [...localTranscriptOrder('whisper-cpp')]
   const out: AsrPathStatus[] = []
   for (const kind of kinds) {
     const binaries = cliBinariesFor(kind)
@@ -316,24 +320,17 @@ async function readAsrCacheHit(
   model: string,
   extra: string
 ): Promise<AsrCue[] | null> {
-  const hit = await loadAsrCache(file, kind, model, extra)
-  if (hit) return hit
-  const fallbacks: TranscriptKind[] =
-    kind === 'whisper-cli' ? ['whisper-cpp', 'faster-whisper', 'mlx-whisper'] : []
-  for (const next of fallbacks) {
-    const cached = await loadAsrCache(file, next, model, extra)
-    if (cached) {
-      await saveAsrCache(file, kind, model, extra, cached)
-      return cached
-    }
-    if (next === 'whisper-cpp') {
-      const ggml = ggmlModelPath(model)
-      if (ggml && ggml !== model) {
-        const ggmlHit = await loadAsrCache(file, 'whisper-cpp', ggml, extra)
-        if (ggmlHit) {
-          await saveAsrCache(file, kind, model, extra, ggmlHit)
-          return ggmlHit
-        }
+  const models = [model]
+  if (!model || model === 'whisper-1') models.push('whisper-1', 'tiny', '')
+  const ggml = ggmlModelPath(model)
+  if (ggml && !models.includes(ggml)) models.push(ggml)
+  const unique = [...new Set(models)]
+  for (const next of localTranscriptOrder(kind)) {
+    for (const key of unique) {
+      const cached = await loadAsrCache(file, next, key, extra)
+      if (cached) {
+        if (next !== kind || key !== model) await saveAsrCache(file, kind, model, extra, cached)
+        return cached
       }
     }
   }
@@ -353,7 +350,7 @@ export async function transcribe(
   if (prefer?.includes('faster-whisper')) {
     return flatten(await transcribeCli('faster-whisper', file))
   }
-  return flatten(await transcribeCli('whisper-cli', file))
+  return transcribeMedia(file)
 }
 
 export async function transcribeMedia(
@@ -382,6 +379,12 @@ export async function transcribeMedia(
       return hit
     }
   }
+  if (shouldInstallLocalWhisper(kind) && !(await whisperCppReady())) {
+    if (!opts?.skipInstall) {
+      note('install', 0.12)
+      await maybeEnsureLocalWhisper({ signal })
+    }
+  }
   try {
     if (kind === 'openai-compatible') {
       note('audio', 0.2)
@@ -395,10 +398,7 @@ export async function transcribeMedia(
     }
 
     note('audio', 0.2)
-    const order: TranscriptKind[] =
-      kind === 'whisper-cli'
-        ? ['whisper-cli', 'whisper-cpp', 'faster-whisper', 'mlx-whisper']
-        : [kind]
+    const order = localTranscriptOrder(kind)
     let lastUnavailable: Error | null = null
     for (const next of order) {
       if (next === 'whisper-cpp' && !(await whisperCppReady()) && !(await findCliBin('whisper-cpp'))) {

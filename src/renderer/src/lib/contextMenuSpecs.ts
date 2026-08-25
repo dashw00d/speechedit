@@ -9,7 +9,7 @@ import {
 } from './contextActions'
 import { programLength, primarySegments } from './commands'
 import { takeFamily } from './sceneAnalysis'
-import { programToSourceOf } from './resolver'
+import { programToSourceOf, sourceToProgramOf } from './resolver'
 import { paragraphIds, sentenceIds } from './transcriptEdit'
 import { useEditor, usePlayback } from '../store'
 import type { EditBlock } from './timelineEdits'
@@ -143,15 +143,18 @@ function sceneMenu(sceneId: string): ContextMenuSpec {
   if (detail.actions.some((a) => a.navigate === 'compare-takes')) {
     items.push({
       id: 'compare',
-      label: 'Compare takes',
-      hint: 'Jump to the next attempt of this line.',
+      label: 'Loop takes A ↔ B',
+      hint: 'Loop playback across this take and the next attempt.',
       run: () => {
         const family = takeFamily(editor.project.scenes ?? [], sceneId)
         if (family.length < 2) return
         const idx = family.findIndex((s) => s.id === sceneId)
-        const next = family[(idx + 1) % family.length]
-        editor.selectScene(next.id)
-        playback.playFromSource(next.start)
+        const a = family[idx]
+        const b = family[(idx + 1) % family.length]
+        editor.selectScene(a.id)
+        const lo = Math.min(sourceToProgramOf(editor.project, a.start), sourceToProgramOf(editor.project, b.start))
+        const hi = Math.max(sourceToProgramOf(editor.project, a.end), sourceToProgramOf(editor.project, b.end))
+        playback.playLoop(lo, hi)
       }
     })
   }

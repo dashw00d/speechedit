@@ -30,6 +30,20 @@ describe('local whisper.cpp', () => {
     expect(project.transcript.words[0].start).toBe(words[0].start)
   }, 180000)
 
+  test('default settings transcribe with local whisper.cpp on an mp4', async () => {
+    const { ensureLocalWhisper } = await import('../../../main/asrLocal.ts')
+    const { transcribeMedia } = await import('../../../main/transcribe.ts')
+    const { DEFAULT_SETTINGS } = await import('./settings')
+    const ready = await ensureLocalWhisper({ sample: true })
+    const ffmpeg = Bun.which('ffmpeg')
+    if (!ffmpeg) throw new Error('ffmpeg required')
+    await Bun.$`${ffmpeg} -y -f lavfi -i color=c=black:s=160x120:r=10 -i ${ready.sample!} -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/se-jfk-default.mp4`.quiet()
+    expect(DEFAULT_SETTINGS.transcript.kind).toBe('whisper-cpp')
+    const cues = await transcribeMedia('/tmp/se-jfk-default.mp4', DEFAULT_SETTINGS.transcript)
+    expect(cues?.length).toBeGreaterThan(4)
+    expect((cues ?? []).map((c) => c.text).join(' ')).toMatch(/america|american|fellow|ask/i)
+  }, 180000)
+
   test('default whisper-cli setting falls back to local whisper.cpp on an mp4', async () => {
     const { ensureLocalWhisper } = await import('../../../main/asrLocal.ts')
     const { transcribeMedia } = await import('../../../main/transcribe.ts')

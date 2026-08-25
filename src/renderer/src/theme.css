@@ -41,6 +41,35 @@
   --palette-scene-chip-bg: #2a241c;
   --palette-crt-border: #2a241a;
   --palette-caption-strong: #e6c36a;
+  --palette-track-caption: #d8c07a;
+  --palette-track-overlay: #8eb5d3;
+  --palette-clip-safe-fg: #c8e6cf;
+  --palette-clip-review-fg: #f3d2b4;
+  --palette-clip-overlay-fg: #d8e8f4;
+  --palette-clip-scene-fg: #b8e0d4;
+  --palette-clip-guard-fg: #e8b0a6;
+  --palette-clip-gradient-top: #3a3328;
+  --palette-clip-audio-bg: #1b2418;
+  --palette-clip-audio-border: #35553a;
+  --palette-clip-audio-hover-bg: #1a2a22;
+  --palette-clip-audio-hover-border: #4a7a58;
+  --palette-clip-brass-bg: #2b2414;
+  --palette-clip-brass-border: #6d5a22;
+  --palette-clip-overlay-bg: #18222b;
+  --palette-clip-overlay-border: #35556d;
+  --palette-clip-overlay-label: #b9d4e8;
+  --palette-clip-demo-stripe-a: #2a2218;
+  --palette-clip-demo-stripe-b: #3d3426;
+  --palette-clip-demo-border: #8a6a3a;
+  --palette-clip-demo-fg: #f0d7a4;
+  --palette-drawer-bg: #1a1711;
+  --palette-drawer-head: #1b1812;
+  --palette-popover-warm: #c4a48c;
+  --palette-card-hover: #2a2418;
+  --palette-teal-accent: #9ad4c2;
+  --palette-overlay-soft: #c5d8e8;
+  --palette-toast-bg: #fff8ea;
+  --palette-shadow-ink: #000;
 
   /* ── Speaker palette (also in lib/theme.ts) ─────────── */
   --speaker-palette-1: #c4452d;

@@ -1,8 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { programLength } from './lib/commands'
-import { projectToExportJob } from './lib/exportJob'
+import { projectToExportJob, type ProgramExportJob } from './lib/exportJob'
+import { projectForPlayback } from './lib/playbackProject'
 import { nextProgramAfterCut, sampleProgram, type ProgramLook } from './lib/programLook'
-import { shouldSeek } from './lib/seek'
+import { sourceToProgramOf } from './lib/resolver'
+import { advancePlayhead, boundPlayhead, readMediaClock, shouldHardSeek, shouldSeek } from './lib/seek'
 import { useEditor, usePlayback } from './store'
 
 function applyGain(video: HTMLVideoElement | null, gain: number) {
@@ -17,17 +19,18 @@ function syncVideo(
   speed: number,
   playing: boolean,
   gain: number,
-  fps = 30
+  fps = 30,
+  hard = false
 ) {
   if (!video?.src) return
   video.playbackRate = speed
   applyGain(video, gain)
-  if (shouldSeek(video.currentTime, sourceTime, playing, fps)) video.currentTime = sourceTime
+  if (shouldSeek(video.currentTime, sourceTime, playing && !hard, fps)) video.currentTime = sourceTime
   if (playing && video.paused) void video.play().catch(() => undefined)
   if (!playing && !video.paused) video.pause()
 }
 
-function syncBeds(look: ProgramLook, playing: boolean, fps = 30) {
+function syncBeds(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
   for (const item of look.beds) {
     const id = item.bed.id ?? item.bed.path
     const el = document.querySelector(`audio[data-bed="${id}"]`) as HTMLAudioElement | null
@@ -38,12 +41,12 @@ function syncBeds(look: ProgramLook, playing: boolean, fps = 30) {
       if (!el.paused) el.pause()
       continue
     }
-    if (shouldSeek(el.currentTime, item.sourceTime, playing, fps)) el.currentTime = item.sourceTime
+    if (shouldSeek(el.currentTime, item.sourceTime, playing && !hard, fps)) el.currentTime = item.sourceTime
     if (el.paused) void el.play().catch(() => undefined)
   }
 }
 
-function syncOverlays(look: ProgramLook, playing: boolean, fps = 30) {
+function syncOverlays(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
   const active = new Map(look.layers.filter((l) => l.layer.id && l.layer.kind === 'image' && !l.layer.loop).map((l) => [l.layer.id!, l]))
   for (const node of document.querySelectorAll('video[data-overlay]')) {
     const el = node as HTMLVideoElement
@@ -53,7 +56,7 @@ function syncOverlays(look: ProgramLook, playing: boolean, fps = 30) {
       continue
     }
     el.playbackRate = item.layer.speed || 1
-    if (shouldSeek(el.currentTime, item.sourceTime, playing, fps)) el.currentTime = item.sourceTime
+    if (shouldSeek(el.currentTime, item.sourceTime, playing && !hard, fps)) el.currentTime = item.sourceTime
     if (el.paused) void el.play().catch(() => undefined)
   }
 }
@@ -63,16 +66,17 @@ function syncProgram(
   under: HTMLVideoElement | null,
   look: ProgramLook,
   playing: boolean,
-  fps = 30
+  fps = 30,
+  hard = false
 ) {
-  syncVideo(video, look.incomingSource, look.incomingSpeed, playing, look.voice.incomingGain, fps)
+  syncVideo(video, look.incomingSource, look.incomingSpeed, playing, look.voice.incomingGain, fps, hard)
   if (look.outgoing && under) {
-    syncVideo(under, look.outgoingSource ?? look.incomingSource, look.outgoingSpeed, playing, look.voice.outgoingGain, fps)
+    syncVideo(under, look.outgoingSource ?? look.incomingSource, look.outgoingSpeed, playing, look.voice.outgoingGain, fps, hard)
   } else if (under && !under.paused) {
     under.pause()
   }
-  syncBeds(look, playing, fps)
-  syncOverlays(look, playing, fps)
+  syncBeds(look, playing, fps, hard)
+  syncOverlays(look, playing, fps, hard)
 }
 
 export function useEngine(
@@ -82,8 +86,13 @@ export function useEngine(
   const playing = usePlayback((s) => s.playing)
   const programTime = usePlayback((s) => s.programTime)
   const project = useEditor((s) => s.project)
-  const projectRef = useRef(project)
-  projectRef.current = project
+  const previewSafeCuts = useEditor((s) => s.previewSafeCuts)
+  const playbackProject = useMemo(
+    () => projectForPlayback(project, previewSafeCuts),
+    [project, previewSafeCuts]
+  )
+  const projectRef = useRef(playbackProject)
+  projectRef.current = playbackProject
 
   useEffect(() => {
     const prime = () => {
@@ -106,7 +115,7 @@ export function useEngine(
     if (playing) return
     const look = sampleProgram(projectToExportJob(projectRef.current), programTime)
     syncProgram(videoRef.current, underRef?.current ?? null, look, false, projectRef.current.fps || 30)
-  }, [playing, programTime, videoRef, underRef])
+  }, [playing, programTime, videoRef, underRef, previewSafeCuts])
 
   useEffect(() => {
     if (!playing) {
@@ -132,11 +141,26 @@ export function useEngine(
 
     let raf = 0
     let last = performance.now()
+    let lastSource: number | null = null
+    let lastProgram = nowPlay.programTime
     const video = videoRef.current
     if (video && video.src && video.paused) {
       const look = sampleProgram(projectToExportJob(projectRef.current), nowPlay.programTime)
       applyGain(video, look.voice.incomingGain)
       void video.play().catch(() => undefined)
+    }
+
+    const stopAt = (job: ProgramExportJob, time: number, clearUntil = false) => {
+      usePlayback.setState({
+        playing: false,
+        programTime: time,
+        ...(clearUntil ? { playUntil: null } : {})
+      })
+      video?.pause()
+      underRef?.current?.pause()
+      const look = sampleProgram(job, time)
+      syncBeds(look, false, projectRef.current.fps || 30)
+      syncOverlays(look, false, projectRef.current.fps || 30)
     }
 
     const step = (now: number) => {
@@ -146,49 +170,54 @@ export function useEngine(
       const job = projectToExportJob(proj)
       const duration = job.duration && job.duration > 0 ? job.duration : programLength(proj)
       const state = usePlayback.getState()
-      let program = state.programTime + dt
-
-      const markA =
-        proj.markIn != null && proj.markOut != null ? Math.min(proj.markIn, proj.markOut) : 0
-      const markB =
-        proj.markIn != null && proj.markOut != null ? Math.max(proj.markIn, proj.markOut) : duration
-      if (state.playUntil != null && program >= state.playUntil) {
-        if (state.loopFrom != null) {
-          program = state.loopFrom
-        } else {
-          usePlayback.setState({ playing: false, programTime: state.playUntil, playUntil: null })
-          video?.pause()
-          underRef?.current?.pause()
-          const look = sampleProgram(job, state.playUntil)
-          syncBeds(look, false, proj.fps || 30)
-          syncOverlays(look, false, proj.fps || 30)
-          return
-        }
+      const fps = proj.fps || 30
+      const clockRead = readMediaClock(videoRef.current)
+      const advanced = advancePlayhead({
+        lastProgram,
+        requestedProgram: state.programTime,
+        dt,
+        mediaSource: clockRead.source,
+        mediaPresent: clockRead.present,
+        sourceToProgram: (source) => sourceToProgramOf(proj, source),
+        fps
+      })
+      const bounded = boundPlayhead(advanced.program, {
+        duration,
+        playUntil: state.playUntil,
+        loopFrom: state.loopFrom,
+        loop: state.loop,
+        markIn: proj.markIn,
+        markOut: proj.markOut
+      })
+      if (bounded.stop) {
+        stopAt(job, bounded.program, state.playUntil != null)
+        return
       }
-      if (state.loop && proj.markIn != null && proj.markOut != null && program >= markB) {
-        program = markA
-      } else if (program >= duration) {
-        if (state.loop) program = 0
-        else {
-          usePlayback.setState({ playing: false, programTime: duration })
-          video?.pause()
-          underRef?.current?.pause()
-          const look = sampleProgram(job, duration)
-          syncBeds(look, false, proj.fps || 30)
-          syncOverlays(look, false, proj.fps || 30)
-          return
-        }
-      }
-
+      let program = bounded.program
       const skipped = nextProgramAfterCut(job, program)
       if (skipped != null) program = skipped
+      else if (advanced.clock === 'media' && !bounded.looped) {
+        program = Math.max(lastProgram, program)
+      }
       const look = sampleProgram(job, program)
-      syncProgram(videoRef.current, underRef?.current ?? null, look, true, proj.fps || 30)
+      const hard = shouldHardSeek({
+        lastSource,
+        nextSource: look.incomingSource,
+        dt,
+        speed: look.incomingSpeed,
+        fps,
+        clock: advanced.clock,
+        looped: bounded.looped,
+        cut: skipped != null
+      })
+      lastSource = look.incomingSource
+      lastProgram = program
+      syncProgram(videoRef.current, underRef?.current ?? null, look, true, fps, hard)
       usePlayback.setState({ programTime: program })
       raf = requestAnimationFrame(step)
     }
 
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [playing, videoRef, underRef])
+  }, [playing, videoRef, underRef, previewSafeCuts])
 }

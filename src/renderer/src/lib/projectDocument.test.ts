@@ -77,6 +77,14 @@ describe('project document portability', () => {
           duration: 8,
           waveform: Array.from({ length: 1800 }, (_, i) => (i % 10) / 10),
           thumbnails: ['data:image/jpeg;base64,xxx']
+        },
+        still: {
+          id: 'still',
+          path: 'https://example.com/a.png',
+          name: 'a.png',
+          kind: 'image' as const,
+          duration: 2,
+          waveform: [0.5]
         }
       }
     }
@@ -85,12 +93,15 @@ describe('project document portability', () => {
     expect(slim.assets.demo_src.waveform.length).toBeGreaterThan(10)
     expect(slim.assets.take.thumbnails).toBeUndefined()
     expect(slim.assets.take.waveform).toEqual([])
+    expect(slim.assets.still.waveform).toEqual([0.5])
     const recovery = makeRecovery(fat, { documentPath: null, lastSavedAt: null, dirty: true })
     expect(recovery.project.assets.demo_src.thumbnails).toBeUndefined()
     expect(recovery.project.assets.demo_src.waveform.length).toBeGreaterThan(10)
     expect(recovery.project.assets.take.waveform).toEqual([])
     const doc = serializeDocument(fat, '/data/reel/talk.speechedit.json')
-    expect(JSON.stringify(doc).length).toBeLessThan(JSON.stringify(fat).length / 2)
+    expect(JSON.stringify(doc.project.assets.take).length).toBeLessThan(
+      JSON.stringify(fat.assets.take).length / 4
+    )
   })
 
   test('recovery is offered only when unsaved work is newer than the last save', () => {

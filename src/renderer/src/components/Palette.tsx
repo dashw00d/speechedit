@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { confirmLoseWork, saveCurrentDocument } from '../lib/documentIo'
 import { rankPalette, type PaletteSpec } from '../lib/contextActions'
+import { paletteSearchHits } from '../lib/paletteSearch'
 import {
   projectToAutoEditor,
   projectToChapters,
@@ -28,6 +29,7 @@ export function Palette() {
   const analyzing = useEditor((s) => s.analyzing)
   const selectedWordIds = useEditor((s) => s.selectedWordIds)
   const selectedClipId = useEditor((s) => s.selectedClipId)
+  const project = useEditor((s) => s.project)
   const [q, setQ] = useState('')
 
   const actions = useMemo<PaletteSpec[]>(
@@ -393,7 +395,7 @@ export function Palette() {
     [dispatch]
   )
 
-  const shown = rankPalette(actions, q, {
+  const shown = rankPalette([...actions, ...paletteSearchHits(project, q)], q, {
     exporting,
     analyzing: analyzing,
     hasWordSelection: selectedWordIds.length > 0,

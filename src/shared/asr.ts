@@ -35,6 +35,15 @@ export interface TranscriptProviderSpec {
   model: string
 }
 
+export const DEFAULT_TRANSCRIPT_KIND: TranscriptKind = 'whisper-cpp'
+
+export const LOCAL_TRANSCRIPT_KINDS: readonly TranscriptKind[] = [
+  'whisper-cpp',
+  'whisper-cli',
+  'faster-whisper',
+  'mlx-whisper'
+]
+
 export const TRANSCRIPT_KINDS: readonly TranscriptKind[] = [
   'off',
   'whisper-cli',
@@ -78,10 +87,10 @@ export const TRANSCRIPT_PROVIDERS: TranscriptProviderSpec[] = [
   {
     id: 'whisper-cpp',
     kind: 'whisper-cpp',
-    label: 'whisper.cpp (if on PATH)',
+    label: 'whisper.cpp (local default)',
     backend: 'cli',
     binaries: ['whisper-cli', 'whisper-cpp', 'whisper.cpp'],
-    hint: 'ggerganov/whisper.cpp. PATH or ~/.speechedit/bin/whisper-cli plus ggml-tiny.en.bin in ~/.speechedit/models.',
+    hint: 'Default. Uses ~/.speechedit/opt/whisper-cpp and ggml-tiny.en.bin, or the same binary on PATH.',
     baseUrl: '',
     model: ''
   },
@@ -128,7 +137,19 @@ export const TRANSCRIPT_PROVIDERS: TranscriptProviderSpec[] = [
 ]
 
 export function coerceTranscriptKind(value: unknown): TranscriptKind {
-  return TRANSCRIPT_KINDS.includes(value as TranscriptKind) ? (value as TranscriptKind) : 'whisper-cli'
+  return TRANSCRIPT_KINDS.includes(value as TranscriptKind)
+    ? (value as TranscriptKind)
+    : DEFAULT_TRANSCRIPT_KIND
+}
+
+export function localTranscriptOrder(kind: TranscriptKind): TranscriptKind[] {
+  if (kind === 'off' || kind === 'openai-compatible') return [kind]
+  if (!LOCAL_TRANSCRIPT_KINDS.includes(kind)) return [kind]
+  return [kind, ...LOCAL_TRANSCRIPT_KINDS.filter((next) => next !== kind)]
+}
+
+export function shouldInstallLocalWhisper(kind: TranscriptKind): boolean {
+  return LOCAL_TRANSCRIPT_KINDS.includes(kind)
 }
 
 export function specForKind(kind: TranscriptKind): TranscriptProviderSpec | undefined {
@@ -142,7 +163,7 @@ export function specForPreset(id: string): TranscriptProviderSpec | undefined {
 export function presetIdFor(kind: TranscriptKind, baseUrl: string): string {
   const http = TRANSCRIPT_PROVIDERS.find((p) => p.kind === kind && p.baseUrl && p.baseUrl === baseUrl)
   if (http) return http.id
-  return TRANSCRIPT_PROVIDERS.find((p) => p.kind === kind)?.id ?? 'whisper-cli'
+  return TRANSCRIPT_PROVIDERS.find((p) => p.kind === kind)?.id ?? DEFAULT_TRANSCRIPT_KIND
 }
 
 export function cliBinariesFor(kind: TranscriptKind): string[] {

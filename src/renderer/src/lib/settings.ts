@@ -1,4 +1,5 @@
 import {
+  DEFAULT_TRANSCRIPT_KIND,
   TRANSCRIPT_PROVIDERS,
   coerceTranscriptKind,
   type TranscriptKind
@@ -20,9 +21,9 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   transcript: {
-    kind: 'whisper-cli',
+    kind: DEFAULT_TRANSCRIPT_KIND,
     baseUrl: 'http://127.0.0.1:8000/v1',
-    model: 'whisper-1',
+    model: '',
     apiKey: ''
   },
   intelligence: {
@@ -76,17 +77,44 @@ export const INTEL_PRESETS = [
 
 const KEY = 'speechedit:settings'
 
+/** Old factory default: Whisper CLI + OpenAI model name, never a real user choice. */
+export function isLegacyFactoryTranscript(patch?: Partial<ModelEndpoint>): boolean {
+  if (!patch) return true
+  if (patch.kind && patch.kind !== 'whisper-cli') return false
+  const model = patch.model ?? 'whisper-1'
+  return model === 'whisper-1' && !patch.apiKey
+}
+
 export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(KEY)
-    if (!raw) return { ...DEFAULT_SETTINGS }
+    if (!raw) return cloneSettings(DEFAULT_SETTINGS)
     const parsed = JSON.parse(raw) as Partial<AppSettings>
-    return {
-      transcript: normalizeEndpoint(DEFAULT_SETTINGS.transcript, parsed.transcript),
+    const next = {
+      transcript: isLegacyFactoryTranscript(parsed.transcript)
+        ? { ...DEFAULT_SETTINGS.transcript }
+        : normalizeEndpoint(DEFAULT_SETTINGS.transcript, parsed.transcript),
       intelligence: normalizeEndpoint(DEFAULT_SETTINGS.intelligence, parsed.intelligence)
     }
+    if (isLegacyFactoryTranscript(parsed.transcript)) persistSettings(next)
+    return next
   } catch {
-    return { ...DEFAULT_SETTINGS }
+    return cloneSettings(DEFAULT_SETTINGS)
+  }
+}
+
+function cloneSettings(settings: AppSettings): AppSettings {
+  return {
+    transcript: { ...settings.transcript },
+    intelligence: { ...settings.intelligence }
+  }
+}
+
+function persistSettings(settings: AppSettings): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(settings))
+  } catch {
+    /* ignore */
   }
 }
 
@@ -103,11 +131,7 @@ export function saveSettings(settings: AppSettings): AppSettings {
     transcript: normalizeEndpoint(DEFAULT_SETTINGS.transcript, settings.transcript),
     intelligence: normalizeEndpoint(DEFAULT_SETTINGS.intelligence, settings.intelligence)
   }
-  try {
-    localStorage.setItem(KEY, JSON.stringify(next))
-  } catch {
-    /* ignore */
-  }
+  persistSettings(next)
   return next
 }
 
@@ -117,7 +141,7 @@ export function settingsFromEnv(): AppSettings {
     transcript: {
       kind: coerceTranscriptKind(
         env.SPEECHEDIT_TRANSCRIBE_KIND ||
-          (env.SPEECHEDIT_TRANSCRIBE_BASE_URL ? 'openai-compatible' : 'whisper-cli')
+          (env.SPEECHEDIT_TRANSCRIBE_BASE_URL ? 'openai-compatible' : DEFAULT_TRANSCRIPT_KIND)
       ),
       baseUrl: env.SPEECHEDIT_TRANSCRIBE_BASE_URL || DEFAULT_SETTINGS.transcript.baseUrl,
       model: env.SPEECHEDIT_TRANSCRIBE_MODEL || DEFAULT_SETTINGS.transcript.model,

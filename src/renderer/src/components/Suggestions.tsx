@@ -27,6 +27,8 @@ export function Suggestions() {
   const playFromSource = usePlayback((s) => s.playFromSource)
   const task = suggestTask(project)
   const pace = paceFromMargin(project.cutMargin)
+  const previewSafeCuts = useEditor((s) => s.previewSafeCuts)
+  const setPreviewSafeCuts = useEditor((s) => s.setPreviewSafeCuts)
   const primaryApply = Boolean(task.applyLabel)
   const primaryReview = !primaryApply && task.reviewCount > 0
   const showReviewToggle = (primaryApply && task.reviewCount > 0) || (primaryReview && reviewing)
@@ -46,6 +48,28 @@ export function Suggestions() {
         <span className="spark">✦</span>
         <span className="suggest-copy">{task.headline}</span>
         <div className="chips">
+          {task.showPreviewToggle && (
+            <>
+              <button
+                type="button"
+                className="chip"
+                data-active={!previewSafeCuts}
+                title="Hear the raw recording before applying safe cuts"
+                onClick={() => setPreviewSafeCuts(false)}
+              >
+                Original
+              </button>
+              <button
+                type="button"
+                className="chip"
+                data-active={previewSafeCuts}
+                title="Preview how safe cuts will sound — undo still works after apply"
+                onClick={() => setPreviewSafeCuts(true)}
+              >
+                With cuts
+              </button>
+            </>
+          )}
           {task.showPace &&
             PACE_PRESETS.map((preset) => (
               <button

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { askEditor } from '../lib/askModel'
 import { renderAgentBrief } from '../lib/agentContext'
 import { currentEditorSession } from '../lib/editorSession'
+import { planIntent } from '../lib/intent'
 import { formatClock } from '../lib/time'
 import { useEditor } from '../store'
 import type { AgentCall } from '../lib/agent'
@@ -31,6 +32,7 @@ export function AgentPanel({
   const input = useRef<HTMLTextAreaElement>(null)
   const retakes = (project.scenes ?? []).filter((s) => s.kind === 'retake').length
   const demos = (project.scenes ?? []).filter((s) => s.kind === 'demo').length
+  const recipe = useMemo(() => (intent.trim() ? planIntent(project, intent) : null), [intent, project])
 
   useEffect(() => {
     if (variant === 'dock') input.current?.focus()
@@ -102,6 +104,11 @@ export function AgentPanel({
           }}
         />
       </label>
+      {recipe && recipe.commands.length > 0 && (
+        <p className="help agent-recipe">
+          Will run: {recipe.commands.map((c) => c.type).join(' → ')} — {recipe.note}
+        </p>
+      )}
       <button className="chip" disabled={busy || !intent.trim()} onClick={() => void run(intent)}>
         {busy ? 'Editing…' : 'Run tools'}
       </button>

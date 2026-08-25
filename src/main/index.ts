@@ -301,7 +301,7 @@ ipcMain.handle(
   async (
     e,
     file: string,
-    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean }
+    opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string; force?: boolean; skipInstall?: boolean }
   ) => {
   refuseIfExporting()
   try {
