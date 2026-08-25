@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { createDemoProject } from './demo'
-import { findInTranscript, findWordGroups, replacePlan } from './transcriptFind'
+import { findInTranscript, findStepShouldHear, findWordGroups, replacePlan } from './transcriptFind'
 
 describe('transcript find', () => {
+  test('typing does not hear; Enter and next do', () => {
+    expect(findStepShouldHear(0)).toBe(false)
+    expect(findStepShouldHear(1)).toBe(true)
+    expect(findStepShouldHear(-1)).toBe(true)
+  })
+
   test('groups repeated words so find can step through them', () => {
     const project = createDemoProject()
     const groups = findWordGroups(project.transcript.words, 'the')

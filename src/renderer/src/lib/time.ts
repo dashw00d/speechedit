@@ -22,6 +22,16 @@ export function formatClock(seconds: number): string {
   return `${pad(m)}:${pad(s)}`
 }
 
+/** YouTube description stamp: `0:00`, `1:23`, or `1:02:03`. */
+export function formatYoutubeClock(seconds: number): string {
+  const t = Math.max(0, Math.floor(seconds))
+  const s = t % 60
+  const m = Math.floor(t / 60) % 60
+  const h = Math.floor(t / 3600)
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`
+  return `${m}:${pad(s)}`
+}
+
 export function uid(prefix = 'id'): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-3)}`
 }

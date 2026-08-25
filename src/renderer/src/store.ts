@@ -13,6 +13,7 @@ import {
   type RecoveryRecord
 } from './lib/projectDocument'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
+import { clampReviewRate } from './lib/reviewRate'
 import { wordRange } from './lib/transcriptEdit'
 import type { Clip, ClipLook, Command, Project, TagKind, Word } from './types'
 
@@ -268,8 +269,7 @@ function bootShowSafeZone(): boolean {
 }
 
 function bootReviewRate(): number {
-  const rate = readUiPrefs().reviewRate
-  return rate === 0.5 || rate === 2 ? rate : 1
+  return clampReviewRate(readUiPrefs().reviewRate ?? 1)
 }
 
 function bootProject(): Project {
@@ -392,7 +392,7 @@ export const useEditor = create<EditorState>((set, get) => ({
             selectedSceneId: null,
             selectedSuggestionId: null,
             selectedGap: null,
-            inspectorTab: addedClip?.text ? 'caption' : 'transform'
+            inspectorTab: addedClip?.text && !addedClip.assetId ? 'caption' : 'transform'
           }
         : {})
     })
@@ -473,7 +473,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
   selectClip: (id, opts) => {
     const clip = get().project.tracks.flatMap((t) => t.clips).find((c) => c.id === id)
-    const tab = clip?.text ? 'caption' : id ? 'transform' : 'project'
+    const tab = clip?.text && !clip.assetId ? 'caption' : id ? 'transform' : 'project'
     const existing = get().selectedClipIds
     const selectedClipIds = !id
       ? []
@@ -503,7 +503,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedSceneId: null,
       selectedSuggestionId: null,
       selectedGap: null,
-      inspectorTab: clip?.text ? 'caption' : last ? 'transform' : 'project'
+      inspectorTab: clip?.text && !clip.assetId ? 'caption' : last ? 'transform' : 'project'
     })
   },
   setClipClipboard: (value) => set({ clipClipboard: value }),
@@ -713,7 +713,7 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
     set({ playing: true, playUntil: null })
   },
   setReviewRate: (value) => {
-    const reviewRate = value === 0.5 || value === 2 ? value : 1
+    const reviewRate = clampReviewRate(value)
     writeUiPrefs({ reviewRate })
     set({ reviewRate })
   },

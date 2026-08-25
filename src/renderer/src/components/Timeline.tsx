@@ -5,6 +5,7 @@ import { programToSourceOf, snapSourceTime, snapTime, sourceToProgramOf } from '
 import { stitchPrimaryThumbs, stitchPrimaryWaveform } from '../lib/takes'
 import { buildEditBlocks, editBlockCounts, filterEditBlocks, type EditBlock, type EditBlockFilter } from '../lib/timelineEdits'
 import { hopNote } from '../lib/clipEdit'
+import { clearMarksFromContext } from '../lib/marks'
 import { findRevealableStackTrack, trackLaneName } from '../lib/timelineTracks'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
@@ -14,7 +15,7 @@ const PPS_MIN = 18
 const PPS_MAX = 280
 const LABEL_WIDTH = 132
 
-export function Timeline() {
+export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) {
   const project = useEditor((s) => s.project)
   const selectedClipId = useEditor((s) => s.selectedClipId)
   const selectedClipIds = useEditor((s) => s.selectedClipIds)
@@ -495,8 +496,8 @@ export function Timeline() {
               <button
                 className="timeline-btn"
                 type="button"
-                title="Clear In and Out without cutting"
-                onClick={() => dispatch({ type: 'setMarks', markIn: null, markOut: null })}
+                title="Clear In and Out without cutting, then find the next clip"
+                onClick={() => onToast?.(clearMarksFromContext().toast)}
               >
                 Clear marks
               </button>

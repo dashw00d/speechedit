@@ -158,6 +158,7 @@ export function createDemoProject(): Project {
     analysis: {
       silence,
       staticRegions: [{ start: 16.2, end: 22.4 }],
+      sceneTimes: [22.9],
       loudness: [
         { start: 4, end: 6.4, lufs: -10.8 },
         { start: 18, end: 20, lufs: -26 }
@@ -261,6 +262,16 @@ export function createDemoProject(): Project {
         action: 'cut',
         label: 'you know',
         safe: true,
+        applied: false
+      },
+      {
+        id: 'sug_click',
+        type: 'silence',
+        start: 22.5,
+        end: 23.6,
+        action: 'review',
+        label: 'Silent activity 1.1s · picture changed — demo or dead air',
+        safe: false,
         applied: false
       },
       ...detectRepeats(words)

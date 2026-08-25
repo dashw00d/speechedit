@@ -6,6 +6,7 @@ import {
   renderAgentBrief,
   type EditorSession
 } from './agentContext'
+import { toastForCaptionFollow } from './captions'
 import { applyCommand, programLength } from './commands'
 import { parseAnyTranscript, parseTranscriptJson } from './transcript'
 import { runSceneIntelligence } from './intelligence'
@@ -27,6 +28,7 @@ export const COMMAND_BUS: Command['type'][] = [
   'insertGap',
   'removeInsert',
   'applySuggestion',
+  'resolveSuggestion',
   'applySafeSuggestions',
   'dismissSuggestion',
   'revertSuggestion',
@@ -323,7 +325,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'set_word_text',
-    description: 'Rewrite one transcript word without cutting it.',
+    description: 'Rewrite one transcript word without cutting it. Auto captions that cover the word follow.',
     inputSchema: {
       type: 'object',
       properties: { wordId: { type: 'string' }, text: { type: 'string' } },
@@ -720,11 +722,11 @@ export async function runTool(
       return apply({ type: 'splitAt', time: num(args.time) }, 'Split.')
     case 'ripple_delete':
       return apply({ type: 'rippleDelete', start: num(args.start), end: num(args.end) }, 'Ripple deleted.')
-    case 'set_word_text':
-      return apply(
-        { type: 'setWordText', wordId: String(args.wordId), text: String(args.text) },
-        'Rewrote word.'
-      )
+    case 'set_word_text': {
+      const command = { type: 'setWordText' as const, wordId: String(args.wordId), text: String(args.text) }
+      const next = applyCommand(project, command)
+      return { project: next, message: toastForCaptionFollow(project, next) ?? 'Rewrote word.' }
+    }
     case 'set_speaker':
       return apply(
         {
@@ -779,7 +781,7 @@ export async function runTool(
         'Generated captions.'
       )
     case 'add_lower_thirds':
-      return apply({ type: 'addLowerThirds' }, 'Added scene lower thirds.')
+      return apply({ type: 'addLowerThirds' }, 'Chapter names on the tape. Edit any one, then Apply style to all titles.')
     case 'add_title':
       return apply(
         {

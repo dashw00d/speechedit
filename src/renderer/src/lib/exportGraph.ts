@@ -340,13 +340,35 @@ export function buildSlugFilters(job: GraphJob, seg: GraphSegment): SegmentFilte
   }
 }
 
+export function coverCropOrigin(
+  job: Pick<GraphJob, 'width' | 'height'>,
+  seg: Pick<GraphSegment, 'scale' | 'x' | 'y'>
+): { x: string | number; y: string | number } {
+  const jobW = even(job.width)
+  const jobH = even(job.height)
+  const scale = Math.max(0.2, seg.scale)
+  const zoomW = even(Math.round(jobW * scale))
+  const zoomH = even(Math.round(jobH * scale))
+  if (jobH > jobW) {
+    return {
+      x: `(iw-${jobW})/2+${Math.round(seg.x)}`,
+      y: `(ih-${jobH})/2+${Math.round(seg.y)}`
+    }
+  }
+  return {
+    x: Math.round(jobW / 2 - zoomW / 2 + seg.x),
+    y: Math.round(jobH / 2 - zoomH / 2 + seg.y)
+  }
+}
+
 export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: number): SegmentFilters {
   if (seg.kind === 'slug') return buildSlugFilters(job, seg)
   const scale = Math.max(0.2, seg.scale)
   const zoomW = even(Math.round(job.width * scale))
   const zoomH = even(Math.round(job.height * scale))
-  const x = Math.round(job.width / 2 - zoomW / 2 + seg.x)
-  const y = Math.round(job.height / 2 - zoomH / 2 + seg.y)
+  const origin = coverCropOrigin(job, seg)
+  const x = origin.x
+  const y = origin.y
   const i = index ?? job.segments.indexOf(seg)
   const overlapOut = seg.overlapNext ?? 0
   const overlapIn = i >= 0 ? dissolveIn(job, i) : 0

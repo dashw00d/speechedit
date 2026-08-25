@@ -13,7 +13,9 @@ import { Suggestions } from './components/Suggestions'
 import { Timeline } from './components/Timeline'
 import { Transcript } from './components/Transcript'
 import { findMovableClip, programLength } from './lib/commands'
-import { copySelectedClip, copyWordText, pasteClipboard } from './lib/clipClipboard'
+import { toastForCommand, toastForEdit } from './lib/contextActions'
+import { copySelectedClip, pasteClipboard } from './lib/clipClipboard'
+import { copyQuoteFromContext } from './lib/quote'
 import { hopNote, movableIds } from './lib/clipEdit'
 import {
   discardRecovery,
@@ -28,9 +30,21 @@ import {
 } from './lib/documentIo'
 import { currentWord } from './lib/edl'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
-import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
+import { bladeAtWord, playInOutOrSelection, selectParagraphFromContext } from './lib/scriptActions'
+import { markClipFromContext } from './lib/marks'
+import { startSceneRename } from './lib/sceneRename'
+import { removeSceneFromContext } from './lib/sceneRemove'
+import { startSpeakerRename } from './lib/speakerRename'
+import { protectFromContext } from './lib/protect'
 import { neighborScene } from './lib/sceneChip'
-import { extendSelection, sentenceIds, shrinkSelection, wordRange } from './lib/transcriptEdit'
+import {
+  extendSelection,
+  livePreviousSentence,
+  sentenceIds,
+  sentenceRange,
+  shrinkSelection,
+  wordRange
+} from './lib/transcriptEdit'
 import { cancelExport, cancelImport, mediaBusyToast } from './lib/mediaJobs'
 import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
 import { useClearSelection } from './useClearSelection'
@@ -185,8 +199,8 @@ export function App() {
           <Inspector onToast={setToast} />
         </main>
       </div>
-      <Timeline />
-      <Suggestions />
+      <Timeline onToast={setToast} />
+      <Suggestions onToast={setToast} />
       <Palette onToast={setToast} />
       {agentOpen && <AgentPanel variant="dock" onToast={setToast} />}
       {toast && <div className="toast">{toast}</div>}
@@ -306,7 +320,7 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
       if ((e.key === 'c' || e.key === 'C') && meta && !typing) {
         e.preventDefault()
         if (editor.selectedWordIds.length) {
-          if (copyWordText()) setToast('Copied the selected words.')
+          setToast(copyQuoteFromContext().toast)
           return
         }
         if (copySelectedClip(e.shiftKey ? 'look' : 'clip')) {
@@ -373,15 +387,11 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         return
       }
       if ((e.key === 'm' || e.key === 'M') && !typing && !meta) {
-        const span = wordRange(editor.project.transcript.words, editor.selectedWordIds)
-        if (span) {
+        const hadMarks = editor.project.markIn != null || editor.project.markOut != null
+        const result = markClipFromContext()
+        if (result.marked || hadMarks) {
           e.preventDefault()
-          editor.dispatch({
-            type: 'setMarks',
-            markIn: sourceToProgramOf(editor.project, span.start),
-            markOut: sourceToProgramOf(editor.project, span.end)
-          })
-          setToast('Marked the selected words. / loops them, Delete ripples them.')
+          setToast(result.toast)
         }
         return
       }
@@ -412,6 +422,9 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         if (wordId) {
           e.preventDefault()
           editor.dispatch({ type: 'cutSentence', wordId })
+          if (sentenceRange(editor.project.transcript.words, wordId)) {
+            setToast(toastForCommand({ type: 'cutSentence', wordId })!)
+          }
         }
         return
       }
@@ -421,7 +434,9 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
           currentWord(editor.project.transcript.words, programToSourceOf(editor.project, playback.programTime))?.id
         if (wordId) {
           e.preventDefault()
+          const hadLive = livePreviousSentence(editor.project.transcript.words, wordId)
           editor.dispatch({ type: 'cutPreviousSentence', wordId })
+          if (hadLive) setToast(toastForCommand({ type: 'cutPreviousSentence', wordId })!)
         }
         return
       }
@@ -463,12 +478,15 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
       }
       if ((e.key === 'a' || e.key === 'A') && !typing && !meta) {
         e.preventDefault()
-        selectParagraphAtCaret()
+        setToast(selectParagraphFromContext().toast)
         return
       }
       if ((e.key === 'x' || e.key === 'X') && !typing && !meta && editor.selectedWordIds.length) {
         e.preventDefault()
-        editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds, lift: !editor.ripple })
+        const cut = { type: 'toggleWords' as const, wordIds: editor.selectedWordIds, lift: !editor.ripple }
+        const toast = toastForEdit(editor.project, cut)
+        editor.dispatch(cut)
+        if (toast) setToast(toast)
         return
       }
       if ((e.key === 'u' || e.key === 'U') && !typing && !meta) {
@@ -484,29 +502,21 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         return
       }
       if ((e.key === 'b' || e.key === 'B') && !typing && !meta) {
-        const span =
-          wordRange(editor.project.transcript.words, editor.selectedWordIds) ??
-          (editor.project.markIn != null && editor.project.markOut != null
-            ? {
-                start: programToSourceOf(editor.project, Math.min(editor.project.markIn, editor.project.markOut)),
-                end: programToSourceOf(editor.project, Math.max(editor.project.markIn, editor.project.markOut))
-              }
-            : null)
-        if (span) {
-          e.preventDefault()
-          editor.dispatch({
-            type: 'addTag',
-            start: span.start,
-            end: span.end,
-            kind: e.shiftKey ? 'demo' : 'keep'
-          })
-          setToast(
-            e.shiftKey
-              ? 'Silent demo — Auto Edit will skip pauses here.'
-              : 'Protected — Auto Edit will skip this.'
-          )
-        }
+        const result = protectFromContext(e.shiftKey ? 'demo' : 'keep')
+        if (result.started) e.preventDefault()
+        setToast(result.toast)
         return
+      }
+      if (e.key === 'F2' && !typing && !meta) {
+        if (editor.selectedSceneId) {
+          e.preventDefault()
+          startSceneRename(editor.selectedSceneId)
+          return
+        }
+        if (startSpeakerRename().started) {
+          e.preventDefault()
+          return
+        }
       }
       if ((e.key === '[' || e.key === ']') && !typing) {
         e.preventDefault()
@@ -530,9 +540,17 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         return
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
+        if (editor.selectedSceneId) {
+          e.preventDefault()
+          setToast(removeSceneFromContext(editor.selectedSceneId).toast)
+          return
+        }
         if (editor.selectedWordIds.length) {
           e.preventDefault()
-          editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds, lift: !editor.ripple })
+          const cut = { type: 'toggleWords' as const, wordIds: editor.selectedWordIds, lift: !editor.ripple }
+          const toast = toastForEdit(editor.project, cut)
+          editor.dispatch(cut)
+          if (toast) setToast(toast)
           return
         }
         if (editor.project.markIn != null && editor.project.markOut != null) {

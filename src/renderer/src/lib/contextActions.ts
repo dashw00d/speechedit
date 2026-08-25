@@ -1,9 +1,23 @@
 import type { Command, EditSuggestion, Project } from '../types'
-import { blockedByLabel, leftoverItems, leftoverKind } from './analysis'
+import { blockedByLabel, leftoverForSpan, leftoverItems, leftoverKind, reviewGap } from './analysis'
 import { safeEditCandidates } from './firstEdit'
-import { commandForScene, hasUncollapsedRetakes, suggestionForScene, takeFamily } from './sceneAnalysis'
+import {
+  commandForScene,
+  droppedRetakeCount,
+  hasUncollapsedRetakes,
+  suggestionForScene,
+  takeFamily,
+  uncollapsedRetakeCount
+} from './sceneAnalysis'
 import { isFillerToken } from './transcript'
-import { coveringAppliedSuggestion, tagAt, wordRange } from './transcriptEdit'
+import { coveringAppliedSuggestion, isParagraphSelection, restartBeforeWord, tagAt, wordRange } from './transcriptEdit'
+import { captionClipsOf } from './captions'
+import { hasOpeningTitle } from './title'
+import { hasLowerThird } from './lowerThird'
+import { describeProtect } from './protect'
+import { describeSceneRemove, sceneForSpan } from './sceneRemove'
+import { DEFAULT_ZOOM_SCALE, zoomCommand, zoomPlacement } from './zoom'
+import { describeRedaction, redactionCommand, redactionPlacement } from './redaction'
 import { formatClock } from './time'
 
 export { hasUncollapsedRetakes }
@@ -34,15 +48,79 @@ export interface SuggestTask {
   findRetakes: boolean
   collapseRetakes: boolean
   showWatch: boolean
+  showZoom: boolean
+  showTitle: boolean
+  showLowerThird: boolean
   showPace: boolean
   showPreviewToggle: boolean
   fillerCount: number
+  showMarkedExport: boolean
 }
 
 export function formatSpan(seconds: number): string {
   if (seconds < 0.05) return 'a moment'
   if (seconds < 10) return `${seconds.toFixed(1)} seconds`
   return `${Math.round(seconds)} seconds`
+}
+
+export function toastForCommand(command: Command): string | null {
+  if (command.type === 'cutPreviousSentence') return 'Cut the previous sentence. Undo to put it back.'
+  if (command.type === 'cutSentence') return 'Cut this sentence. Undo to put it back.'
+  if (command.type === 'resolveSuggestion' && command.resolution === 'cut') {
+    return 'Removed the pause. Undo to put it back.'
+  }
+  if (command.type === 'resolveSuggestion' && command.resolution === 'keep') {
+    return 'Protected. Auto Edit will skip this.'
+  }
+  if (command.type === 'resolveSuggestion' && command.resolution === 'demo') {
+    return 'Silent demo. Auto Edit will skip pauses here.'
+  }
+  if (command.type === 'revertSuggestion' || command.type === 'revertAt') return 'Put the pause back.'
+  if (command.type === 'addRedaction') return 'Blur on the picture. Drag the box over what should stay hidden.'
+  if (command.type === 'setAudioMaster' && command.patch.normalize === true) {
+    return 'Voice will hit -16 LUFS on export. Undo to leave the recording as-is.'
+  }
+  if (command.type === 'setAudioMaster' && command.patch.normalize === false) {
+    return 'Export will keep the recording’s loudness.'
+  }
+  if (command.type === 'addLowerThirds') {
+    return 'Chapter names on the tape. Edit any one, then Apply style to all titles.'
+  }
+  if (command.type === 'setCaptionStyleAll') return 'This look is on every title and caption.'
+  return null
+}
+
+export function toastForEdit(project: Project, command: Command): string | null {
+  if (command.type === 'deleteRange' && !command.lift) {
+    const scene = sceneForSpan(project, command.start, command.end)
+    if (scene) return describeSceneRemove(scene)
+    return 'Removed the pause. Undo to put it back.'
+  }
+  const known = toastForCommand(command)
+  if (known) return known
+  if (command.type === 'toggleWords' && !command.lift && isParagraphSelection(project.transcript.words, command.wordIds)) {
+    return 'Removed the paragraph. Undo to put it back.'
+  }
+  if (command.type === 'addTag' && (command.kind === 'keep' || command.kind === 'demo')) {
+    return describeProtect(project, command.start, command.end, command.kind)
+  }
+  return null
+}
+
+export function commandForGapDoubleClick(project: Project, start: number, end: number): Command | null {
+  const review = reviewGap(project, start, end)
+  if ((review.kind === 'activity' || review.kind === 'still') && review.suggestion) {
+    return { type: 'resolveSuggestion', suggestionId: review.suggestion.id, resolution: 'cut' }
+  }
+  if ((review.kind === 'static' || review.kind === 'loud') && review.suggestion) {
+    return { type: 'applySuggestion', suggestionId: review.suggestion.id }
+  }
+  if (review.kind === 'cut') {
+    if (review.suggestion) return { type: 'revertSuggestion', suggestionId: review.suggestion.id }
+    return { type: 'revertAt', start, end }
+  }
+  if (review.kind === 'demo') return null
+  return { type: 'deleteRange', start, end, source: 'transcript' }
 }
 
 export function countLabel(n: number, unit: string): string {
@@ -97,14 +175,14 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
     if (sug?.applied) {
       choices.push({
         id: 'keep-all',
-        label: 'Keep all takes',
+        label: 'Put back',
         consequence: 'Puts the dropped attempt back.',
         command: commandForScene(project, scene, 'revert')
       })
     } else if (scene.kind === 'retake') {
       choices.push({
         id: 'use-take',
-        label: 'Use final take',
+        label: 'Use later take',
         consequence: 'Drops this attempt. The later take stays.',
         command: commandForScene(project, scene, 'apply')
       })
@@ -117,6 +195,17 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
         command: { type: 'keepTake', sceneId: scene.id }
       })
     }
+  }
+
+  const caret = selectedWordIds[0] ?? live[0]?.id
+  const restart = caret && live.length ? restartBeforeWord(project.transcript.words, caret) : null
+  if (restart && caret) {
+    choices.push({
+      id: 'cut-prev',
+      label: 'Cut previous sentence',
+      consequence: `Removes ${formatSpan(restart.end - restart.start)} before this line and closes the gap.`,
+      command: { type: 'cutPreviousSentence', wordId: caret }
+    })
   }
 
   const allFillers = live.length > 0 && live.every((w) => isFillerToken(w.text))
@@ -148,10 +237,13 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
       })
     }
   } else {
+    const paragraph = isParagraphSelection(project.transcript.words, selectedWordIds)
     choices.push({
       id: 'remove',
-      label: 'Remove',
-      consequence: `Removes ${formatSpan(dur)} and closes the gap. Captions stay in sync.`,
+      label: paragraph ? 'Remove paragraph' : 'Remove',
+      consequence: paragraph
+        ? `Removes this ${formatSpan(dur)} stretch and closes the gap.`
+        : `Removes ${formatSpan(dur)} and closes the gap. Captions stay in sync.`,
       command: { type: 'toggleWords', wordIds: selectedWordIds }
     })
     if (dur > 1.2) {
@@ -162,6 +254,13 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
         command: { type: 'tightenRange', start: span.start, end: span.end }
       })
     }
+    const zoom = zoomPlacement(project, span.start, selectedWordIds, scene?.id ?? null)
+    choices.push({
+      id: 'zoom',
+      label: 'Add zoom',
+      consequence: `Punches in at ${DEFAULT_ZOOM_SCALE}× for ${formatSpan(zoom.duration)}. Scale is in Transform.`,
+      command: zoomCommand(zoom)
+    })
   }
 
   if (!project.tags.some((t) => t.kind === 'keep' && t.start <= span.start && t.end >= span.end)) {
@@ -179,16 +278,65 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
   }
 }
 
+function retakeTaskCopy(project: Project): { headline: string; reviewLabel: string; reviewCount: number } | null {
+  const live = uncollapsedRetakeCount(project)
+  const dropped = droppedRetakeCount(project)
+  if (live > 0) {
+    return {
+      headline: `${live} retake${live === 1 ? '' : 's'}. Hear the first, then Use later take.`,
+      reviewLabel: `Review ${live} retake${live === 1 ? '' : 's'}`,
+      reviewCount: live
+    }
+  }
+  if (dropped > 0) {
+    return {
+      headline: `Dropped ${dropped} false take${dropped === 1 ? '' : 's'}. Put one back if that was the good line.`,
+      reviewLabel: `Review ${dropped} take${dropped === 1 ? '' : 's'}`,
+      reviewCount: dropped
+    }
+  }
+  return null
+}
+
+export function markedRange(project: Project): { start: number; end: number; duration: number } | null {
+  if (project.markIn == null || project.markOut == null) return null
+  const start = Math.min(project.markIn, project.markOut)
+  const end = Math.max(project.markIn, project.markOut)
+  const duration = end - start
+  if (duration < 0.05) return null
+  return { start, end, duration }
+}
+
+function attachMarkedExport(project: Project, task: Omit<SuggestTask, 'showMarkedExport'>): SuggestTask {
+  const marked = markedRange(project)
+  if (!marked) return { ...task, showMarkedExport: false }
+  return {
+    ...task,
+    showMarkedExport: true,
+    headline: `Clip marked · ${formatSpan(marked.duration)}. Cut it, export it, or Clear marks for the next one.`
+  }
+}
+
 export function suggestTask(project: Project): SuggestTask {
+  return attachMarkedExport(project, buildSuggestTask(project))
+}
+
+function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport'> {
   const pending = project.suggestions.filter((s) => !s.applied)
   const applied = project.suggestions.filter((s) => s.applied)
   const safe = safeEditCandidates(project)
   const review = pending.filter((s) => !safe.includes(s))
+  const activities = leftoverItems(project, 'activity')
   const stills = leftoverItems(project, 'still')
   const statics = leftoverItems(project, 'static')
   const hots = leftoverItems(project, 'loud')
-  const findRetakes = (project.scenes ?? []).every((s) => s.kind !== 'retake') && applied.length === 0
+  const findRetakes =
+    project.transcript.words.length > 0 && (project.scenes ?? []).every((s) => s.kind !== 'retake')
   const collapseRetakes = hasUncollapsedRetakes(project)
+  const leftoverPriority = activities.length || stills.length || statics.length || hots.length
+  const showZoom = applied.length > 0 && leftoverPriority === 0
+  const showTitle = showZoom && !hasOpeningTitle(project)
+  const showLowerThird = showZoom && !hasLowerThird(project)
   const fillerCount = pending.filter(
     (s) => s.type === 'filler' && !s.blockedBy && (s.action === 'cut' || s.action === 'speed')
   ).length
@@ -196,30 +344,37 @@ export function suggestTask(project: Project): SuggestTask {
   if (!project.transcript.words.length) {
     if (applied.length) {
       return {
-        headline: stills.length
-          ? `First edit done. ${stills.length} silent still${stills.length === 1 ? '' : 's'} need a listen. Transcribing…`
-          : statics.length
-            ? `First edit done. ${statics.length} static screen${statics.length === 1 ? '' : 's'} can be sped up. Transcribing…`
-            : hots.length
-              ? `First edit done. ${hots.length} hot spike${hots.length === 1 ? '' : 's'} can be quieted. Transcribing…`
-              : review.length
-                ? `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need review. Transcribing…`
-                : 'First edit done. Transcribing…',
+        headline: activities.length
+          ? `First edit done. ${activities.length} quiet picture change${activities.length === 1 ? '' : 's'} need${activities.length === 1 ? 's' : ''} a listen. Transcribing…`
+          : stills.length
+            ? `First edit done. ${stills.length} silent still${stills.length === 1 ? '' : 's'} need a listen. Transcribing…`
+            : statics.length
+              ? `First edit done. ${statics.length} static screen${statics.length === 1 ? '' : 's'} can be sped up. Transcribing…`
+              : hots.length
+                ? `First edit done. ${hots.length} hot spike${hots.length === 1 ? '' : 's'} can be quieted. Transcribing…`
+                : review.length
+                  ? `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need review. Transcribing…`
+                  : 'First edit done. Transcribing…',
         applyLabel: safe.length ? `Apply ${safe.length} safe` : null,
-        reviewLabel: stills.length
-          ? `Review ${stills.length} stills`
-          : statics.length
-            ? `Review ${statics.length} screen${statics.length === 1 ? '' : 's'}`
-            : hots.length
-              ? `Review ${hots.length} spike${hots.length === 1 ? '' : 's'}`
-              : review.length
-                ? `Review ${review.length}`
-                : 'Review',
-        reviewCount: stills.length || statics.length || hots.length || review.length,
+        reviewLabel: activities.length
+          ? `Review ${activities.length} change${activities.length === 1 ? '' : 's'}`
+          : stills.length
+            ? `Review ${stills.length} stills`
+            : statics.length
+              ? `Review ${statics.length} screen${statics.length === 1 ? '' : 's'}`
+              : hots.length
+                ? `Review ${hots.length} spike${hots.length === 1 ? '' : 's'}`
+                : review.length
+                  ? `Review ${review.length}`
+                  : 'Review',
+        reviewCount: activities.length || stills.length || statics.length || hots.length || review.length,
         safeCount: safe.length,
         findRetakes: false,
         collapseRetakes,
         showWatch: true,
+        showZoom,
+        showTitle,
+        showLowerThird,
         showPace: false,
         showPreviewToggle: false,
         fillerCount: 0
@@ -235,6 +390,9 @@ export function suggestTask(project: Project): SuggestTask {
         findRetakes: false,
         collapseRetakes,
         showWatch: false,
+        showZoom: false,
+        showTitle: false,
+        showLowerThird: false,
         showPace: true,
         showPreviewToggle: true,
         fillerCount: 0
@@ -249,6 +407,9 @@ export function suggestTask(project: Project): SuggestTask {
       findRetakes: false,
       collapseRetakes: false,
       showWatch: false,
+      showZoom: false,
+      showTitle: false,
+      showLowerThird: false,
       showPace: false,
       showPreviewToggle: false,
       fillerCount: 0
@@ -264,48 +425,72 @@ export function suggestTask(project: Project): SuggestTask {
       findRetakes,
       collapseRetakes,
       showWatch: false,
+      showZoom: false,
+      showTitle: false,
+      showLowerThird: false,
       showPace: true,
       showPreviewToggle: true,
       fillerCount
     }
   }
   if (applied.length && review.length) {
+    const leftovers = activities.length || stills.length || statics.length || hots.length
+    const retakes = leftovers ? null : retakeTaskCopy(project)
     return {
-      headline: stills.length
-        ? `First edit done. ${stills.length} silent still${stills.length === 1 ? '' : 's'} need a listen.`
-        : statics.length
-          ? `First edit done. ${statics.length} static screen${statics.length === 1 ? '' : 's'} can be sped up.`
-          : hots.length
-            ? `First edit done. ${hots.length} hot spike${hots.length === 1 ? '' : 's'} can be quieted.`
-            : `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need${review.length === 1 ? 's' : ''} review.`,
+      headline: activities.length
+        ? `First edit done. ${activities.length} quiet picture change${activities.length === 1 ? '' : 's'} need${activities.length === 1 ? 's' : ''} a listen.`
+        : stills.length
+          ? `First edit done. ${stills.length} silent still${stills.length === 1 ? '' : 's'} need a listen.`
+          : statics.length
+            ? `First edit done. ${statics.length} static screen${statics.length === 1 ? '' : 's'} can be sped up.`
+            : hots.length
+              ? `First edit done. ${hots.length} hot spike${hots.length === 1 ? '' : 's'} can be quieted.`
+              : retakes
+                ? retakes.headline
+                : `First edit done. ${review.length} decision${review.length === 1 ? '' : 's'} need${review.length === 1 ? 's' : ''} review.`,
       applyLabel: safe.length ? `Apply ${safe.length} safe` : null,
-      reviewLabel: stills.length
-        ? `Review ${stills.length} stills`
-        : statics.length
-          ? `Review ${statics.length} screen${statics.length === 1 ? '' : 's'}`
-          : hots.length
-            ? `Review ${hots.length} spike${hots.length === 1 ? '' : 's'}`
-            : `Review ${review.length}`,
-      reviewCount: stills.length || statics.length || hots.length || review.length,
+      reviewLabel: activities.length
+        ? `Review ${activities.length} change${activities.length === 1 ? '' : 's'}`
+        : stills.length
+          ? `Review ${stills.length} stills`
+          : statics.length
+            ? `Review ${statics.length} screen${statics.length === 1 ? '' : 's'}`
+            : hots.length
+              ? `Review ${hots.length} spike${hots.length === 1 ? '' : 's'}`
+              : retakes
+                ? retakes.reviewLabel
+                : `Review ${review.length}`,
+      reviewCount: leftovers || retakes?.reviewCount || review.length,
       safeCount: safe.length,
-      findRetakes: false,
+      findRetakes,
       collapseRetakes,
       showWatch: true,
+      showZoom,
+      showTitle,
+      showLowerThird,
       showPace: false,
       showPreviewToggle: false,
       fillerCount
     }
   }
   if (applied.length && !pending.length) {
+    const retakes = retakeTaskCopy(project)
     return {
-      headline: 'Edit applied. Watch the result or export.',
+      headline: retakes
+        ? retakes.headline
+        : findRetakes
+          ? 'Edit applied. Find retakes, or watch the result.'
+          : 'Edit applied. Add a title, a name on screen, punch in on the UI, watch at 1.5×, or export.',
       applyLabel: null,
-      reviewLabel: 'Review',
-      reviewCount: 0,
+      reviewLabel: retakes?.reviewLabel ?? 'Review',
+      reviewCount: retakes?.reviewCount ?? 0,
       safeCount: 0,
-      findRetakes: false,
-      collapseRetakes: false,
+      findRetakes,
+      collapseRetakes,
       showWatch: true,
+      showZoom,
+      showTitle,
+      showLowerThird,
       showPace: false,
       showPreviewToggle: false,
       fillerCount: 0
@@ -322,6 +507,9 @@ export function suggestTask(project: Project): SuggestTask {
     findRetakes,
     collapseRetakes,
     showWatch: applied.length > 0,
+    showZoom,
+    showTitle,
+    showLowerThird,
     showPace: safe.length > 0 && applied.length === 0,
     showPreviewToggle: safe.length > 0 && applied.length === 0,
     fillerCount
@@ -478,8 +666,11 @@ function suggestionSafetyExplanation(project: Project, suggestion: EditSuggestio
       return 'This stretch is hotter than the rest of the reel. Hear it, then Quiet or Keep.'
     }
     if (suggestion.type === 'repeat') return 'Possible retake — pick which attempt to keep.'
+    if (leftoverKind(suggestion) === 'activity') {
+      return 'The picture changed while no one was talking — a click-through, or a fidget. Hear it, then Silent demo, Speed, or Cut.'
+    }
     if (leftoverKind(suggestion) === 'still') {
-      return 'The picture is still while the room is quiet — a silent demo, or dead air. Hear it, then Cut or Keep.'
+      return 'The picture is still while the room is quiet — a silent demo hold, or dead air. Hear it, then Cut, Silent demo, or Speed.'
     }
     if (suggestion.action === 'review') return 'Flagged for manual review before applying.'
     if (suggestion.type === 'silence') return 'Long or unusual pause — worth a quick listen.'
@@ -501,7 +692,58 @@ function suggestionSafetyExplanation(project: Project, suggestion: EditSuggestio
 export function gapInspectorDetail(project: Project, start: number, end: number): GapInspectorDetail | null {
   if (end <= start) return null
   const dur = end - start
-  if (coveringAppliedSuggestion(project, start, end)) return null
+
+  const leftover = leftoverForSpan(project, start, end)
+  if (leftover) {
+    const sug = suggestionInspectorDetail(project, leftover.id)
+    if (sug) {
+      return {
+        title: sug.title,
+        headline: sug.headline,
+        clock: sug.clock,
+        explanation: sug.explanation,
+        actions: sug.actions,
+        similarSafeCount: 0,
+        nextHint: sug.nextHint ?? 'Double-click the pause chip to cut. Silent demo keeps a walkthrough.',
+        next: sug.next
+      }
+    }
+  }
+
+  const review = reviewGap(project, start, end)
+  if (review.kind === 'cut') {
+    return {
+      title: 'Cut pause',
+      headline: `${dur.toFixed(1)} second pause removed`,
+      clock: `${formatClock(start)}–${formatClock(end)}`,
+      explanation: 'Most of this pause is already out of the reel.',
+      actions: [
+        {
+          id: 'put-back',
+          label: 'Put back',
+          consequence: `Restores ${formatSpan(dur)} of air.`,
+          command: review.suggestion
+            ? { type: 'revertSuggestion', suggestionId: review.suggestion.id }
+            : { type: 'revertAt', start, end },
+          primary: true
+        },
+        {
+          id: 'keep',
+          label: 'Protect',
+          consequence: 'Puts the air back. Auto Edit will skip this next time.',
+          command: { type: 'addTag', start: review.start, end: review.end, kind: 'keep' }
+        }
+      ],
+      similarSafeCount: 0,
+      nextHint: 'Protect if this was think-aloud or a click-through you still need.',
+      next: (() => {
+        const target = nextPauseAfter(project, end)
+        return target
+          ? { label: 'Next pause →', gap: { start: target.start, end: target.end }, suggestionId: target.suggestionId }
+          : undefined
+      })()
+    }
+  }
 
   const tag = tagAt(project.tags, (start + end) / 2)
   const isCut = project.cuts.some((c) => c.start <= start + 0.05 && c.end >= end - 0.05)
@@ -518,7 +760,15 @@ export function gapInspectorDetail(project: Project, start: number, end: number)
       command: { type: 'revertAt', start, end },
       primary: true
     })
-  } else if (!tag || tag.kind !== 'keep') {
+    if (!tag || tag.kind !== 'keep') {
+      actions.push({
+        id: 'keep',
+        label: 'Protect',
+        consequence: 'Puts the air back. Auto Edit will skip this next time.',
+        command: { type: 'addTag', start, end, kind: 'keep' }
+      })
+    }
+  } else if (review.kind !== 'demo' && (!tag || tag.kind !== 'keep')) {
     actions.push({
       id: 'remove',
       label: 'Remove pause',
@@ -563,8 +813,9 @@ export function gapInspectorDetail(project: Project, start: number, end: number)
   }
 
   let explanation = isCut ? 'This pause was removed from the reel.' : 'Dead air between words.'
-  if (tag?.kind === 'demo') explanation = 'Marked as a silent product demo. Auto Edit skips it.'
-  else if (tag?.kind === 'keep') explanation = 'Protected. Auto Edit will not cut here.'
+  if (review.kind === 'demo' || tag?.kind === 'demo') {
+    explanation = 'Silent demo is in this pause. Double-click will not cut the walkthrough.'
+  } else if (tag?.kind === 'keep') explanation = 'Protected. Auto Edit will not cut here.'
   else if (dur > 3) explanation = 'Long pause — often safe to remove when nothing happens on screen.'
 
   return {
@@ -587,6 +838,8 @@ export function gapInspectorDetail(project: Project, start: number, end: number)
 }
 
 export function pendingSuggestionForGap(project: Project, start: number, end: number): EditSuggestion | undefined {
+  const leftover = leftoverForSpan(project, start, end)
+  if (leftover) return leftover
   return project.suggestions.find(
     (s) =>
       !s.applied &&
@@ -626,6 +879,9 @@ export function wordsInspectorDetail(project: Project, selectedWordIds: string[]
   } else if (scene?.kind === 'retake') {
     title = 'Retake'
     headline = `${scene.title} · ${summary}`
+  } else if (isParagraphSelection(project.transcript.words, selectedWordIds)) {
+    title = 'Paragraph'
+    headline = `Paragraph · ${summary}`
   } else if (scene) {
     title = scene.kind === 'demo' ? 'Demo section' : 'Scene'
     headline = `${scene.title} · ${summary}`
@@ -642,6 +898,13 @@ export function wordsInspectorDetail(project: Project, selectedWordIds: string[]
   else if (pendingReview) nextHint = `${pendingReview} nearby edit${pendingReview === 1 ? '' : 's'} still need review.`
   else if (allFillers && live.length === 1)
     nextHint = 'All fillers removes every um, uh, and you know in one pass.'
+  else if (live.length && isParagraphSelection(project.transcript.words, selectedWordIds))
+    nextHint = 'Delete removes this paragraph and closes the gap.'
+  else if (live.length && restartBeforeWord(project.transcript.words, selectedWordIds[0] ?? live[0].id))
+    nextHint = '`,` cuts the previous sentence if this line was a restart.'
+  else if (live.length && captionClipsOf(project).some((clip) => clip.auto))
+    nextHint = 'Fix a name here — captions follow.'
+  else if (live.length) nextHint = 'Copy quote pastes the speaker and time for Slack or a deck.'
 
   return {
     title,
@@ -677,7 +940,7 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
     if (dropped) {
       actions.push({
         id: 'keep-all',
-        label: 'Keep all takes',
+        label: 'Put back',
         consequence: 'Puts the dropped attempt back.',
         command: commandForScene(project, scene, 'revert'),
         primary: true
@@ -687,7 +950,7 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
       const saved = later.reduce((sum, s) => sum + (s.end - s.start), 0)
       actions.push({
         id: 'use-final',
-        label: 'Use final take',
+        label: 'Use later take',
         consequence:
           later.length > 1
             ? `Keeps the successful later attempt${saved > 1 ? ` and shortens the reel by about ${formatSpan(saved)}` : ''}.`
@@ -738,6 +1001,21 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
     })
   }
 
+  const zoom = zoomPlacement(project, scene.start, [], scene.id)
+  actions.push({
+    id: 'zoom',
+    label: 'Add zoom',
+    consequence: `Punches in at ${DEFAULT_ZOOM_SCALE}× for ${formatSpan(zoom.duration)}. Scale is in Transform.`,
+    command: zoomCommand(zoom)
+  })
+  const redact = redactionPlacement(project, scene.start, [], scene.id)
+  actions.push({
+    id: 'redact',
+    label: 'Add redaction',
+    consequence: describeRedaction(redact),
+    command: redactionCommand(redact)
+  })
+
   let title = 'Scene'
   let headline = scene.title
   let explanation = scene.summary || 'Editorial scene from the transcript.'
@@ -764,7 +1042,11 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
     excerpt: excerpt || undefined,
     takeCount: family.length,
     actions,
-    nextHint: family.length > 1 && !dropped ? 'Compare takes to hear each attempt before deciding.' : undefined
+    nextHint: family.length > 1
+      ? dropped
+        ? 'Hear this take. Put it back if it was the good line.'
+        : 'Hear this take, then Use later take or Keep this take.'
+      : undefined
   }
 }
 
@@ -798,6 +1080,14 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
       command: { type: 'revertSuggestion', suggestionId: suggestion.id },
       primary: true
     })
+    if (suggestion.type === 'silence') {
+      actions.push({
+        id: 'keep',
+        label: 'Protect',
+        consequence: 'Puts the air back. Auto Edit will skip this next time.',
+        command: { type: 'addTag', start: suggestion.start, end: suggestion.end, kind: 'keep' }
+      })
+    }
   } else if (suggestion.blockedBy) {
     actions.push({
       id: 'skip',
@@ -807,22 +1097,55 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
       primary: true
     })
   } else if (suggestion.action === 'review') {
-    if (leftoverKind(suggestion) === 'still') {
+    const quiet = leftoverKind(suggestion) === 'still' || leftoverKind(suggestion) === 'activity'
+    if (quiet && leftoverKind(suggestion) === 'activity') {
+      actions.push({
+        id: 'demo',
+        label: 'Silent demo',
+        consequence: `Keeps this ${formatSpan(dur)}. Auto Edit will skip it next time.`,
+        command: { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'demo' },
+        primary: true
+      })
+      actions.push({
+        id: 'speed',
+        label: 'Speed 4×',
+        consequence: `Plays this ${formatSpan(dur)} at 4× so the click-through is shorter.`,
+        command: { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'speed' }
+      })
+    }
+    if (quiet) {
       actions.push({
         id: 'cut',
         label: 'Cut',
-        consequence: `Removes ${formatSpan(dur)} if this is dead air, not a silent demo.`,
-        command: { type: 'applySuggestion', suggestionId: suggestion.id }
+        consequence:
+          leftoverKind(suggestion) === 'activity'
+            ? `Removes ${formatSpan(dur)} if this was a fidget, not a walkthrough.`
+            : `Removes ${formatSpan(dur)} if this is dead air, not a silent demo.`,
+        command: { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'cut' }
+      })
+    }
+    if (quiet && leftoverKind(suggestion) === 'still') {
+      actions.push({
+        id: 'demo',
+        label: 'Silent demo',
+        consequence: `Keeps this ${formatSpan(dur)}. Auto Edit will skip it next time.`,
+        command: { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'demo' }
+      })
+      actions.push({
+        id: 'speed',
+        label: 'Speed 4×',
+        consequence: `Plays this ${formatSpan(dur)} at 4× so the wait is shorter.`,
+        command: { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'speed' }
       })
     }
     actions.push({
       id: 'keep',
       label: 'Keep',
-      consequence: leftoverKind(suggestion) === 'still'
-        ? 'Leaves this still in the reel — tag Demo if Auto Edit should skip it later.'
+      consequence: quiet
+        ? `Keeps this ${formatSpan(dur)}. Auto Edit will skip it next time.`
         : 'Dismisses this suggestion without cutting.',
-      command: { type: 'dismissSuggestion', suggestionId: suggestion.id },
-      primary: true
+      command: { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'keep' },
+      primary: leftoverKind(suggestion) !== 'activity'
     })
   } else {
     actions.push({
@@ -868,22 +1191,28 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
 
   let nextHint: string | undefined
   const reviewLeft = project.suggestions.filter((s) => !s.applied && !s.safe).length
-  if (!suggestion.applied && reviewLeft > 1) nextHint = `${reviewLeft - 1} other uncertain edit${reviewLeft === 2 ? '' : 's'} waiting in review.`
+  if (suggestion.applied && suggestion.type === 'silence') {
+    nextHint = 'Protect if this was think-aloud or a click-through you still need.'
+  } else if (!suggestion.applied && reviewLeft > 1) {
+    nextHint = `${reviewLeft - 1} other uncertain edit${reviewLeft === 2 ? '' : 's'} waiting in review.`
+  }
   const nextSug = nextPendingSuggestionAfter(project, suggestion.id)
 
   return {
     title:
-      leftoverKind(suggestion) === 'still'
-        ? 'Silent still'
-        : leftoverKind(suggestion) === 'static'
-          ? 'Static screen'
-          :       leftoverKind(suggestion) === 'low-motion'
-            ? 'Talking over still'
-            : leftoverKind(suggestion) === 'loud'
-              ? 'Hot audio'
-              : suggestion.type === 'silence'
-              ? 'Pause'
-              : suggestion.type,
+      leftoverKind(suggestion) === 'activity'
+        ? 'Quiet picture change'
+        : leftoverKind(suggestion) === 'still'
+          ? 'Silent still'
+          : leftoverKind(suggestion) === 'static'
+            ? 'Static screen'
+            : leftoverKind(suggestion) === 'low-motion'
+              ? 'Talking over still'
+              : leftoverKind(suggestion) === 'loud'
+                ? 'Hot audio'
+                : suggestion.type === 'silence'
+                  ? 'Pause'
+                  : suggestion.type,
     headline: suggestion.label,
     clock: `${formatClock(suggestion.start)}–${formatClock(suggestion.end)}${suggestion.safe ? ' · safe' : ' · review'}`,
     explanation: suggestionSafetyExplanation(project, suggestion),

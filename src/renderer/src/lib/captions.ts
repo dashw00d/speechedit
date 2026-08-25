@@ -8,8 +8,9 @@ import {
   type TitlePreset,
   type Word
 } from '../types'
+import { overlap } from './edl'
 import { sourceToProgramOf } from './resolver'
-import { uid } from './time'
+import { formatYoutubeClock, uid } from './time'
 import { prettySpeakerName, splitVoiceTag } from './diarize'
 import { transcriptIsPlaceholder } from './transcript'
 import { revealStackTrack } from './timelineTracks'
@@ -156,10 +157,80 @@ export function withCaptionClips(project: Project, clips: Clip[]): Project {
   }
 }
 
+function clipSpan(clip: Clip): { start: number; end: number } {
+  return { start: clip.start, end: clip.start + clip.duration }
+}
+
+/** Handmade titles and edited cards. Auto cards are safe to rebuild. */
+export function keepManualCaptionClips(project: Project): Clip[] {
+  return captionClipsOf(project).filter((clip) => Boolean(clip.text) && !clip.auto && !clip.assetId)
+}
+
+export function captionsNeedFilling(project: Project): boolean {
+  if (!transcriptReadyForCaptions(project)) return false
+  const live = project.transcript.words.filter((word) => !word.deleted)
+  const caps = captionClipsOf(project)
+  if (!caps.length) return true
+  const uncovered = live.filter((word) => {
+    const start = sourceToProgramOf(project, word.start)
+    const end = sourceToProgramOf(project, word.end)
+    return !caps.some((clip) => overlap({ start, end }, clipSpan(clip)) > 0.02)
+  })
+  return uncovered.length >= 3
+}
+
 export function withGeneratedCaptions(project: Project, opts: CaptionBuildOptions = {}): Project {
-  const clips = wordsToCaptions(project, opts)
-  if (!clips.length) return project
-  return withCaptionClips(project, clips)
+  const generated = wordsToCaptions(project, opts)
+  const keep = keepManualCaptionClips(project)
+  if (!generated.length) return keep.length ? withCaptionClips(project, keep) : project
+  const fresh = generated.filter((clip) => !keep.some((held) => overlap(clipSpan(clip), clipSpan(held)) > 0.25))
+  return withCaptionClips(project, [...keep, ...fresh].sort((a, b) => a.start - b.start))
+}
+
+function wordsCoveringClip(project: Project, clip: Clip): Word[] {
+  const clipEnd = clip.start + clip.duration
+  return project.transcript.words.filter((word) => {
+    if (word.deleted) return false
+    const start = sourceToProgramOf(project, word.start)
+    const end = sourceToProgramOf(project, word.end)
+    const lo = Math.min(start, end)
+    const hi = Math.max(start, end)
+    if (hi > lo + 1e-4) return lo < clipEnd && hi > clip.start
+    return word.start < clipEnd && word.end > clip.start
+  })
+}
+
+/** Rebuild auto caption cards that cover these words. Manual titles and edited cards stay. */
+export function syncAutoCaptionsForWords(project: Project, wordIds: string[]): Project {
+  if (!wordIds.length) return project
+  const wanted = new Set(wordIds)
+  if (!project.transcript.words.some((word) => wanted.has(word.id))) return project
+
+  let changed = false
+  const tracks = project.tracks.map((track) => {
+    if (track.type !== 'caption') return track
+    const clips = track.clips.map((clip) => {
+      if (!clip.auto || !clip.text) return clip
+      if (clip.style?.position === 'center' && (clip.style.fontSize ?? 0) >= 56) return clip
+      const group = wordsCoveringClip(project, clip)
+      if (!group.some((word) => wanted.has(word.id))) return clip
+      const text = captionText(project, group, { emphasize: true })
+      if (text === clip.text) return clip
+      changed = true
+      return { ...clip, text }
+    })
+    return changed ? { ...track, clips } : track
+  })
+  return changed ? { ...project, tracks, updatedAt: Date.now() } : project
+}
+
+export function captionsFollowed(before: Project, after: Project): boolean {
+  const prev = new Map(captionClipsOf(before).map((clip) => [clip.id, clip.text]))
+  return captionClipsOf(after).some((clip) => prev.has(clip.id) && prev.get(clip.id) !== clip.text)
+}
+
+export function toastForCaptionFollow(before: Project, after: Project): string | null {
+  return captionsFollowed(before, after) ? 'Captions follow the word.' : null
 }
 
 export function lowerThirdClips(project: Project): Clip[] {
@@ -183,6 +254,13 @@ export function lowerThirdClips(project: Project): Clip[] {
       ...emptyClipFields()
     }
   })
+}
+
+export function hasSceneLowerThirds(project: Project): boolean {
+  const wanted = lowerThirdClips(project)
+  if (wanted.length < 2) return false
+  const overlay = project.tracks.find((track) => track.type === 'overlay')?.clips ?? []
+  return wanted.every((need) => overlay.some((clip) => clip.text === need.text))
 }
 
 export function withLowerThirds(project: Project): Project {
@@ -321,15 +399,31 @@ export function projectToTranscriptMd(project: Project): string {
   return turns.map((turn) => `## ${turn.speaker}\n\n${turn.words.join(' ')}\n`).join('\n')
 }
 
+const YOUTUBE_CHAPTER_GAP = 10
+
+/** Pasteable YouTube description lines from scene headings. Retakes stay out. */
 export function projectToChapters(project: Project): string {
-  const scenes = (project.scenes ?? []).filter((s) => s.kind !== 'retake')
-  const chapters = scenes.map((scene) => ({
-    start: Number(sourceToProgramOf(project, scene.start).toFixed(3)),
-    title: scene.title,
-    summary: scene.summary,
-    kind: scene.kind
-  }))
-  return JSON.stringify({ chapters }, null, 2)
+  const scenes = (project.scenes ?? [])
+    .filter((scene) => scene.kind !== 'retake')
+    .map((scene) => ({
+      start: sourceToProgramOf(project, scene.start),
+      title: scene.title.trim() || 'Chapter'
+    }))
+    .sort((a, b) => a.start - b.start)
+  const rows: { start: number; title: string }[] = []
+  for (const scene of scenes) {
+    if (!rows.length) {
+      if (scene.start <= 0.5) rows.push({ start: 0, title: scene.title })
+      else {
+        rows.push({ start: 0, title: 'Start' })
+        if (scene.start >= YOUTUBE_CHAPTER_GAP) rows.push(scene)
+      }
+      continue
+    }
+    if (scene.start - rows[rows.length - 1]!.start < YOUTUBE_CHAPTER_GAP) continue
+    rows.push(scene)
+  }
+  return rows.map((row) => `${formatYoutubeClock(row.start)} ${row.title}`).join('\n')
 }
 
 export function serialCaptions(clips: Clip[]): Array<{

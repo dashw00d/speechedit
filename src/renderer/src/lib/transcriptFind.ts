@@ -9,6 +9,11 @@ function normalizeToken(text: string): string {
   return text.toLowerCase().replace(/[“”]/g, '"').replace(/[.,!?]/g, '')
 }
 
+/** Typing parks on the first hit. Enter / next / prev should hear the sentence. */
+export function findStepShouldHear(step: 0 | 1 | -1): boolean {
+  return step !== 0
+}
+
 /** Non-overlapping phrase hits, in transcript order. */
 export function findWordGroups(words: Word[], query: string): string[][] {
   const tokens = normalizeToken(query).split(/\s+/).filter(Boolean)

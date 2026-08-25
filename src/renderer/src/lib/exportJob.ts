@@ -67,7 +67,7 @@ export function overlayDuckWindows(project: Project): { start: number; end: numb
   return project.tracks
     .filter((t) => t.type === 'overlay' && !t.hidden && !t.muted)
     .flatMap((t) => t.clips)
-    .filter((c) => !c.muted && c.assetId && project.assets[c.assetId])
+    .filter((c) => !c.muted && (c.volume ?? 1) > 0.02 && c.assetId && project.assets[c.assetId])
     .map((c) => ({ start: c.start, end: c.start + c.duration }))
 }
 

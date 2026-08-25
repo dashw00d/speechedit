@@ -235,6 +235,7 @@ export function projectFromTake(take: InspectedTake): Project {
     analysis: {
       silence: analysis.silence,
       staticRegions: analysis.scenes.staticRegions,
+      sceneTimes: analysis.scenes.times,
       loudness: analysis.loudness
     },
     suggestions: buildSuggestions({
@@ -283,6 +284,7 @@ export function importedLooksCommands(project: Project, take: InspectedTake): Co
       analysis: {
         silence: take.analysis.silence,
         staticRegions: take.analysis.scenes.staticRegions,
+        sceneTimes: take.analysis.scenes.times,
         loudness: take.analysis.loudness
       }
     }
@@ -350,6 +352,7 @@ export async function appendTakeFromFile(
     analysis: {
       silence: take.analysis.silence,
       staticRegions: take.analysis.scenes.staticRegions,
+      sceneTimes: take.analysis.scenes.times,
       loudness: take.analysis.loudness
     }
   })

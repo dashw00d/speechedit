@@ -32,6 +32,23 @@ export function previousSentenceRange(words: Word[], wordId: string): Interval |
   return wordRange(words, sentenceIds(words, first - 1))
 }
 
+/** Previous sentence that still has live words — skip already-cut false takes. */
+export function livePreviousSentence(words: Word[], wordId: string): Interval | null {
+  const prev = previousSentenceRange(words, wordId)
+  if (!prev) return null
+  const live = words.some((w) => !w.deleted && w.end > prev.start && w.start < prev.end)
+  return live ? prev : null
+}
+
+/** Short enough to be a restart, not the previous chapter. `,` still cuts any previous sentence. */
+export const SHORT_SENTENCE = 3.6
+
+export function restartBeforeWord(words: Word[], wordId: string): Interval | null {
+  const prev = livePreviousSentence(words, wordId)
+  if (!prev || prev.end - prev.start > SHORT_SENTENCE) return null
+  return prev
+}
+
 export function sentenceIds(words: Word[], index: number): string[] {
   if (!words[index]) return []
   const stop = /[.!?]$/
@@ -128,6 +145,16 @@ export function paragraphIds(words: Word[], index: number): string[] {
   let hi = index
   while (hi < words.length - 1 && pauseBetween(words[hi], words[hi + 1]) <= PARAGRAPH_GAP + GAP_EPS) hi += 1
   return words.slice(lo, hi + 1).map((w) => w.id)
+}
+
+export function isParagraphSelection(words: Word[], ids: string[]): boolean {
+  if (ids.length < 2) return false
+  const index = words.findIndex((w) => w.id === ids[0])
+  if (index < 0) return false
+  const para = paragraphIds(words, index)
+  if (para.length < 2 || para.length !== ids.length) return false
+  const wanted = new Set(ids)
+  return para.every((id) => wanted.has(id))
 }
 
 export function caretWord(words: Word[], selectedIds: string[], sourceTime: number): Word | undefined {

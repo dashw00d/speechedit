@@ -8,15 +8,18 @@ import {
   dismissLeftoverBreaths,
   looksSafeSpans,
   safeEditCandidates,
-  startLeftoverReview
+  startLeftoverReview,
+  startRetakeReview,
+  findRetakesAndReview,
+  describeRetakeReview
 } from './firstEdit'
 import { suggestionsFromLoudness, suggestionsFromStatic } from './analysis'
 import { ffmpegImportBusy } from './mediaJobs'
-import { hasUncollapsedRetakes } from './sceneAnalysis'
+import { hasUncollapsedRetakes, retakeSceneDropped } from './sceneAnalysis'
 import { importMediaFromPath } from './fileActions'
 import { projectFromTake } from './importMedia'
 import { host } from '../host'
-import { useEditor } from '../store'
+import { useEditor, usePlayback } from '../store'
 
 async function waitUntil(pred: () => boolean, ms = 800): Promise<void> {
   const start = Date.now()
@@ -543,6 +546,61 @@ describe('safe first edit', () => {
     }
   })
 
+  test('silence with a scene change is left for review, not auto-cut', async () => {
+    const restore = stubHost({
+      probe: async () => ({
+        duration: 10,
+        hasVideo: true,
+        hasAudio: true,
+        width: 320,
+        height: 240,
+        fps: 30
+      }),
+      makeProxy: async () => {
+        throw new Error('proxy should not run for short SD')
+      },
+      waveform: async () => [0.2],
+      thumbnails: async () => [],
+      analyze: async () => ({
+        silence: [{ start: 2, end: 8 }],
+        scenes: { times: [3.4, 5.6], staticRegions: [] },
+        loudness: []
+      }),
+      transcribe: async () => [
+        { text: 'hello', start: 0.2, end: 0.6 },
+        { text: 'world', start: 8.6, end: 9.85 }
+      ],
+      beginJob: async () => undefined,
+      endJob: async () => undefined
+    })
+    const toasts: string[] = []
+    useEditor.getState().setAnalyzing(null)
+    useEditor.getState().setExporting(false)
+    try {
+      await importMediaFromPath('/tmp/se-click-through.mp4', (msg) => toasts.push(msg))
+      const project = useEditor.getState().project
+      const activity = project.suggestions.find((s) => /silent activity/i.test(s.label))
+      expect(activity?.safe).toBe(false)
+      expect(activity?.applied).toBe(false)
+      expect(activity?.action).toBe('review')
+      expect(programLength(project)).toBeCloseTo(10, 1)
+      expect(useEditor.getState().reviewing).toBe(true)
+      expect(useEditor.getState().selectedSuggestionId).toBe(activity?.id)
+      expect(toasts.some((msg) => /Quiet picture changes need a listen/.test(msg))).toBe(true)
+      const tagged = applyCommand(project, {
+        type: 'resolveSuggestion',
+        suggestionId: activity!.id,
+        resolution: 'demo'
+      })
+      expect(tagged.tags.some((tag) => tag.kind === 'demo')).toBe(true)
+      expect(tagged.suggestions.some((s) => s.id === activity!.id)).toBe(false)
+      expect(programLength(tagged)).toBeCloseTo(10, 1)
+    } finally {
+      restore()
+      useEditor.getState().setAnalyzing(null)
+    }
+  })
+
   test('still-frame silence is left for review, not auto-cut', async () => {
     const restore = stubHost({
       probe: async () => ({
@@ -698,6 +756,39 @@ describe('safe first edit', () => {
     }
   })
 
+  test('startLeftoverReview prefers a quiet picture change over a silent still', () => {
+    useEditor.getState().loadProject(
+      {
+        ...createDemoProject(),
+        suggestions: [
+          {
+            id: 'still-1',
+            type: 'silence',
+            start: 2,
+            end: 8,
+            action: 'review',
+            label: 'Silent still 5.6s',
+            safe: false,
+            applied: false
+          },
+          {
+            id: 'act-1',
+            type: 'silence',
+            start: 9,
+            end: 14,
+            action: 'review',
+            label: 'Silent activity 5.0s · picture changed — demo or dead air',
+            safe: false,
+            applied: false
+          }
+        ]
+      },
+      { clean: true }
+    )
+    expect(startLeftoverReview()).toBe('activity')
+    expect(useEditor.getState().selectedSuggestionId).toBe('act-1')
+  })
+
   test('startLeftoverReview prefers a silent still over a static screen', () => {
     const [screen] = suggestionsFromStatic([{ start: 8, end: 12 }])
     useEditor.getState().loadProject(
@@ -788,5 +879,52 @@ describe('safe first edit', () => {
     expect(left).not.toContain('b1')
     expect(left).not.toContain('p1')
     expect(left).not.toContain(talking.id)
+  })
+
+  test('startRetakeReview hears the first live retake', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    const scene = startRetakeReview()
+    expect(scene && scene.id).toBe('sc_false')
+    expect(useEditor.getState().reviewing).toBe(true)
+    expect(useEditor.getState().selectedSceneId).toBe('sc_false')
+    expect(usePlayback.getState().playing).toBe(true)
+    expect(usePlayback.getState().loopFrom).not.toBeNull()
+  })
+
+  test('startRetakeReview hears a dropped take after first-edit collapse', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    expect(applySafeFirstEdit()?.retakes).toBeGreaterThan(0)
+    const scene = startRetakeReview()
+    expect(scene).toBeTruthy()
+    expect(retakeSceneDropped(useEditor.getState().project, scene!)).toBe(true)
+    expect(useEditor.getState().selectedSceneId).toBe(scene!.id)
+    expect(describeRetakeReview(useEditor.getState().project, scene)).toMatch(/Dropped \d+ false take/)
+  })
+
+  test('findRetakesAndReview infers scenes and hears the first take', () => {
+    useEditor.getState().loadProject({ ...createDemoProject(), scenes: [] }, { clean: true })
+    const { toast, scene } = findRetakesAndReview()
+    expect(scene).toBeTruthy()
+    expect(toast).toMatch(/Found \d+ retake|Dropped \d+ false take/)
+    expect(useEditor.getState().reviewing).toBe(true)
+    expect(useEditor.getState().project.scenes.some((s) => s.kind === 'retake')).toBe(true)
+  })
+
+  test('findRetakesAndReview says so when the transcript has no retakes', () => {
+    useEditor.getState().loadProject(
+      {
+        ...createDemoProject(),
+        scenes: [],
+        suggestions: createDemoProject().suggestions.filter((s) => s.type !== 'repeat'),
+        transcript: {
+          words: [{ id: 'w1', text: 'Hello', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false }],
+          speakers: [{ id: 'ryan', name: 'Ryan', color: '#C4452D' }]
+        }
+      },
+      { clean: true }
+    )
+    const { toast, scene } = findRetakesAndReview()
+    expect(scene).toBe(false)
+    expect(toast).toBe('No retakes in this transcript.')
   })
 })

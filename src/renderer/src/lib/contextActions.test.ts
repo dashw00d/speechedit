@@ -10,11 +10,19 @@ import {
   sceneInspectorDetail,
   suggestTask,
   suggestionInspectorDetail,
+  commandForGapDoubleClick,
+  gapInspectorDetail,
+  pendingSuggestionForGap,
+  toastForCommand,
+  toastForEdit,
   transcriptChoices,
   wordsInspectorDetail
 } from './contextActions'
-import { suggestionsFromLoudness, suggestionsFromSilence, suggestionsFromStatic } from './analysis'
-import { createDemoProject } from './demo'
+import { leftoverKind, suggestionsFromLoudness, suggestionsFromSilence, suggestionsFromStatic } from './analysis'
+import { createDemoProject, createEmptyProject } from './demo'
+import { paragraphIds } from './transcriptEdit'
+import { selectParagraphFromContext } from './scriptActions'
+import { useEditor, usePlayback } from '../store'
 
 describe('transcript context choices', () => {
   test('selected live words offer Remove with a duration consequence', () => {
@@ -32,6 +40,28 @@ describe('transcript context choices', () => {
     expect(choices.length).toBeGreaterThanOrEqual(2)
     expect(choices.length).toBeLessThanOrEqual(4)
     expect(choices.some((c) => c.id === 'keep')).toBe(true)
+  })
+
+  test('a full paragraph offers Remove paragraph and a cut toast', () => {
+    const project = createDemoProject()
+    const ids = paragraphIds(project.transcript.words, 0)
+    expect(ids.length).toBeGreaterThan(2)
+    const { choices, summary } = transcriptChoices(project, ids)
+    expect(summary).toMatch(/words/)
+    expect(choices.find((c) => c.id === 'remove')?.label).toBe('Remove paragraph')
+    expect(toastForEdit(project, { type: 'toggleWords', wordIds: ids })).toMatch(/Removed the paragraph/)
+    const detail = wordsInspectorDetail(project, ids)
+    expect(detail?.title).toBe('Paragraph')
+    expect(detail?.nextHint).toMatch(/Delete removes this paragraph/)
+  })
+
+  test('selectParagraphFromContext points at Delete', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    usePlayback.getState().seekProgram(0.7)
+    const result = selectParagraphFromContext()
+    expect(result.count).toBeGreaterThan(2)
+    expect(result.toast).toMatch(/Delete removes it/)
+    expect(useEditor.getState().selectedWordIds.length).toBe(result.count)
   })
 
   test('a filler token is Remove filler, still on the command bus', () => {
@@ -58,7 +88,7 @@ describe('transcript context choices', () => {
     expect(restored.transcript.words.find((w) => w.id === um.id)?.deleted).toBe(false)
   })
 
-  test('the demo false take offers Use final take / Keep this take', () => {
+  test('the demo false take offers Use later take / Keep this take', () => {
     const project = createDemoProject()
     const take = project.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7)
     const { choices } = transcriptChoices(
@@ -67,7 +97,7 @@ describe('transcript context choices', () => {
     )
     expect(choices.some((c) => c.id === 'use-take')).toBe(true)
     const use = choices.find((c) => c.id === 'use-take')
-    expect(use?.label).toBe('Use final take')
+    expect(use?.label).toBe('Use later take')
     const next = applyCommand(project, use!.command)
     expect(next.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7).every((w) => w.deleted)).toBe(true)
     const keep = choices.find((c) => c.id === 'keep-take')
@@ -75,6 +105,35 @@ describe('transcript context choices', () => {
       const kept = applyCommand(project, keep.command)
       expect(kept.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7).some((w) => !w.deleted)).toBe(true)
     }
+  })
+
+  test('a short live previous line offers Cut previous sentence', () => {
+    const project = createDemoProject()
+    const thats = project.transcript.words.find((w) => w.text === "That's")!
+    const { choices } = transcriptChoices(project, [thats.id])
+    const cutPrev = choices.find((c) => c.id === 'cut-prev')
+    expect(cutPrev?.label).toBe('Cut previous sentence')
+    expect(cutPrev?.consequence).toMatch(/closes the gap/)
+    expect(cutPrev?.command.type).toBe('cutPreviousSentence')
+    const next = applyCommand(project, cutPrev!.command)
+    expect(next.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7).every((w) => w.deleted)).toBe(true)
+    expect(next.transcript.words.find((w) => w.id === thats.id)?.deleted).toBe(false)
+    expect(toastForCommand(cutPrev!.command)).toMatch(/Undo/)
+  })
+
+  test('a long previous chapter does not steal a chip — comma still exists', () => {
+    const project = createDemoProject()
+    const first = project.transcript.words.find((w) => w.text === 'First')!
+    const { choices } = transcriptChoices(project, [first.id])
+    expect(choices.some((c) => c.id === 'cut-prev')).toBe(false)
+  })
+
+  test('an already-cut previous sentence does not offer Cut previous sentence', () => {
+    const project = createDemoProject()
+    const thats = project.transcript.words.find((w) => w.text === "That's")!
+    const collapsed = applyCommand(project, { type: 'collapseRetakes' })
+    const { choices } = transcriptChoices(collapsed, [thats.id])
+    expect(choices.some((c) => c.id === 'cut-prev')).toBe(false)
   })
 })
 
@@ -86,6 +145,17 @@ describe('suggest task copy', () => {
     expect(task.applyLabel).toMatch(/Clean \d+ pauses/)
     expect(task.reviewLabel).toMatch(/Review/)
     expect(task.showPace).toBe(true)
+    expect(task.showMarkedExport).toBe(false)
+  })
+
+  test('In–Out marks make Export marked range the next step', () => {
+    const marked = applyCommand(createDemoProject(), { type: 'setMarks', markIn: 32.1, markOut: 35.4 })
+    const task = suggestTask(marked)
+    expect(task.showMarkedExport).toBe(true)
+    expect(task.headline).toMatch(/Clip marked/)
+    expect(task.headline).toMatch(/Cut it/)
+    expect(task.headline).toMatch(/export it/)
+    expect(task.headline).toMatch(/Clear marks/)
   })
 
   test('after safe edits the bar asks to review leftovers', () => {
@@ -96,15 +166,84 @@ describe('suggest task copy', () => {
     expect(task.showWatch).toBe(true)
     expect(task.applyLabel).toBeNull()
     expect(task.reviewCount).toBeGreaterThan(0)
+    expect(task.findRetakes).toBe(false)
   })
 
-  test('silent stills get Cut and Keep in the inspector', () => {
+  test('after leftovers a reel without retake scenes still offers Find retakes', () => {
+    const [activity] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [], 20, [3.2])
+    const project = {
+      ...createEmptyProject('find-retakes'),
+      transcript: {
+        words: [{ id: 'w1', text: 'Hello', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false }],
+        speakers: [{ id: 'ryan', name: 'Ryan', color: '#C4452D' }]
+      },
+      suggestions: [{ ...activity, applied: false }],
+      scenes: []
+    }
+    expect(suggestTask(project).findRetakes).toBe(true)
+    const cleaned = {
+      ...project,
+      suggestions: [{ ...activity, applied: true, action: 'cut' as const, safe: true }]
+    }
+    const task = suggestTask(cleaned)
+    expect(task.findRetakes).toBe(true)
+    expect(task.headline).toMatch(/Find retakes/)
+  })
+
+  test('after leftovers, dropped retakes become the next review', () => {
+    const first = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const collapsed = applyCommand(first, { type: 'collapseRetakes' })
+    expect(suggestTask(collapsed).headline).toMatch(/quiet picture|silent still|First edit done/)
+    const leftoversGone = {
+      ...collapsed,
+      suggestions: collapsed.suggestions.map((s) => {
+        const kind = leftoverKind(s)
+        return kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud'
+          ? { ...s, applied: true }
+          : s
+      })
+    }
+    const task = suggestTask(leftoversGone)
+    expect(task.findRetakes).toBe(false)
+    expect(task.headline).toMatch(/Dropped \d+ false take/)
+    expect(task.reviewLabel).toMatch(/Review \d+ take/)
+    expect(task.reviewCount).toBeGreaterThan(0)
+    expect(task.showWatch).toBe(true)
+    expect(task.showZoom).toBe(true)
+    expect(task.showTitle).toBe(true)
+    expect(task.showLowerThird).toBe(true)
+  })
+
+  test('silent stills get Cut, Silent demo, Speed, and Keep in the inspector', () => {
     const [still] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [{ start: 1.8, end: 8.2 }])
     const project = { ...createDemoProject(), suggestions: [...createDemoProject().suggestions, still] }
     const detail = suggestionInspectorDetail(project, still.id)
-    expect(detail?.actions.some((a) => a.id === 'cut' && a.command.type === 'applySuggestion')).toBe(true)
-    expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'dismissSuggestion')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'cut' && a.command.type === 'resolveSuggestion')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'demo' && a.command.type === 'resolveSuggestion')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'speed' && a.command.type === 'resolveSuggestion')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'resolveSuggestion')).toBe(true)
+    expect(detail?.actions.find((a) => a.id === 'keep')?.consequence).toMatch(/Auto Edit will skip/)
     expect(detail?.explanation).toMatch(/silent demo|dead air/i)
+  })
+
+  test('quiet picture changes lead with Silent demo, then Speed or Cut', () => {
+    const [activity] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [], 20, [3.2])
+    const project = { ...createDemoProject(), suggestions: [activity] }
+    const detail = suggestionInspectorDetail(project, activity.id)
+    expect(detail?.title).toBe('Quiet picture change')
+    expect(detail?.actions[0]?.id).toBe('demo')
+    expect(detail?.actions.some((a) => a.id === 'speed')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'cut')).toBe(true)
+    expect(detail?.explanation).toMatch(/click-through|fidget/i)
+    const task = suggestTask({
+      ...createEmptyProject('activity-bar'),
+      suggestions: [
+        ...createDemoProject().suggestions.map((s) => ({ ...s, applied: true })),
+        activity
+      ]
+    })
+    expect(task.headline).toMatch(/quiet picture change/)
+    expect(task.reviewLabel).toMatch(/Review 1 change/)
   })
 
   test('static screens get Speed and Keep in the inspector', () => {
@@ -113,7 +252,7 @@ describe('suggest task copy', () => {
     const task = suggestTask({
       ...project,
       suggestions: [
-        ...createDemoProject().suggestions.map((s) => ({ ...s, applied: s.safe })),
+        ...createDemoProject().suggestions.map((s) => ({ ...s, applied: true })),
         screen
       ]
     })
@@ -155,6 +294,21 @@ describe('inspector helper detail', () => {
     expect(detail?.speakerId).toBeTruthy()
   })
 
+  test('words inspector offers Cut previous sentence on a restart', () => {
+    const project = createDemoProject()
+    const thats = project.transcript.words.find((w) => w.text === "That's")!
+    const detail = wordsInspectorDetail(project, [thats.id])
+    expect(detail?.actions.some((a) => a.id === 'cut-prev')).toBe(true)
+    expect(detail?.nextHint).toMatch(/previous sentence/)
+  })
+
+  test('words inspector hints that captions follow a name fix', () => {
+    const project = applyCommand(createDemoProject(), { type: 'generateCaptions', maxWords: 5, emphasize: true })
+    const so = project.transcript.words.find((w) => w.text === 'So')!
+    const detail = wordsInspectorDetail(project, [so.id])
+    expect(detail?.nextHint).toMatch(/captions follow/)
+  })
+
   test('suggestion inspector explains pauses and offers apply', () => {
     const project = createDemoProject()
     const pause = project.suggestions.find((s) => s.type === 'silence' && !s.applied)
@@ -166,11 +320,36 @@ describe('inspector helper detail', () => {
     expect(detail?.next?.label).toBe('Review next →')
   })
 
+  test('the leftover click-through pause offers Silent demo and double-click cuts', () => {
+    const project = createDemoProject()
+    expect(pendingSuggestionForGap(project, 22.4, 22.72)?.id).toBe('sug_click')
+    const detail = gapInspectorDetail(project, 22.4, 22.72)
+    expect(detail?.actions.some((a) => a.id === 'demo' && a.label === 'Silent demo')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'cut')).toBe(true)
+    const command = commandForGapDoubleClick(project, 22.4, 22.72)
+    expect(command).toEqual({ type: 'resolveSuggestion', suggestionId: 'sug_click', resolution: 'cut' })
+    const next = applyCommand(project, command!)
+    expect(next.suggestions.find((s) => s.id === 'sug_click')?.applied).toBe(true)
+    expect(toastForCommand(command!)).toMatch(/Undo/)
+  })
+
+  test('a mostly-cut first-edit pause double-clicks back in', () => {
+    const cut = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const detail = gapInspectorDetail(cut, 6.5, 16.2)
+    expect(detail?.title).toBe('Cut pause')
+    expect(detail?.actions[0]?.label).toBe('Put back')
+    expect(detail?.actions.some((action) => action.id === 'keep' && action.label === 'Protect')).toBe(true)
+    const command = commandForGapDoubleClick(cut, 6.5, 16.2)
+    expect(command?.type).toBe('revertSuggestion')
+    const back = applyCommand(cut, command!)
+    expect(back.cuts.some((c) => c.start >= 6.6 && c.end <= 16)).toBe(false)
+  })
+
   test('scene inspector prioritizes retake actions for the false take', () => {
     const project = createDemoProject()
     const detail = sceneInspectorDetail(project, 'sc_false')
     expect(detail?.title).toBe('Retake')
-    expect(detail?.actions[0]?.label).toBe('Use final take')
+    expect(detail?.actions[0]?.label).toBe('Use later take')
     expect(detail?.actions.some((a) => a.id === 'compare')).toBe(true)
   })
 
@@ -181,10 +360,12 @@ describe('inspector helper detail', () => {
     expect(detail?.actions[0]?.label).toBe('Remove scene')
   })
 
-  test('silent demo inspector offers remove walkthrough', () => {
+  test('silent demo inspector offers remove walkthrough and Add zoom', () => {
     const project = createDemoProject()
     const detail = sceneInspectorDetail(project, 'sc_demo')
     expect(detail?.actions.some((a) => a.id === 'cut-scene' && a.label === 'Remove walkthrough')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'zoom' && a.command.type === 'addZoom')).toBe(true)
+    expect(detail?.actions.some((a) => a.id === 'redact' && a.command.type === 'addRedaction')).toBe(true)
   })
 
   test('demo offers collapse retakes when a false take is still live', () => {

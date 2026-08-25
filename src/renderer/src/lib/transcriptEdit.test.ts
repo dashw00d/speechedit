@@ -6,8 +6,11 @@ import {
   allWordsMatchingPhrase,
   coveringAppliedSuggestion,
   extendSelection,
+  livePreviousSentence,
   PARAGRAPH_GAP,
+  isParagraphSelection,
   paragraphIds,
+  restartBeforeWord,
   shrinkSelection
 } from './transcriptEdit'
 import type { Word } from '../types'
@@ -28,6 +31,17 @@ describe('paragraph select', () => {
     expect(paragraphIds(words, 1)).toEqual(['a', 'b'])
     expect(paragraphIds(words, 2)).toEqual(['c', 'd'])
     expect(paragraphIds(words, 3)).toEqual(['c', 'd'])
+  })
+
+  test('a full paragraph selection is not a stray word range', () => {
+    const words = [
+      w('a', 'Hi', 0, 0.3),
+      w('b', 'there.', 0.4, 0.8),
+      w('c', 'Next', 0.8 + PARAGRAPH_GAP + 0.4, 2.6)
+    ]
+    expect(isParagraphSelection(words, ['a', 'b'])).toBe(true)
+    expect(isParagraphSelection(words, ['a'])).toBe(false)
+    expect(isParagraphSelection(words, ['a', 'c'])).toBe(false)
   })
 
   test('keeps a 1.2s gap inside the same paragraph', () => {
@@ -80,6 +94,32 @@ describe('phrase search', () => {
     expect(allWordsMatchingPhrase(words, 'cut')).toEqual(['a', 'e'])
     expect(allWordsMatchingPhrase(words, 'cut speech')).toEqual(['a', 'b'])
     expect(allWordsMatchingPhrase(words, 'missing')).toEqual([])
+  })
+})
+
+describe('false-start previous sentence', () => {
+  test('restartBeforeWord is the short live line before a restart', () => {
+    const project = createDemoProject()
+    const thats = project.transcript.words.find((w) => w.text === "That's")!
+    const restart = restartBeforeWord(project.transcript.words, thats.id)
+    expect(restart).toBeTruthy()
+    expect(restart!.end - restart!.start).toBeLessThan(3)
+    expect(restart!.start).toBeCloseTo(30.2, 1)
+  })
+
+  test('a long previous chapter is not a restart chip', () => {
+    const project = createDemoProject()
+    const first = project.transcript.words.find((w) => w.text === 'First')!
+    expect(livePreviousSentence(project.transcript.words, first.id)).toBeTruthy()
+    expect(restartBeforeWord(project.transcript.words, first.id)).toBeNull()
+  })
+
+  test('a dropped previous take is not a live restart', () => {
+    const project = createDemoProject()
+    const thats = project.transcript.words.find((w) => w.text === "That's")!
+    const collapsed = applyCommand(project, { type: 'collapseRetakes' })
+    expect(livePreviousSentence(collapsed.transcript.words, thats.id)).toBeNull()
+    expect(restartBeforeWord(collapsed.transcript.words, thats.id)).toBeNull()
   })
 })
 

@@ -11,7 +11,7 @@ import {
   type AppSettings
 } from '../lib/settings'
 import { presetIdFor } from '../../../shared/asr'
-import { applySafeFirstEdit, describeFirstEdit } from '../lib/firstEdit'
+import { applySafeFirstEdit, describeFirstEdit, findRetakesAndReview } from '../lib/firstEdit'
 import { busyMessage, isJobCancelled, whisperMissingMessage } from '../lib/mediaJobs'
 import { useEditor } from '../store'
 
@@ -257,8 +257,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           type="button"
           disabled={Boolean(busy)}
           onClick={() => {
-            dispatch({ type: 'inferScenes' })
-            onToast('Scenes from the transcript — no model. Review them in the script.')
+            onToast(findRetakesAndReview().toast)
           }}
         >
           Local scenes

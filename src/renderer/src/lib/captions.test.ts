@@ -4,11 +4,14 @@ import { applyCommand, programLength } from './commands'
 import { projectToExportJob } from './exportJob'
 import {
   captionClipsOf,
+  captionsNeedFilling,
+  projectToChapters,
   shouldAutoCaption,
   transcriptReadyForCaptions,
   wordsToCaptions
 } from './captions'
-import { createEmptyProject } from './demo'
+import { generateCaptionsFromContext } from './captionGenerate'
+import { createDemoProject, createEmptyProject } from './demo'
 import { useEditor } from '../store'
 
 function word(text: string, start: number, end: number) {
@@ -40,6 +43,24 @@ describe('auto captions from words', () => {
     expect(clips[0]?.text).toMatch(/hello/)
     const shown = applyCommand(spokenProject(), { type: 'generateCaptions', maxWords: 5, emphasize: false })
     expect(shown.tracks.find((track) => track.type === 'caption')?.hidden).toBe(false)
+  })
+
+  test('the studio demo still needs captions after the opening card', () => {
+    const demo = createDemoProject()
+    expect(captionsNeedFilling(demo)).toBe(true)
+    expect(captionClipsOf(demo).some((clip) => clip.text === 'Cut speech like text.')).toBe(true)
+    const next = applyCommand(demo, { type: 'generateCaptions', maxWords: 5, emphasize: true })
+    expect(captionClipsOf(next).some((clip) => clip.text === 'Cut speech like text.')).toBe(true)
+    expect(captionClipsOf(next).length).toBeGreaterThan(captionClipsOf(demo).length)
+    expect(captionsNeedFilling(next)).toBe(false)
+  })
+
+  test('generateCaptionsFromContext keeps the opening card', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    const result = generateCaptionsFromContext()
+    expect(result.filled).toBe(true)
+    expect(result.toast).toMatch(/Titles stayed/)
+    expect(captionClipsOf(useEditor.getState().project).some((clip) => clip.text === 'Cut speech like text.')).toBe(true)
   })
 
   test('generateCaptions does not wipe the lane when there are no real words', () => {
@@ -86,6 +107,32 @@ describe('auto captions from words', () => {
     expect(off.layers.some((layer) => layer.kind === 'caption')).toBe(false)
   })
 
+  test('fixing a word rewrites the auto caption that covers it', () => {
+    const generated = applyCommand(spokenProject(), { type: 'generateCaptions', maxWords: 5, emphasize: false })
+    const hello = generated.transcript.words.find((word) => word.text === 'hello')!
+    const next = applyCommand(generated, { type: 'setWordText', wordId: hello.id, text: 'Halo' })
+    expect(captionClipsOf(next).some((clip) => /Halo/.test(clip.text ?? ''))).toBe(true)
+    expect(captionClipsOf(next).some((clip) => /\bhello\b/i.test(clip.text ?? ''))).toBe(false)
+    expect(next.transcript.words.find((word) => word.id === hello.id)?.deleted).toBe(false)
+  })
+
+  test('a hand-edited caption does not follow a later word fix', () => {
+    const generated = applyCommand(spokenProject(), { type: 'generateCaptions', maxWords: 5, emphasize: false })
+    const clip = captionClipsOf(generated)[0]
+    const locked = applyCommand(generated, { type: 'setText', clipId: clip.id, text: 'Keep this card' })
+    const hello = locked.transcript.words.find((word) => word.text === 'hello')!
+    const next = applyCommand(locked, { type: 'setWordText', wordId: hello.id, text: 'Halo' })
+    expect(captionClipsOf(next)[0]?.text).toBe('Keep this card')
+    expect(next.transcript.words.find((word) => word.id === hello.id)?.text).toBe('Halo')
+  })
+
+  test('replaceWords updates every auto card that covers a hit', () => {
+    const generated = applyCommand(spokenProject(), { type: 'generateCaptions', maxWords: 5, emphasize: false })
+    const world = generated.transcript.words.find((word) => word.text === 'world')!
+    const next = applyCommand(generated, { type: 'replaceWords', pairs: [{ wordId: world.id, text: 'reel' }] })
+    expect(captionClipsOf(next).some((clip) => /reel/.test(clip.text ?? ''))).toBe(true)
+  })
+
   test('setSpeed ripples later captions so they stay on the shortened program', () => {
     let project = applyCommand(
       { ...createEmptyProject('speed-caps'), sourceDuration: 10 },
@@ -101,5 +148,34 @@ describe('auto captions from words', () => {
     const moved = captionClipsOf(project).find((clip) => clip.id === late?.id)
     expect(moved?.start).toBeCloseTo((late?.start ?? 0) - 3, 1)
     expect(programLength(project)).toBeCloseTo(7, 1)
+  })
+})
+
+describe('YouTube chapters from scenes', () => {
+  test('the studio demo pastes as description timestamps', () => {
+    const text = projectToChapters(createDemoProject())
+    expect(text.startsWith('0:00 Thesis')).toBe(true)
+    expect(text).toMatch(/0:16 Walk the editor/)
+    expect(text).toMatch(/0:32 Keep this take/)
+    expect(text).not.toMatch(/False take/)
+    expect(text).not.toMatch(/\{/)
+  })
+
+  test('a late first scene still starts at 0:00', () => {
+    const project = {
+      ...createEmptyProject('late'),
+      sourceDuration: 40,
+      scenes: [
+        {
+          id: 'sc_late',
+          start: 16,
+          end: 28,
+          title: 'The point',
+          summary: '',
+          kind: 'talk' as const
+        }
+      ]
+    }
+    expect(projectToChapters(project)).toBe('0:00 Start\n0:16 The point')
   })
 })

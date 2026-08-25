@@ -37,6 +37,8 @@ import {
   looksSafeSpans,
   offeredWordSpans,
   startLeftoverReview,
+  startRetakeReview,
+  describeRetakeReview,
   type CaptionAutoSession,
   type FirstEditPhase
 } from './firstEdit'
@@ -44,8 +46,9 @@ import { parseAnyTranscript } from './transcript'
 import { useEditor } from '../store'
 import type { Command } from '../types'
 
-function leftoverReviewToast(kind: 'still' | 'static' | 'loud'): string {
-  if (kind === 'still') return 'Silent stills need a listen. Cut or Keep.'
+function leftoverReviewToast(kind: 'activity' | 'still' | 'static' | 'loud'): string {
+  if (kind === 'activity') return 'Quiet picture changes need a listen. Silent demo, Speed, or Cut.'
+  if (kind === 'still') return 'Silent stills need a listen. Cut, Silent demo, or Speed.'
   if (kind === 'static') return 'Static screens can be sped up. Speed or Keep.'
   return 'Hot audio can be quieted. Quiet or Keep.'
 }
@@ -53,9 +56,17 @@ function leftoverReviewToast(kind: 'still' | 'static' | 'loud'): string {
 function offerLeftoverReview(onToast: ToastFn, session: { reviewToast?: boolean }): void {
   dismissLeftoverBreaths()
   const kind = startLeftoverReview()
-  if (!kind || session.reviewToast) return
+  if (kind) {
+    if (!session.reviewToast) {
+      session.reviewToast = true
+      onToast(leftoverReviewToast(kind))
+    }
+    return
+  }
+  const scene = startRetakeReview()
+  if (!scene || session.reviewToast) return
   session.reviewToast = true
-  onToast(leftoverReviewToast(kind))
+  onToast(describeRetakeReview(useEditor.getState().project, scene))
 }
 
 function toastAfterIntel(
@@ -273,6 +284,7 @@ export async function appendTakeAction(onToast: ToastFn): Promise<void> {
         analysis: {
           silence: take.analysis.silence,
           staticRegions: take.analysis.scenes.staticRegions,
+          sceneTimes: take.analysis.scenes.times,
           loudness: take.analysis.loudness
         }
       })

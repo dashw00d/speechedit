@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react'
 import { isElectron } from '../host'
 import { captionsForExport } from '../lib/captions'
-import { exportContentPackage, exportSidecar, exportVideoAction, SIDECARS, videoExportCopy } from '../lib/exportActions'
+import {
+  exportContentPackage,
+  exportSidecar,
+  exportVideoAction,
+  projectHasPicture,
+  SIDECARS,
+  videoExportCopy
+} from '../lib/exportActions'
+import { setNormalizeFromContext } from '../lib/loudness'
+import { isVerticalFrame, setFrameFromContext } from '../lib/canvas'
 import { cancelExport, ffmpegImportBusy } from '../lib/mediaJobs'
 import { useEditor } from '../store'
 
@@ -21,13 +30,19 @@ export function ExportSheet({
   const [markedOnly, setMarkedOnly] = useState(false)
   const [audioOnly, setAudioOnly] = useState(false)
   const [burnCaptions, setBurnCaptions] = useState(true)
-  const dispatch = useEditor((s) => s.dispatch)
   const exportOpts = { markedOnly, audioOnly, burnCaptions }
   const video = videoExportCopy(project, exportOpts)
   const hasMarks = project.markIn != null && project.markOut != null
   const hasCaptions = captionsForExport(project).length > 0
+  const hasPicture = projectHasPicture(project)
   const common = SIDECARS.filter((item) => item.group === 'common')
   const advanced = SIDECARS.filter((item) => item.group === 'pipeline')
+
+  useEffect(() => {
+    if (!open) return
+    setMarkedOnly(project.markIn != null && project.markOut != null)
+    setAudioOnly(!projectHasPicture(project))
+  }, [open, project.markIn, project.markOut, project.assets])
 
   useEffect(() => {
     if (!open) return
@@ -59,7 +74,9 @@ export function ExportSheet({
         <p className="confirm-copy">
           {exporting
             ? 'Rendering the program — leave this open or cancel.'
-            : 'The movie, or just the words. Pipeline formats stay under More.'}
+            : hasPicture
+              ? 'The movie, or just the words. Pipeline formats stay under More.'
+              : 'This reel is audio. M4A is already selected — or export the words below.'}
         </p>
         <div className="chips export-presets">
           <button
@@ -69,7 +86,7 @@ export function ExportSheet({
             title="1920×1080 program frame"
             onClick={() => {
               setAudioOnly(false)
-              dispatch({ type: 'setCanvas', width: 1920, height: 1080 })
+              onToast(setFrameFromContext('youtube').toast)
             }}
           >
             YouTube 1080
@@ -77,11 +94,11 @@ export function ExportSheet({
           <button
             type="button"
             className="chip"
-            data-active={project.width === 1080 && project.height === 1920 && !audioOnly}
-            title="1080×1920. Turn Safe on to keep captions in the inner box."
+            data-active={isVerticalFrame(project) && !audioOnly}
+            title="1080×1920, centered on the face. Drag the picture. Safe keeps captions inside."
             onClick={() => {
               setAudioOnly(false)
-              dispatch({ type: 'setCanvas', width: 1080, height: 1920 })
+              onToast(setFrameFromContext('vertical').toast)
             }}
           >
             Vertical 9:16
@@ -110,16 +127,28 @@ export function ExportSheet({
             <input type="checkbox" checked={audioOnly} onChange={(e) => setAudioOnly(e.target.checked)} />
             <span>Audio only · M4A</span>
           </label>
-          {hasCaptions && (
+          {hasCaptions && !audioOnly && (
             <label className="field inline">
               <input
                 type="checkbox"
                 checked={burnCaptions}
                 onChange={(e) => setBurnCaptions(e.target.checked)}
               />
-              <span>Burn captions into the picture</span>
+              <span title="The client sees captions even if they never turn them on">
+                Burn captions into the picture
+              </span>
             </label>
           )}
+          <label className="field inline">
+            <input
+              type="checkbox"
+              checked={project.audioMaster.normalize}
+              onChange={(e) => onToast(setNormalizeFromContext(e.target.checked).toast)}
+            />
+            <span title="Same loudness YouTube and podcast hosts expect. Uncheck if you already mastered.">
+              Normalize -16 LUFS
+            </span>
+          </label>
         </div>
         <button
           type="button"

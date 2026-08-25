@@ -182,33 +182,42 @@ function stillFrame(range: Interval, staticRegions: Interval[]): boolean {
   return staticRegions.some((s) => overlap(s, range) > span * STILL_OVERLAP)
 }
 
+/** True when look analysis saw a scene change inside the quiet span. */
+function pictureChanged(range: Interval, sceneTimes: number[]): boolean {
+  return sceneTimes.some((time) => time > range.start + 0.05 && time < range.end - 0.05)
+}
+
 function silenceSuggestion(
   gap: Interval,
   padded: Interval,
   kind: 'leading' | 'trailing' | 'interior',
   margin: number,
-  staticRegions: Interval[]
+  staticRegions: Interval[],
+  sceneTimes: number[] = []
 ): EditSuggestion {
   const raw = gap.end - gap.start
   const remain = padded.end - padded.start
   const still = stillFrame(padded, staticRegions)
+  const active = !still && pictureChanged(padded, sceneTimes)
   const breath = kind === 'interior' && (remain < DEAD_AIR_REMAINING || raw <= BREATH_RAW_MAX)
   const hold = kind === 'interior' ? raw : remain
   const padMs = Math.round(margin * 1000)
   let label: string
-  if (kind === 'leading') label = `Leading silence ${hold.toFixed(1)}s · ${padMs}ms speech pad`
+  if (still) label = `Silent still ${raw.toFixed(1)}s · maybe a demo — tag before cutting`
+  else if (active) label = `Silent activity ${raw.toFixed(1)}s · picture changed — demo or dead air`
+  else if (kind === 'leading') label = `Leading silence ${hold.toFixed(1)}s · ${padMs}ms speech pad`
   else if (kind === 'trailing') label = `Trailing silence ${hold.toFixed(1)}s · ${padMs}ms speech pad`
-  else if (still) label = `Silent still ${raw.toFixed(1)}s · maybe a demo — tag before cutting`
   else if (breath) label = `Breath ${raw.toFixed(1)}s · ${padMs}ms pad`
   else label = `Dead air ${raw.toFixed(1)}s · ${padMs}ms pad`
 
-  const safe = !still && !breath && remain >= (kind === 'interior' ? DEAD_AIR_REMAINING : 0.25)
+  const review = (still || active) && !breath
+  const safe = !still && !active && !breath && remain >= (kind === 'interior' ? DEAD_AIR_REMAINING : 0.25)
   return {
     id: uid('sug'),
     type: 'silence',
     start: padded.start,
     end: padded.end,
-    action: still ? 'review' : 'cut',
+    action: review ? 'review' : 'cut',
     label,
     safe,
     applied: false
@@ -219,12 +228,13 @@ export function suggestionsFromSilence(
   gaps: Interval[],
   margin = DEFAULT_CUT_MARGIN,
   staticRegions: Interval[] = [],
-  duration = 0
+  duration = 0,
+  sceneTimes: number[] = []
 ): EditSuggestion[] {
   return mergeIntervals(gaps).flatMap((gap) => {
     const hit = padGap(gap, margin, duration)
     if (!hit) return []
-    return [silenceSuggestion(gap, hit.padded, hit.kind, margin, staticRegions)]
+    return [silenceSuggestion(gap, hit.padded, hit.kind, margin, staticRegions, sceneTimes)]
   })
 }
 
@@ -264,7 +274,8 @@ export function suggestionsFromEdges(
   words: Word[],
   silence: Interval[] = [],
   margin = DEFAULT_CUT_MARGIN,
-  staticRegions: Interval[] = []
+  staticRegions: Interval[] = [],
+  sceneTimes: number[] = []
 ): EditSuggestion[] {
   if (duration <= 0) return []
   const live = words.filter((w) => !w.deleted).sort((a, b) => a.start - b.start)
@@ -284,7 +295,7 @@ export function suggestionsFromEdges(
   ) {
     gaps.push({ start: Math.max(0, trailStart), end: duration })
   }
-  return suggestionsFromSilence(gaps, margin, staticRegions, duration)
+  return suggestionsFromSilence(gaps, margin, staticRegions, duration, sceneTimes)
 }
 
 function coveredBy(existing: EditSuggestion[], next: EditSuggestion): boolean {
@@ -295,13 +306,15 @@ function coveredBy(existing: EditSuggestion[], next: EditSuggestion): boolean {
 export function suggestionsFromGaps(input: AnalysisInput): EditSuggestion[] {
   const margin = input.margin ?? DEFAULT_CUT_MARGIN
   const staticRegions = input.sceneHits ?? []
-  const fromAudio = suggestionsFromSilence(input.silence, margin, staticRegions, input.duration)
+  const sceneTimes = input.scenes ?? []
+  const fromAudio = suggestionsFromSilence(input.silence, margin, staticRegions, input.duration, sceneTimes)
   const fromEdges = suggestionsFromEdges(
     input.duration,
     input.words,
     input.silence,
     margin,
-    staticRegions
+    staticRegions,
+    sceneTimes
   )
   const combined = [...fromAudio, ...fromEdges.filter((s) => !coveredBy(fromAudio, s))]
   const fromWords = suggestionsFromWordGaps(input.words, input.silence, margin)
@@ -539,7 +552,24 @@ export function buildSuggestions(input: AnalysisInput): EditSuggestion[] {
   ]
 }
 
-export type LeftoverKind = 'still' | 'breath' | 'static' | 'low-motion' | 'loud' | 'other'
+export type LeftoverKind = 'activity' | 'still' | 'breath' | 'static' | 'low-motion' | 'loud' | 'other'
+
+export function analysisInputFrom(project: Project): AnalysisInput {
+  return {
+    duration: project.sourceDuration,
+    silence: project.analysis?.silence ?? [],
+    scenes: project.analysis?.sceneTimes ?? [],
+    sceneHits: project.analysis?.staticRegions ?? [],
+    loudnessWindows: project.analysis?.loudness ?? [],
+    words: project.transcript.words,
+    margin: project.cutMargin
+  }
+}
+
+export function isQuietPictureLeftover(suggestion: EditSuggestion): boolean {
+  const kind = leftoverKind(suggestion)
+  return kind === 'activity' || kind === 'still'
+}
 
 /** Linear gain that moves `lufs` toward `target` without silencing the range. */
 export function volumeTowardLufs(lufs: number, target = -16): number {
@@ -547,8 +577,9 @@ export function volumeTowardLufs(lufs: number, target = -16): number {
   return Math.min(0.85, Math.max(0.2, gain))
 }
 
-/** Uncertain leftovers after safe first-edit. Stills are silent demos; breaths are air to keep. */
+/** Uncertain leftovers after safe first-edit. Activity/stills are quiet picture; breaths stay. */
 export function leftoverKind(suggestion: EditSuggestion): LeftoverKind {
+  if (/silent activity/i.test(suggestion.label)) return 'activity'
   if (/silent still/i.test(suggestion.label) || (suggestion.type === 'silence' && suggestion.action === 'review')) {
     return 'still'
   }
@@ -563,9 +594,98 @@ export function leftoverItems(project: Project, kind: Exclude<LeftoverKind, 'oth
   return project.suggestions.filter((suggestion) => !suggestion.applied && !suggestion.blockedBy && leftoverKind(suggestion) === kind)
 }
 
-/** Silent stills, then static screens, then hot audio. Talking-over-static stays out. */
+const GAP_HIT = 0.2
+
+export function leftoverForSpan(project: Project, start: number, end: number): EditSuggestion | undefined {
+  const span = { start, end }
+  return leftoverReviewQueue(project)
+    .filter((suggestion) => overlap(suggestion, span) > GAP_HIT)
+    .sort((a, b) => overlap(b, span) - overlap(a, span))[0]
+}
+
+export function appliedForSpan(project: Project, start: number, end: number): EditSuggestion | undefined {
+  const span = { start, end }
+  return project.suggestions
+    .filter((suggestion) => suggestion.applied && suggestion.action !== 'normalize' && overlap(suggestion, span) > 0.35)
+    .sort((a, b) => overlap(b, span) - overlap(a, span))[0]
+}
+
+export function gapIsMostlyCut(project: Project, start: number, end: number): boolean {
+  const span = end - start
+  if (span <= 0) return false
+  const cut = project.cuts.reduce((sum, row) => sum + overlap(row, { start, end }), 0)
+  return cut / span >= 0.55
+}
+
+export type GapReviewKind = 'activity' | 'still' | 'static' | 'loud' | 'cut' | 'demo' | 'live'
+
+export interface GapReview {
+  kind: GapReviewKind
+  start: number
+  end: number
+  suggestion?: EditSuggestion
+  chip: string
+  title: string
+}
+
+export function reviewGap(project: Project, start: number, end: number): GapReview {
+  const leftover = leftoverForSpan(project, start, end)
+  if (leftover) {
+    const kind = leftoverKind(leftover)
+    const reviewKind: GapReviewKind =
+      kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud' ? kind : 'live'
+    const chip =
+      reviewKind === 'activity'
+        ? `${(leftover.end - leftover.start).toFixed(1)}s silent activity`
+        : reviewKind === 'still'
+          ? `${(leftover.end - leftover.start).toFixed(1)}s silent still`
+          : `${(leftover.end - leftover.start).toFixed(1)}s leftover`
+    return {
+      kind: reviewKind,
+      start: leftover.start,
+      end: leftover.end,
+      suggestion: leftover,
+      chip,
+      title:
+        reviewKind === 'activity'
+          ? 'Quiet click-through — click to review · double-click cuts'
+          : 'Leftover pause — click to review · double-click cuts'
+    }
+  }
+  const applied = appliedForSpan(project, start, end)
+  if (applied || gapIsMostlyCut(project, start, end)) {
+    return {
+      kind: 'cut',
+      start,
+      end,
+      suggestion: applied,
+      chip: `${(end - start).toFixed(1)}s pause · cut`,
+      title: 'This pause is cut. Click to review · double-click puts the air back'
+    }
+  }
+  const demo = project.tags.some((tag) => tag.kind === 'demo' && overlap(tag, { start, end }) > 0.3)
+  if (demo) {
+    return {
+      kind: 'demo',
+      start,
+      end,
+      chip: `${(end - start).toFixed(1)}s · silent demo`,
+      title: 'Silent demo is in this pause — Auto Edit skips it'
+    }
+  }
+  return {
+    kind: 'live',
+    start,
+    end,
+    chip: `${(end - start).toFixed(1)}s pause`,
+    title: 'Click to hear this pause · double-click removes it from the video'
+  }
+}
+
+/** Quiet click-throughs first, then stills, static screens, hot audio. Talking-over-static stays out. */
 export function leftoverReviewQueue(project: Project): EditSuggestion[] {
   return [
+    ...leftoverItems(project, 'activity'),
     ...leftoverItems(project, 'still'),
     ...leftoverItems(project, 'static'),
     ...leftoverItems(project, 'loud')

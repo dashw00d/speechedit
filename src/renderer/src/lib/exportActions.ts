@@ -50,6 +50,11 @@ function hasWords(project: Project): boolean {
   return project.transcript.words.some((word) => !word.deleted)
 }
 
+/** True when the reel has a video A-roll. Audio-only meetings and podcasts do not. */
+export function projectHasPicture(project: Project): boolean {
+  return Object.values(project.assets).some((asset) => asset.kind === 'video')
+}
+
 function hasCaptions(project: Project): boolean {
   return captionsForExport(project).length > 0
 }
@@ -80,7 +85,7 @@ export const SIDECARS: SidecarSpec[] = [
   {
     id: 'md',
     label: 'Transcript · Markdown',
-    hint: 'Notes with scene headings',
+    hint: 'Copy speaker notes. Paste into Slack or Notion.',
     group: 'common',
     ext: '.md',
     body: projectToTranscriptMd,
@@ -97,12 +102,12 @@ export const SIDECARS: SidecarSpec[] = [
   },
   {
     id: 'chapters',
-    label: 'Chapters',
-    hint: 'YouTube timestamps from scenes',
+    label: 'Chapters · YouTube',
+    hint: 'Copy timestamps. Paste into the description.',
     group: 'common',
-    ext: '.chapters.json',
+    ext: '.chapters.txt',
     body: projectToChapters,
-    ready: (project) => (project.scenes?.length ?? 0) > 0
+    ready: (project) => Boolean(projectToChapters(project))
   },
   {
     id: 'otio',
@@ -160,6 +165,12 @@ export const SIDECARS: SidecarSpec[] = [
   }
 ]
 
+export function copyToastForSidecar(id: SidecarId): string | null {
+  if (id === 'chapters') return 'Copied YouTube chapters. Paste into the description.'
+  if (id === 'md') return 'Copied the transcript. Paste into Slack or Notion.'
+  return null
+}
+
 export function sidecarById(id: SidecarId): SidecarSpec {
   const spec = SIDECARS.find((item) => item.id === id)
   if (!spec) throw new Error(`Unknown export ${id}`)
@@ -184,7 +195,9 @@ export function videoExportCopy(
       ready: false,
       summary: hasProgram ? 'No media file on disk to render.' : 'Open a recording first.',
       problem: hasProgram
-        ? 'This reel has no linked recording. Open media or relink, then export video.'
+        ? opts.audioOnly
+          ? 'This reel has no linked recording. Open media or relink, then export audio.'
+          : 'This reel has no linked recording. Open media or relink, then export video.'
         : 'Open media to export a program.'
     }
   }
@@ -193,7 +206,9 @@ export function videoExportCopy(
   const extras = [
     opts.markedOnly ? 'marked range' : null,
     opts.audioOnly ? 'audio only' : null,
-    opts.burnCaptions === false ? 'no burned captions' : null
+    project.audioMaster.normalize ? '-16 LUFS' : null,
+    opts.burnCaptions === false ? 'no burned captions' : null,
+    !opts.audioOnly && project.height > project.width ? '9:16' : null
   ].filter(Boolean)
   return {
     ready: !problem,
@@ -237,9 +252,22 @@ export async function exportSidecar(id: SidecarId, onToast: ToastFn): Promise<vo
     onToast(`Nothing to export for ${spec.label.toLowerCase()} yet.`)
     return
   }
+  const body = spec.body(project)
+  const copied = copyToastForSidecar(id)
+  if (copied) {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(body)
+        onToast(copied)
+        return
+      }
+    } catch {
+      /* fall through to a file they can open */
+    }
+  }
   const filename = `${project.name}${spec.ext}`
   try {
-    const path = await saveTextExport(filename, spec.body(project))
+    const path = await saveTextExport(filename, body)
     if (!path) return
     onToast(isElectron ? `Saved ${filename}` : `Downloaded ${filename}`)
   } catch (err) {
@@ -264,7 +292,15 @@ export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts 
     return
   }
   if (!isElectron) {
-    onToast('Video export needs the desktop app. Captions and transcripts still download here.')
+    onToast(
+      opts.audioOnly
+        ? opts.markedOnly
+          ? 'Audio export needs the desktop app. Captions still download here. Clear marks for the next clip.'
+          : 'Audio export needs the desktop app. Captions and transcripts still download here.'
+        : opts.markedOnly
+          ? 'Video export needs the desktop app. Captions still download here. Clear marks for the next clip.'
+          : 'Video export needs the desktop app. Captions and transcripts still download here.'
+    )
     return
   }
   const job = buildExportJob(editor.project, '', opts)
@@ -282,7 +318,11 @@ export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts 
   )
   try {
     await host.exportProgram({ ...job, output })
-    onToast(`Export finished — ${info.summary}. File: ${output}`)
+    onToast(
+      opts.markedOnly
+        ? `Export finished — ${info.summary}. File: ${output} Clear marks for the next clip.`
+        : `Export finished — ${info.summary}. File: ${output}`
+    )
   } catch (err) {
     onToast(isJobCancelled(err) ? 'Export cancelled.' : err instanceof Error ? err.message : 'Export failed.')
   } finally {

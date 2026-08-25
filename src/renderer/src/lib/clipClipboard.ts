@@ -1,5 +1,6 @@
 import { useEditor, usePlayback } from '../store'
 import { clipLookOf } from './clipEdit'
+import { copyQuoteFromContext } from './quote'
 
 export function resolveSelectedClip() {
   const editor = useEditor.getState()
@@ -37,14 +38,5 @@ export function pasteClipboard(kind?: 'clip' | 'look') {
 }
 
 export function copyWordText() {
-  const editor = useEditor.getState()
-  const text = editor.project.transcript.words
-    .filter((word) => editor.selectedWordIds.includes(word.id))
-    .map((word) => word.text)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!text || typeof navigator === 'undefined' || !navigator.clipboard) return false
-  void navigator.clipboard.writeText(text).catch(() => undefined)
-  return Boolean(text)
+  return copyQuoteFromContext().copied
 }

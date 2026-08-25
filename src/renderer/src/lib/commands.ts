@@ -16,11 +16,19 @@ import {
   type Transform,
   type Word
 } from '../types'
-import { buildSuggestions, cutMinusProtected, leftoverKind, protectIntervals, suggestionsFromGaps } from './analysis'
+import {
+  analysisInputFrom,
+  buildSuggestions,
+  cutMinusProtected,
+  isQuietPictureLeftover,
+  protectIntervals,
+  suggestionsFromGaps
+} from './analysis'
 import {
   TITLE_PRESETS,
   clipsFromCaptionCues,
   parseCaptionCues,
+  syncAutoCaptionsForWords,
   withCaptionClips,
   withGeneratedCaptions,
   withLowerThirds
@@ -374,7 +382,7 @@ function styleFromSegment(project: Project, segmentIdValue: string): SegmentStyl
 function applySuggestion(project: Project, suggestionId: string): Project {
   const suggestion = project.suggestions.find((s) => s.id === suggestionId)
   if (!suggestion || suggestion.applied) return project
-  if (suggestion.action === 'review' && leftoverKind(suggestion) !== 'still') return project
+  if (suggestion.action === 'review' && !isQuietPictureLeftover(suggestion)) return project
   if (suggestion.action === 'normalize') {
     return touch({
       ...project,
@@ -523,7 +531,10 @@ function addTag(project: Project, start: number, end: number, kind: TagKind, lab
     ...project,
     tags: [...existing.filter((t) => !mergeable.some((m) => m.id === t.id)), tag]
   }
-  if (kind === 'keep' || kind === 'demo') {
+  if (
+    (kind === 'keep' || kind === 'demo') &&
+    next.cuts.some((cut) => overlap(cut, { start: lo, end: hi }) > 0.02)
+  ) {
     return restoreSourceRange(next, lo, hi)
   }
   return touch(next)
@@ -544,17 +555,55 @@ function eraseTag(project: Project, start: number, end: number, kind?: TagKind):
   return touch({ ...project, tags })
 }
 
+function sameAppliedSuggestion(applied: { type: string; action: string } & Interval, next: { type: string; action: string } & Interval): boolean {
+  return (
+    applied.type === next.type &&
+    applied.action === next.action &&
+    overlap(applied, next) > (next.end - next.start) * 0.6
+  )
+}
+
 function rebuildSuggestionList(project: Project): Project {
   const applied = project.suggestions.filter((s) => s.applied)
-  const fresh = buildSuggestions({
-    duration: project.sourceDuration,
-    silence: project.analysis.silence,
-    sceneHits: project.analysis.staticRegions,
-    loudnessWindows: project.analysis.loudness,
-    words: project.transcript.words,
-    margin: project.cutMargin
-  }).filter((s) => !applied.some((a) => overlap(a, s) > (s.end - s.start) * 0.6))
+  const fresh = buildSuggestions(analysisInputFrom(project)).filter(
+    (s) => !applied.some((a) => sameAppliedSuggestion(a, s))
+  )
   return touch({ ...project, suggestions: [...applied, ...fresh] })
+}
+
+function dismissSuggestion(project: Project, suggestionId: string): Project {
+  const next = project.suggestions.filter((s) => s.id !== suggestionId)
+  if (next.length === project.suggestions.length) return project
+  return touch({ ...project, suggestions: next })
+}
+
+function resolveSuggestion(
+  project: Project,
+  suggestionId: string,
+  resolution: 'cut' | 'speed' | 'demo' | 'keep'
+): Project {
+  const suggestion = project.suggestions.find((s) => s.id === suggestionId)
+  if (!suggestion || suggestion.applied) return project
+  if (resolution === 'cut') return applySuggestion(project, suggestionId)
+  if (resolution === 'keep') {
+    return dismissSuggestion(addTag(project, suggestion.start, suggestion.end, 'keep'), suggestionId)
+  }
+  if (resolution === 'demo') {
+    return dismissSuggestion(
+      addTag(project, suggestion.start, suggestion.end, 'demo', 'Silent product demo'),
+      suggestionId
+    )
+  }
+  const next = applyCommand(project, {
+    type: 'setSpeed',
+    start: suggestion.start,
+    end: suggestion.end,
+    speed: suggestion.speed ?? 4
+  })
+  return touch({
+    ...next,
+    suggestions: next.suggestions.map((s) => (s.id === suggestionId ? { ...s, applied: true } : s))
+  })
 }
 
 function applyDiarization(
@@ -636,8 +685,8 @@ export function applyCommand(project: Project, command: Command): Project {
       return restoreSourceRange(current, command.start, command.end)
     case 'toggleWords':
       return toggleWords(current, command.wordIds, command.lift)
-    case 'setWordText':
-      return touch({
+    case 'setWordText': {
+      const next = touch({
         ...current,
         transcript: {
           ...current.transcript,
@@ -646,6 +695,8 @@ export function applyCommand(project: Project, command: Command): Project {
           )
         }
       })
+      return syncAutoCaptionsForWords(next, [command.wordId])
+    }
     case 'replaceWords': {
       const map = new Map(command.pairs.map((pair) => [pair.wordId, pair.text]))
       if (!map.size) return current
@@ -657,7 +708,11 @@ export function applyCommand(project: Project, command: Command): Project {
         changed = true
         return { ...word, text }
       })
-      return changed ? touch({ ...current, transcript: { ...current.transcript, words } }) : current
+      return changed
+        ? syncAutoCaptionsForWords(touch({ ...current, transcript: { ...current.transcript, words } }), [
+            ...map.keys()
+          ])
+        : current
     }
     case 'rippleDelete':
       return deleteSourceRange(current, command.start, command.end, 'manual')
@@ -941,7 +996,10 @@ export function applyCommand(project: Project, command: Command): Project {
       }
       return newGraphic(withAsset, 'overlay', command.start, command.duration, command.asset.name, {
         assetId: command.asset.id,
-        inPoint
+        inPoint,
+        ...(command.transform ? { transform: command.transform } : {}),
+        ...(command.muted != null ? { muted: command.muted } : {}),
+        ...(command.volume != null ? { volume: command.volume } : {})
       })
     }
     case 'addAudio': {
@@ -1010,10 +1068,7 @@ export function applyCommand(project: Project, command: Command): Project {
     case 'setCutMargin': {
       const margin = clamp(command.margin, 0, 0.45)
       const silence = suggestionsFromGaps({
-        duration: current.sourceDuration,
-        silence: current.analysis?.silence ?? [],
-        sceneHits: current.analysis?.staticRegions ?? [],
-        words: current.transcript.words,
+        ...analysisInputFrom(current),
         margin
       }).filter((s) => !current.cuts.some((cut) => overlap(cut, s) > (s.end - s.start) * 0.8))
       return touch({
@@ -1217,6 +1272,8 @@ export function applyCommand(project: Project, command: Command): Project {
     }
     case 'applySuggestion':
       return applySuggestion(current, command.suggestionId)
+    case 'resolveSuggestion':
+      return resolveSuggestion(current, command.suggestionId, command.resolution)
     case 'applySuggestions':
       return command.suggestionIds.reduce((acc, id) => applySuggestion(acc, id), current)
     case 'applySafeSuggestions':
@@ -1230,10 +1287,7 @@ export function applyCommand(project: Project, command: Command): Project {
         )
         .reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), current)
     case 'dismissSuggestion':
-      return touch({
-        ...current,
-        suggestions: current.suggestions.filter((s) => s.id !== command.suggestionId)
-      })
+      return dismissSuggestion(current, command.suggestionId)
     case 'dismissSuggestions': {
       const drop = new Set(command.suggestionIds)
       if (!drop.size) return current
@@ -1424,14 +1478,9 @@ export function applyCommand(project: Project, command: Command): Project {
     }
     case 'rebuildIntelligence': {
       const applied = current.suggestions.filter((s) => s.applied)
-      const fresh = buildSuggestions({
-        duration: current.sourceDuration,
-        silence: current.analysis.silence,
-        sceneHits: current.analysis.staticRegions,
-        loudnessWindows: current.analysis.loudness,
-        words: current.transcript.words,
-        margin: current.cutMargin
-      }).filter((s) => !applied.some((a) => overlap(a, s) > (s.end - s.start) * 0.6))
+      const fresh = buildSuggestions(analysisInputFrom(current)).filter(
+        (s) => !applied.some((a) => sameAppliedSuggestion(a, s))
+      )
       const draft = inferScenesLocal({ ...current, suggestions: [...applied, ...fresh] })
       return touch({
         ...current,
@@ -1506,7 +1555,7 @@ export function applyCommand(project: Project, command: Command): Project {
       if (!command.asset.path) return current
       const asset: Asset = { ...command.asset, sourceOffset: offset }
       const shift = <T extends Interval>(row: T): T => ({ ...row, start: row.start + offset, end: row.end + offset })
-      const extra = command.analysis ?? { silence: [], staticRegions: [], loudness: [] }
+      const extra = command.analysis ?? { silence: [], staticRegions: [], sceneTimes: [], loudness: [] }
       const words = [
         ...current.transcript.words,
         ...command.words.map((word) => ({
@@ -1524,6 +1573,10 @@ export function applyCommand(project: Project, command: Command): Project {
         analysis: {
           silence: [...current.analysis.silence, ...extra.silence.map(shift)],
           staticRegions: [...current.analysis.staticRegions, ...extra.staticRegions.map(shift)],
+          sceneTimes: [
+            ...(current.analysis.sceneTimes ?? []),
+            ...(extra.sceneTimes ?? []).map((time) => time + offset)
+          ],
           loudness: [...current.analysis.loudness, ...extra.loudness.map(shift)]
         }
       })
@@ -1539,7 +1592,12 @@ export function applyCommand(project: Project, command: Command): Project {
       let next = current
       if (command.analysis) {
         const extra = command.analysis
-        if (extra.silence.length || extra.staticRegions.length || extra.loudness.length) {
+        if (
+          extra.silence.length ||
+          extra.staticRegions.length ||
+          extra.loudness.length ||
+          (extra.sceneTimes?.length ?? 0)
+        ) {
           const outside = <T extends Interval>(row: T) => overlap(row, span) <= 0
           next = touch({
             ...next,
@@ -1548,6 +1606,10 @@ export function applyCommand(project: Project, command: Command): Project {
               staticRegions: [
                 ...next.analysis.staticRegions.filter(outside),
                 ...extra.staticRegions.map(shift)
+              ],
+              sceneTimes: [
+                ...(next.analysis.sceneTimes ?? []).filter((time) => time < span.start || time > span.end),
+                ...(extra.sceneTimes ?? []).map((time) => time + offset)
               ],
               loudness: [...next.analysis.loudness.filter(outside), ...extra.loudness.map(shift)]
             }
@@ -1617,14 +1679,21 @@ export function applyCommand(project: Project, command: Command): Project {
       })
     }
     case 'setAnalysis': {
+      const prevTimes = current.analysis.sceneTimes ?? []
+      const sceneTimes = command.sceneTimes ?? prevTimes
       const analysis = {
         silence: command.silence ?? current.analysis.silence,
         staticRegions: command.staticRegions ?? current.analysis.staticRegions,
+        sceneTimes,
         loudness: command.loudness ?? current.analysis.loudness
       }
+      const sameTimes =
+        sceneTimes === prevTimes ||
+        (sceneTimes.length === prevTimes.length && sceneTimes.every((time, i) => time === prevTimes[i]))
       if (
         analysis.silence === current.analysis.silence &&
         analysis.staticRegions === current.analysis.staticRegions &&
+        sameTimes &&
         analysis.loudness === current.analysis.loudness
       ) {
         return current

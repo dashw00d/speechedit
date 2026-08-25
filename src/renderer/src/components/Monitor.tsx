@@ -12,6 +12,8 @@ import { pictureAt } from '../lib/resolver'
 import { primaryAssetAt, primaryTakes } from '../lib/takes'
 import { formatTimecode } from '../lib/time'
 import { ingestDroppedFile } from '../lib/fileActions'
+import { REVIEW_RATES, describeReviewRate } from '../lib/reviewRate'
+import { copyStillFromContext } from '../lib/still'
 import { useEditor, usePlayback } from '../store'
 import { useEngine } from '../useEngine'
 import type { Crop } from '../types'
@@ -139,14 +141,17 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
         {src ? (
           <>
             {look.outgoing && (
-              <video
-                ref={underRef}
-                className="dissolve-under"
-                src={underSrc}
-                muted={look.voice.outgoingGain <= 0.0001}
-                playsInline
-                style={{ opacity: look.outgoingOpacity }}
-              />
+            <video
+              ref={underRef}
+              className="dissolve-under"
+              src={underSrc}
+              muted={look.voice.outgoingGain <= 0.0001}
+              playsInline
+              style={{
+                opacity: look.outgoingOpacity,
+                objectFit: frame.height > frame.width ? 'cover' : undefined
+              }}
+            />
             )}
             <video
               ref={videoRef}
@@ -157,6 +162,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
                 transform: cssTransform(picture),
                 opacity: look.incomingOpacity,
                 transformOrigin: 'center center',
+                objectFit: frame.height > frame.width ? 'cover' : undefined,
                 clipPath: `inset(${(crop?.y ?? 0) * 100}% ${(1 - (crop?.x ?? 0) - (crop?.w ?? 1)) * 100}% ${(1 - (crop?.y ?? 0) - (crop?.h ?? 1)) * 100}% ${(crop?.x ?? 0) * 100}%)`
               }}
               onPlay={() => usePlayback.setState({ playing: true })}
@@ -331,6 +337,13 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
         >
           Match
         </button>
+        <button
+          className="chip"
+          title="Copy this frame with the line. Paste into a ticket or Slack."
+          onClick={() => void copyStillFromContext(videoRef.current).then((result) => onToast?.(result.toast))}
+        >
+          Copy frame
+        </button>
         {ducked && (
           <span className="duck-flag" title="Voice is ducked under B-roll">
             duck −{Math.round(duckAmount * 100)}
@@ -368,12 +381,12 @@ function RateButtons() {
   const setReviewRate = usePlayback((s) => s.setReviewRate)
   return (
     <span className="marks">
-      {([0.5, 1, 2] as const).map((rate) => (
+      {REVIEW_RATES.map((rate) => (
         <button
           key={rate}
           className="chip"
           data-active={reviewRate === rate}
-          title={rate === 1 ? 'Play at normal speed' : `Review at ${rate}×`}
+          title={describeReviewRate(rate)}
           onClick={() => setReviewRate(rate)}
         >
           {rate}×

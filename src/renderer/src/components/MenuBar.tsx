@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react'
-import { useEffect } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { host, isElectron } from '../host'
 import { askEditor } from '../lib/askModel'
 import { programLength } from '../lib/commands'
-import { pickAudio, pickBroll } from '../lib/pickFile'
-import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
+import { pickAudio } from '../lib/pickFile'
+import { addBrollFromContext } from '../lib/broll'
+import { bladeAtWord, playInOutOrSelection, selectParagraphFromContext } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
 import { confirmLoseWork, currentDocumentTitle, saveCurrentDocument } from '../lib/documentIo'
 import {
@@ -27,6 +27,15 @@ import {
 import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
 import { hopNote } from '../lib/clipEdit'
 import { openPreferences } from '../lib/theme'
+import { describeRetakeReview, findRetakesAndReview, startLeftoverReview, startRetakeReview } from '../lib/firstEdit'
+import { applyTitleFromContext } from '../lib/title'
+import { addSceneLowerThirdsFromContext, applyLowerThirdFromContext } from '../lib/lowerThird'
+import { applyZoomFromContext } from '../lib/zoom'
+import { applyRedactionFromContext } from '../lib/redaction'
+import { clearMarksFromContext } from '../lib/marks'
+import { setNormalizeFromContext } from '../lib/loudness'
+import { protectFromContext, protectRange } from '../lib/protect'
+import { generateCaptionsFromContext } from '../lib/captionGenerate'
 import { useEditor, usePlayback } from '../store'
 
 interface Props {
@@ -53,7 +62,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
   const setPalette = useEditor((s) => s.setPalette)
   const recents = listRecents()
 
-  async function addPickedOverlay(role: 'broll' | 'audio') {
+  async function addPickedMusic() {
     const busy = mediaBusyToast(exporting, analyzing)
     if (busy) {
       onToast(busy)
@@ -62,24 +71,15 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
     try {
       await host.beginJob('import')
       setAnalyzing('probe')
-      const asset = role === 'broll' ? await pickBroll() : await pickAudio()
+      const asset = await pickAudio()
       if (!asset) return
-      dispatch(
-        role === 'broll'
-          ? {
-              type: 'addBroll',
-              start: usePlayback.getState().programTime,
-              duration: Math.min(6, asset.duration || 6),
-              asset
-            }
-          : {
-              type: 'addAudio',
-              start: usePlayback.getState().programTime,
-              duration: Math.min(asset.duration || 8, programLength(project) || asset.duration || 8),
-              asset
-            }
-      )
-      onToast(`${role === 'broll' ? 'B-roll' : 'Music'} · ${asset.name}`)
+      dispatch({
+        type: 'addAudio',
+        start: usePlayback.getState().programTime,
+        duration: Math.min(asset.duration || 8, programLength(project) || asset.duration || 8),
+        asset
+      })
+      onToast(`Music · ${asset.name}`)
     } catch (err) {
       onToast(explainImportError(err))
     } finally {
@@ -100,9 +100,28 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
   }
 
   useEffect(() => wireFileEvents(onToast), [onToast])
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!openMenu) return
+    const onPointer = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || event.target.closest('.menu')) return
+      setOpenMenu(null)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenMenu(null)
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [openMenu])
 
   return (
-    <header className="menubar">
+    <MenuOpenContext.Provider value={{ openMenu, setOpenMenu }}>
+      <header className="menubar">
       <div className="brand">
         <span className="brand-mark">
           Speech<em>Edit</em>
@@ -194,7 +213,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           </Item>
           <Item onClick={() => bladeAtWord()}>Blade at word</Item>
           <Item onClick={() => playInOutOrSelection()}>Play marked range or selection</Item>
-          <Item onClick={() => selectParagraphAtCaret()}>Select paragraph</Item>
+          <Item onClick={() => onToast(selectParagraphFromContext().toast)}>Select paragraph</Item>
           <Item onClick={() => dispatch({ type: ripple ? 'rippleDeleteMarks' : 'liftMarks' })}>
             {ripple ? 'Cut marked range' : 'Lift marked range'}
           </Item>
@@ -205,7 +224,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           >
             Insert 1s hold
           </Item>
-          <Item onClick={() => dispatch({ type: 'setMarks', markIn: null, markOut: null })}>
+          <Item onClick={() => onToast(clearMarksFromContext().toast)}>
             Clear In and Out
           </Item>
           <Item
@@ -281,82 +300,47 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
         <Menu label="Sequence">
           <Item
             onClick={() => {
-              dispatch({
-                type: 'addCaption',
-                start: usePlayback.getState().programTime,
-                duration: 3,
-                text: 'Title'
-              })
-              onToast('Title on the tape — 3 seconds from here. Type in the inspector.')
+              const { toast } = applyTitleFromContext()
+              onToast(toast)
             }}
           >
-            Add title (3s at playhead)
+            Add title
           </Item>
           <Item
             onClick={() => {
-              dispatch({
-                type: 'addZoom',
-                start: usePlayback.getState().programTime,
-                duration: 3,
-                scale: 1.45
-              })
-              onToast('Zoom on the picture — 3 seconds from here. Scale is in Transform.')
+              const { toast } = applyZoomFromContext()
+              onToast(toast)
             }}
           >
-            Add zoom (3s at playhead)
+            Add zoom
+          </Item>
+          <Item onClick={() => onToast(applyLowerThirdFromContext().toast)}>
+            Add lower third
           </Item>
           <Item
-            onClick={() => {
-              dispatch({
-                type: 'addTitle',
-                start: usePlayback.getState().programTime,
-                duration: 3,
-                text: 'Lower third',
-                preset: 'lower-third'
-              })
-              onToast('Lower third on the tape — 3 seconds from here. Type in the inspector.')
-            }}
-          >
-            Add lower third (3s at playhead)
-          </Item>
-          <Item
-            onClick={() => {
-              dispatch({
-                type: 'generateCaptions',
-                maxWords: 5,
-                speakerPrefix: project.transcript.speakers.length > 1,
-                emphasize: true
-              })
-              onToast('Captions from the live words. Edit any block on the tape.')
-            }}
+            onClick={() => onToast(generateCaptionsFromContext().toast)}
           >
             Caption remaining words
           </Item>
-          <Item
-            onClick={() => {
-              dispatch({ type: 'addLowerThirds' })
-              onToast('Chapter titles on the tape. Edit text in the inspector.')
-            }}
-          >
+          <Item onClick={() => onToast(addSceneLowerThirdsFromContext().toast)}>
             Scene lower thirds
           </Item>
-          <Item disabled={ffmpegImportBusy(analyzing) || exporting} onClick={() => void addPickedOverlay('broll')}>
+          <Item
+            disabled={ffmpegImportBusy(analyzing) || exporting}
+            onClick={() => void addBrollFromContext().then((result) => onToast(result.toast))}
+          >
             Add B-roll…
           </Item>
-          <Item disabled={ffmpegImportBusy(analyzing) || exporting} onClick={() => void addPickedOverlay('audio')}>
+          <Item disabled={ffmpegImportBusy(analyzing) || exporting} onClick={() => void addPickedMusic()}>
             Add music bed…
           </Item>
           <Item
             onClick={() => {
-              dispatch({
-                type: 'addRedaction',
-                start: usePlayback.getState().programTime,
-                duration: 4
-              })
-              onToast('Blur on the picture — 4 seconds from here. Drag to cover a face.')
+              const { toast } = applyRedactionFromContext()
+              if (toast) onToast(toast)
             }}
           >
-            Add redaction (4s at playhead)
+            Add redaction
           </Item>
           <Item
             onClick={() => {
@@ -403,18 +387,33 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           >
             Find scenes / retakes
           </Item>
-          <Item onClick={() => dispatch({ type: 'inferScenes' })}>Local scene pass</Item>
+          <Item onClick={() => onToast(findRetakesAndReview().toast)}>Local scene pass</Item>
           <Item onClick={() => dispatch({ type: 'rebuildIntelligence' })}>Rebuild intelligence</Item>
-          <Item onClick={() => dispatch({ type: 'collapseRetakes' })}>Collapse retakes</Item>
+          <Item
+            onClick={() => {
+              dispatch({ type: 'collapseRetakes' })
+              const scene = startRetakeReview()
+              onToast(describeRetakeReview(useEditor.getState().project, scene))
+            }}
+          >
+            Collapse retakes
+          </Item>
           <Item onClick={() => dispatch({ type: 'applyModelSuggestions' })}>Apply model cuts</Item>
           <Item onClick={() => dispatch({ type: 'rebuildSuggestions' })}>Rebuild suggestions</Item>
           <Item onClick={() => dispatch({ type: 'applySafeSuggestions' })}>Apply safe cuts</Item>
           <Item onClick={() => useEditor.getState().setInspectorTab('agent')}>Open agent</Item>
-          <Item onClick={() => useEditor.getState().setReviewing(true)}>Review suggestions</Item>
+          <Item
+            onClick={() => {
+              if (!startLeftoverReview() && !startRetakeReview()) useEditor.getState().setReviewing(true)
+            }}
+          >
+            Review suggestions
+          </Item>
           <Item
             onClick={() => {
               const span = ioSource()
-              if (span) dispatch({ type: 'addTag', ...span, kind: 'keep' })
+              if (span) onToast(protectRange(span.start, span.end, 'keep').toast)
+              else onToast(protectFromContext().toast)
             }}
           >
             Protect marked range
@@ -422,7 +421,8 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           <Item
             onClick={() => {
               const span = ioSource()
-              if (span) dispatch({ type: 'addTag', ...span, kind: 'demo' })
+              if (span) onToast(protectRange(span.start, span.end, 'demo').toast)
+              else onToast(protectFromContext('demo').toast)
             }}
           >
             Mark range as silent demo
@@ -444,7 +444,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           >
             Tighten pauses in marked range
           </Item>
-          <Item onClick={() => dispatch({ type: 'setAudioMaster', patch: { normalize: true } })}>
+          <Item onClick={() => onToast(setNormalizeFromContext(true).toast)}>
             Normalize to -16 LUFS
           </Item>
         </Menu>
@@ -491,14 +491,39 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           {exporting ? 'Cancel' : 'Export'}
         </button>
       </div>
-    </header>
+      </header>
+    </MenuOpenContext.Provider>
   )
 }
 
+const MenuOpenContext = createContext<{
+  openMenu: string | null
+  setOpenMenu: (label: string | null) => void
+}>({
+  openMenu: null,
+  setOpenMenu: () => undefined
+})
+
 function Menu({ label, children }: { label: string; children: ReactNode }) {
+  const { openMenu, setOpenMenu } = useContext(MenuOpenContext)
+  const open = openMenu === label
   return (
-    <div className="menu">
-      <button className="menu-btn">{label}</button>
+    <div
+      className="menu"
+      data-open={open || undefined}
+      onMouseEnter={() => {
+        if (openMenu) setOpenMenu(label)
+      }}
+    >
+      <button
+        className="menu-btn"
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="true"
+        onClick={() => setOpenMenu(open ? null : label)}
+      >
+        {label}
+      </button>
       <div className="menu-fly">{children}</div>
     </div>
   )
@@ -513,8 +538,17 @@ function Item({
   onClick?: () => void
   disabled?: boolean
 }) {
+  const { setOpenMenu } = useContext(MenuOpenContext)
   return (
-    <button className="menu-item" disabled={disabled} onClick={onClick}>
+    <button
+      className="menu-item"
+      type="button"
+      disabled={disabled}
+      onClick={() => {
+        setOpenMenu(null)
+        onClick?.()
+      }}
+    >
       {children}
     </button>
   )

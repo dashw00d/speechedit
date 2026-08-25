@@ -7,7 +7,7 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
       { keys: 'Home / End', does: 'Jump to the start or end' },
       { keys: 'P', does: 'Play the marked range, or the selected words' },
       { keys: '/', does: 'Loop the marks, or the whole reel' },
-      { keys: '0.5× 1× 2×', does: 'Review speed on the monitor' },
+      { keys: '0.5× 1× 1.5× 2×', does: 'Review speed on the monitor' },
       { keys: 'F', does: 'Full-screen program' }
     ]
   },
@@ -19,14 +19,14 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
       { keys: 'Q / W', does: 'Trim the start / end up to the playhead' },
       { keys: 'S', does: 'Split at the playhead' },
       { keys: 'I / O', does: 'Mark In / Out' },
-      { keys: 'M', does: 'Clear In and Out' }
+      { keys: 'M', does: 'Mark the selected words. With no selection, clear In and Out.' }
     ]
   },
   {
     title: 'Clips',
     rows: [
       { keys: '← →', does: 'Nudge a selected clip one frame. Shift 1s. Alt 10 frames.' },
-      { keys: '⌘C / ⌘V', does: 'Copy clip · paste at the playhead' },
+      { keys: '⌘C / ⌘V', does: 'Copy quote (words) or clip · paste at the playhead' },
       { keys: '⌘⇧C / ⌘⇧V', does: 'Copy look · paste look onto the selection' },
       { keys: 'E', does: 'Extend the clip to the playhead' },
       { keys: 'N / ⇧N', does: 'Next / previous note' },
@@ -37,9 +37,12 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
   {
     title: 'Words',
     rows: [
+      { keys: ', / .', does: 'Cut the previous sentence / this sentence' },
+      { keys: 'A', does: 'Select the paragraph, then Delete removes it' },
       { keys: '⌘F', does: 'Find in the transcript' },
       { keys: 'Enter', does: 'Next match · Shift+Enter previous' },
       { keys: '[ / ]', does: 'Fewer / more words, or previous / next chapter' },
+      { keys: 'F2', does: 'Rename the selected chapter or speaker' },
       { keys: 'Follow', does: 'Keep the current word in view. Scroll to pause it.' }
     ]
   },

@@ -70,6 +70,7 @@ export async function pickBroll(): Promise<Asset | null> {
         waveform: []
       })
     }
+    input.oncancel = () => resolve(null)
     input.click()
   })
 }

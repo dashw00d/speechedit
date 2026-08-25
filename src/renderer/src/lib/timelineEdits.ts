@@ -37,6 +37,7 @@ function suggestionDetail(s: EditSuggestion): string {
 function suggestionLaneLabel(s: EditSuggestion): string {
   if (s.applied) return 'Cut'
   const leftover = leftoverKind(s)
+  if (leftover === 'activity') return 'Activity'
   if (leftover === 'still') return 'Still'
   if (leftover === 'breath') return 'Breath'
   if (leftover === 'static') return 'Static'

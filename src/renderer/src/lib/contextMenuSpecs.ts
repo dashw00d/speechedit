@@ -13,6 +13,7 @@ import { programToSourceOf, sourceToProgramOf } from './resolver'
 import { paragraphIds, sentenceIds } from './transcriptEdit'
 import { ffmpegImportBusy } from './mediaJobs'
 import { copySelectedClip, pasteClipboard } from './clipClipboard'
+import { copyQuoteFromContext } from './quote'
 import { useEditor, usePlayback } from '../store'
 import type { EditBlock } from './timelineEdits'
 
@@ -83,14 +84,10 @@ function wordMenu(wordId: string): ContextMenuSpec {
   })
   items.push({
     id: 'copy',
-    label: 'Copy',
+    label: 'Copy quote',
     shortcut: '⌘C',
     run: () => {
-      const text = project.transcript.words
-        .filter((w) => selected.includes(w.id))
-        .map((w) => w.text)
-        .join(' ')
-      copyText(text)
+      copyQuoteFromContext()
     }
   })
   items.push({

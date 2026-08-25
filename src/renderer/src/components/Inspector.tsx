@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { host } from '../host'
 import { primarySegments, programLength } from '../lib/commands'
 import {
@@ -13,12 +13,27 @@ import {
   suggestTask,
   suggestionInspectorDetail,
   wordsInspectorDetail,
+  toastForCommand,
+  toastForEdit,
   type InspectorAction,
   type InspectorNext
 } from '../lib/contextActions'
+import { toastForCaptionFollow } from '../lib/captions'
 import { captionDefaults } from '../lib/theme'
+import { isTitleCard, TITLE_PLACEHOLDER } from '../lib/title'
+import { generateCaptionsFromContext } from '../lib/captionGenerate'
+import { isVerticalFrame, setFrameFromContext } from '../lib/canvas'
+import { applyCaptionStyleToAllFromContext } from '../lib/captionStyle'
+import { addSceneLowerThirdsFromContext, isLowerThirdCard, LOWER_THIRD_PLACEHOLDER } from '../lib/lowerThird'
 import { takeFamily } from '../lib/sceneAnalysis'
 import { neighborScene } from '../lib/sceneChip'
+import { toastForSceneRename } from '../lib/sceneRename'
+import { toastForSpeakerRename } from '../lib/speakerRename'
+import { copyQuoteFromContext } from '../lib/quote'
+import { removeSceneFromContext } from '../lib/sceneRemove'
+import { protectFromContext } from '../lib/protect'
+import { describeRedaction, redactionCommand, redactionPlacement } from '../lib/redaction'
+import { mergeChapterFromContext, splitChapterFromContext } from '../lib/chapterShape'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
   currentDocumentTitle,
@@ -77,13 +92,16 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const [encoders, setEncoders] = useState<EncoderOption[]>([
     { id: 'libx264', label: 'x264 (CPU)', hardware: false }
   ])
+  const titleFieldRef = useRef<HTMLTextAreaElement>(null)
   const overlayClip = project.tracks.flatMap((t) => t.clips).find((c) => c.id === selectedClipId)
+  const titleCard = isTitleCard(overlayClip)
+  const lowerThirdCard = isLowerThirdCard(overlayClip)
   const ownerTrack = project.tracks.find((t) => t.clips.some((c) => c.id === selectedClipId))
   const segments = primarySegments(project)
   const clip = overlayClip ?? segments.find((c) => c.id === selectedClipId)
   const isPrimary = Boolean(clip && segments.some((s) => s.id === clip.id))
   const clipKind =
-    ownerTrack?.type === 'caption' || (overlayClip && overlayClip.text)
+    ownerTrack?.type === 'caption' || (overlayClip && overlayClip.text && !overlayClip.assetId)
       ? 'caption'
       : ownerTrack
         ? ownerTrack.type === 'audio'
@@ -156,6 +174,14 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
       if (list.length) setEncoders(list)
     })
   }, [])
+
+  useEffect(() => {
+    if (overlayClip?.text !== TITLE_PLACEHOLDER && overlayClip?.text !== LOWER_THIRD_PLACEHOLDER) return
+    const field = titleFieldRef.current
+    if (!field) return
+    field.focus()
+    field.select()
+  }, [overlayClip?.id, overlayClip?.text])
 
   useEffect(() => {
     if (tab !== 'agent') return
@@ -237,23 +263,57 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               }}
             />
             <p className="helper-excerpt">"{wordsDetail.excerpt}"</p>
-            <HelperActions dispatch={dispatch} actions={wordsDetail.actions} onNavigate={compareTakes} />
+            <HelperActions dispatch={dispatch} onToast={onToast} actions={wordsDetail.actions} onNavigate={compareTakes} />
+            <div className="chips">
+              <button
+                className="chip"
+                type="button"
+                title="Copy with the speaker and time. Paste into Slack or a deck."
+                onClick={() => onToast?.(copyQuoteFromContext().toast)}
+              >
+                Copy quote
+              </button>
+            </div>
             <HelperSection title="Adjust">
               {wordsDetail.speakerId != null && (
-                <Field label="Speaker">
-                  <select
-                    value={wordsDetail.speakerId}
-                    onChange={(e) =>
-                      dispatch({ type: 'setSpeaker', wordIds: selectedWordIds, speakerId: e.target.value })
-                    }
-                  >
-                    {project.transcript.speakers.map((speaker) => (
-                      <option key={speaker.id} value={speaker.id}>
-                        {speaker.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                <>
+                  <Field label="Speaker">
+                    <select
+                      value={wordsDetail.speakerId}
+                      onChange={(e) =>
+                        dispatch({ type: 'setSpeaker', wordIds: selectedWordIds, speakerId: e.target.value })
+                      }
+                    >
+                      {project.transcript.speakers.map((speaker) => (
+                        <option key={speaker.id} value={speaker.id}>
+                          {speaker.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Name">
+                    <input
+                      key={wordsDetail.speakerId}
+                      type="text"
+                      defaultValue={
+                        project.transcript.speakers.find((speaker) => speaker.id === wordsDetail.speakerId)?.name ?? ''
+                      }
+                      aria-label="Speaker name"
+                      onBlur={(e) => {
+                        const speaker = project.transcript.speakers.find((row) => row.id === wordsDetail.speakerId)
+                        if (!speaker) return
+                        const toast = toastForSpeakerRename(speaker.name, e.target.value)
+                        if (e.target.value.trim() && e.target.value.trim() !== speaker.name) {
+                          dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name: e.target.value.trim() })
+                        }
+                        if (toast) onToast?.(toast)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                      }}
+                    />
+                  </Field>
+                </>
               )}
               {selectedWordIds.length === 1 && (
                 <Field label="Text">
@@ -263,7 +323,10 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     onBlur={(e) => {
                       const wordId = selectedWordIds[0]
                       if (wordId && e.target.value.trim()) {
+                        const before = useEditor.getState().project
                         dispatch({ type: 'setWordText', wordId, text: e.target.value.trim() })
+                        const follow = toastForCaptionFollow(before, useEditor.getState().project)
+                        if (follow) onToast?.(follow)
                       }
                     }}
                     onKeyDown={(e) => {
@@ -287,16 +350,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   <button
                     className="chip"
                     type="button"
-                    onClick={() => {
-                      const words = project.transcript.words.filter((w) => selectedWordIds.includes(w.id))
-                      if (!words.length) return
-                      dispatch({
-                        type: 'addTag',
-                        start: Math.min(...words.map((w) => w.start)),
-                        end: Math.max(...words.map((w) => w.end)),
-                        kind: 'keep'
-                      })
-                    }}
+                    onClick={() => onToast?.(protectFromContext().toast)}
                   >
                     Protect
                   </button>
@@ -351,7 +405,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             />
             <p className="help">{sceneDetail.explanation}</p>
             {sceneDetail.excerpt && <p className="helper-excerpt">"{sceneDetail.excerpt}"</p>}
-            <HelperActions dispatch={dispatch} actions={sceneDetail.actions} onNavigate={compareTakes} />
+            <HelperActions dispatch={dispatch} onToast={onToast} actions={sceneDetail.actions} onNavigate={compareTakes} />
             <HelperSection title="Chapter">
               <Field label="Name">
                 <input
@@ -360,7 +414,10 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   defaultValue={selectedScene?.title ?? ''}
                   onBlur={(e) => {
                     const title = e.target.value.trim()
-                    if (title) dispatch({ type: 'renameScene', sceneId: selectedSceneId, title })
+                    if (!title || !selectedSceneId) return
+                    const toast = toastForSceneRename(selectedScene?.title ?? '', title)
+                    dispatch({ type: 'renameScene', sceneId: selectedSceneId, title })
+                    if (toast) onToast?.(toast)
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -388,13 +445,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                       className="chip"
                       type="button"
                       title="Split this chapter at the playhead"
-                      onClick={() =>
-                        dispatch({
-                          type: 'splitScene',
-                          sceneId: selectedSceneId,
-                          time: programToSourceOf(project, programTime)
-                        })
-                      }
+                      onClick={() => onToast?.(splitChapterFromContext(selectedSceneId).toast)}
                     >
                       Split chapter here
                     </button>
@@ -404,9 +455,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     className="chip"
                     type="button"
                     title={`Join with ${scenePrev.title}`}
-                    onClick={() =>
-                      dispatch({ type: 'mergeScenes', sceneId: selectedSceneId, otherId: scenePrev.id })
-                    }
+                    onClick={() => onToast?.(mergeChapterFromContext(-1, selectedSceneId).toast)}
                   >
                     Merge with previous
                   </button>
@@ -416,9 +465,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     className="chip"
                     type="button"
                     title={`Join with ${sceneNext.title}`}
-                    onClick={() =>
-                      dispatch({ type: 'mergeScenes', sceneId: selectedSceneId, otherId: sceneNext.id })
-                    }
+                    onClick={() => onToast?.(mergeChapterFromContext(1, selectedSceneId).toast)}
                   >
                     Merge with next
                   </button>
@@ -469,7 +516,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 {gapDetail.tag.label}
               </p>
             )}
-            <HelperActions dispatch={dispatch} actions={gapDetail.actions} onNavigate={compareTakes} />
+            <HelperActions dispatch={dispatch} onToast={onToast} actions={gapDetail.actions} onNavigate={compareTakes} />
             {gapDetail.similarSafeCount > 1 && (
               <p className="help">{gapDetail.similarSafeCount} safe pauses can be cleaned from the bar below.</p>
             )}
@@ -489,7 +536,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             />
             <p className="help">{suggestionDetail.explanation}</p>
             {suggestionDetail.excerpt && <p className="helper-excerpt">"{suggestionDetail.excerpt}"</p>}
-            <HelperActions dispatch={dispatch} actions={suggestionDetail.actions} onNavigate={compareTakes} />
+            <HelperActions dispatch={dispatch} onToast={onToast} actions={suggestionDetail.actions} onNavigate={compareTakes} />
             {suggestionDetail.similarCount > 0 && (
               <p className="help">
                 {suggestionDetail.similarSafeCount} of {suggestionDetail.similarCount} similar{' '}
@@ -664,6 +711,25 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 <ModelsPanel onToast={onToast ?? (() => undefined)} />
                 <HelperSection title="Master picture">
                   <p className="help">Applies to the whole reel. Clip transform still wins on overlays.</p>
+                  <div className="chips">
+                    <button
+                      className="chip"
+                      type="button"
+                      data-active={!isVerticalFrame(project)}
+                      onClick={() => onToast?.(setFrameFromContext('youtube').toast)}
+                    >
+                      YouTube 1080
+                    </button>
+                    <button
+                      className="chip"
+                      type="button"
+                      data-active={isVerticalFrame(project)}
+                      title="Tall frame, centered. Drag X/Y to pick the face."
+                      onClick={() => onToast?.(setFrameFromContext('vertical').toast)}
+                    >
+                      Vertical 9:16
+                    </button>
+                  </div>
                   <Slider
                     label="Scale"
                     value={project.picture.scale}
@@ -792,13 +858,13 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     ? [
                         {
                           id: 'add-redact',
-                          label: 'Blur/redact here',
-                          consequence: 'Adds a redaction overlay at the playhead.',
-                          command: {
-                            type: 'addRedaction',
-                            start: programToSourceOf(project, programTime),
-                            duration: 2
-                          }
+                          label: 'Add redaction',
+                          consequence: describeRedaction(
+                            redactionPlacement(project, programTime, selectedWordIds, selectedSceneId)
+                          ),
+                          command: redactionCommand(
+                            redactionPlacement(project, programTime, selectedWordIds, selectedSceneId)
+                          )
                         } as InspectorAction
                       ]
                     : []),
@@ -1288,8 +1354,14 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         {pane === 'caption' && (
           <>
             <HelperHead
-              headline="Caption"
-              detail="Burned on V3 · lower thirds on V2"
+              headline={titleCard ? 'Title' : lowerThirdCard ? 'Lower third' : 'Caption'}
+              detail={
+                titleCard
+                  ? 'Type the subject line. 3 seconds on the tape.'
+                  : lowerThirdCard
+                    ? 'Type the name. 3 seconds on the tape.'
+                    : 'Burned on V3 · lower thirds on V2'
+              }
               onHear={
                 overlayClip
                   ? () => playLoop(overlayClip.start, overlayClip.start + overlayClip.duration)
@@ -1298,23 +1370,18 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             />
             <button
               className="chip"
-              onClick={() =>
-                dispatch({
-                  type: 'generateCaptions',
-                  maxWords: 5,
-                  speakerPrefix: project.transcript.speakers.length > 1,
-                  emphasize: true
-                })
-              }
+              onClick={() => onToast?.(generateCaptionsFromContext().toast)}
             >
               Caption remaining words
             </button>
-            <button className="chip" onClick={() => dispatch({ type: 'addLowerThirds' })}>
+            <button className="chip" onClick={() => onToast?.(addSceneLowerThirdsFromContext().toast)}>
               Scene lower thirds
             </button>
             <Field label="Text">
               <textarea
-                rows={4}
+                ref={titleFieldRef}
+                rows={titleCard ? 2 : 4}
+                aria-label={titleCard ? 'Title text' : lowerThirdCard ? 'Name on screen' : 'Caption text'}
                 value={overlayClip?.text ?? ''}
                 onChange={(e) =>
                   overlayClip && dispatch({ type: 'setText', clipId: overlayClip.id, text: e.target.value })
@@ -1384,12 +1451,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </Field>
                 <button
                   className="chip"
-                  onClick={() =>
-                    dispatch({
-                      type: 'setCaptionStyleAll',
-                      style: overlayClip.style ?? {}
-                    })
-                  }
+                  onClick={() => onToast?.(applyCaptionStyleToAllFromContext().toast)}
                 >
                   Apply style to all titles
                 </button>
@@ -1466,11 +1528,13 @@ function ColorField({
 function HelperActions({
   actions,
   dispatch,
-  onNavigate
+  onNavigate,
+  onToast
 }: {
   actions: InspectorAction[]
   dispatch: (command: Command) => void
   onNavigate?: () => void
+  onToast?: (msg: string) => void
 }) {
   if (!actions.length) return null
   return (
@@ -1484,7 +1548,14 @@ function HelperActions({
           title={action.consequence}
           onClick={() => {
             if (action.navigate === 'compare-takes') onNavigate?.()
-            else if (action.command) dispatch(action.command)
+            else if (action.id === 'cut-scene' || action.id === 'restore-scene') {
+              onToast?.(removeSceneFromContext().toast)
+            } else if (action.command) {
+              const before = useEditor.getState().project
+              dispatch(action.command)
+              const toast = toastForEdit(before, action.command)
+              if (toast) onToast?.(toast)
+            }
           }}
         >
           <span className="helper-action-label">{action.label}</span>

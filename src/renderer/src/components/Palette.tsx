@@ -2,16 +2,34 @@ import { useMemo, useState } from 'react'
 import { confirmLoseWork, saveCurrentDocument } from '../lib/documentIo'
 import { listRecents } from '../lib/recents'
 import { openRecentAction } from '../lib/fileActions'
-import { rankPalette, type PaletteSpec } from '../lib/contextActions'
+import { rankPalette, toastForCommand, type PaletteSpec } from '../lib/contextActions'
 import { paletteSearchHits } from '../lib/paletteSearch'
 import { cancelExport, cancelImport } from '../lib/mediaJobs'
-import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
+import { bladeAtWord, playInOutOrSelection, selectParagraphFromContext } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
 import { exportSidecar, type SidecarId } from '../lib/exportActions'
 import { readPaletteRecents, rememberPaletteCommand } from '../lib/paletteRecent'
 import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
 import { hopNote } from '../lib/clipEdit'
 import { applyTheme, openPreferences } from '../lib/theme'
+import { describeRetakeReview, findRetakesAndReview, startRetakeReview } from '../lib/firstEdit'
+import { applyTitleFromContext } from '../lib/title'
+import { generateCaptionsFromContext } from '../lib/captionGenerate'
+import { addSceneLowerThirdsFromContext, applyLowerThirdFromContext } from '../lib/lowerThird'
+import { applyCaptionStyleToAllFromContext } from '../lib/captionStyle'
+import { startSceneRename } from '../lib/sceneRename'
+import { startSpeakerRename } from '../lib/speakerRename'
+import { copyQuoteFromContext } from '../lib/quote'
+import { copyStillFromContext } from '../lib/still'
+import { mergeChapterFromContext, splitChapterFromContext } from '../lib/chapterShape'
+import { removeSceneFromContext } from '../lib/sceneRemove'
+import { applyZoomFromContext } from '../lib/zoom'
+import { applyRedactionFromContext } from '../lib/redaction'
+import { addBrollFromContext } from '../lib/broll'
+import { setFrameFromContext } from '../lib/canvas'
+import { clearMarksFromContext, markClipFromContext } from '../lib/marks'
+import { setNormalizeFromContext } from '../lib/loudness'
+import { protectFromContext } from '../lib/protect'
 import { useEditor, usePlayback } from '../store'
 
 export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
@@ -40,19 +58,7 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
       {
         name: 'Protect selection',
         group: 'selection',
-        run: () => {
-          const project = useEditor.getState().project
-          const words = project.transcript.words.filter((w) =>
-            useEditor.getState().selectedWordIds.includes(w.id)
-          )
-          if (!words.length) return
-          dispatch({
-            type: 'addTag',
-            start: Math.min(...words.map((w) => w.start)),
-            end: Math.max(...words.map((w) => w.end)),
-            kind: 'keep'
-          })
-        }
+        run: () => onToast?.(protectFromContext().toast)
       },
       {
         name: 'Make selection shorter',
@@ -108,15 +114,34 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
           })
         }
       },
-      { name: 'Local scene pass', group: 'edit', run: () => dispatch({ type: 'inferScenes' }) },
-      { name: 'Collapse retakes', group: 'edit', run: () => dispatch({ type: 'collapseRetakes' }) },
+      {
+        name: 'Local scene pass',
+        group: 'edit',
+        run: () => {
+          const { toast } = findRetakesAndReview()
+          onToast?.(toast)
+        }
+      },
+      { name: 'Find retakes', group: 'edit', run: () => onToast?.(findRetakesAndReview().toast) },
+      {
+        name: 'Collapse retakes',
+        group: 'edit',
+        run: () => {
+          dispatch({ type: 'collapseRetakes' })
+          const scene = startRetakeReview()
+          onToast?.(describeRetakeReview(useEditor.getState().project, scene))
+        }
+      },
       { name: 'Apply model cuts', group: 'edit', run: () => dispatch({ type: 'applyModelSuggestions' }) },
       {
         name: 'Cut this sentence',
         group: 'selection',
         run: () => {
           const id = useEditor.getState().selectedWordIds[0]
-          if (id) dispatch({ type: 'cutSentence', wordId: id })
+          if (id) {
+            dispatch({ type: 'cutSentence', wordId: id })
+            onToast?.(toastForCommand({ type: 'cutSentence', wordId: id })!)
+          }
         }
       },
       {
@@ -124,7 +149,10 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
         group: 'selection',
         run: () => {
           const id = useEditor.getState().selectedWordIds[0]
-          if (id) dispatch({ type: 'cutPreviousSentence', wordId: id })
+          if (id) {
+            dispatch({ type: 'cutPreviousSentence', wordId: id })
+            onToast?.(toastForCommand({ type: 'cutPreviousSentence', wordId: id })!)
+          }
         }
       },
       { name: 'Add speaker', group: 'edit', run: () => dispatch({ type: 'addSpeaker' }) },
@@ -223,7 +251,21 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
       },
       { name: 'Blade at word', group: 'edit', run: () => bladeAtWord() },
       { name: 'Play marked range or selection', group: 'selection', run: () => playInOutOrSelection() },
-      { name: 'Select paragraph', group: 'selection', run: () => selectParagraphAtCaret() },
+      { name: 'Select paragraph', group: 'selection', run: () => onToast?.(selectParagraphFromContext().toast) },
+      { name: 'Copy quote', group: 'selection', run: () => onToast?.(copyQuoteFromContext().toast) },
+      { name: 'Mark clip', group: 'selection', run: () => onToast?.(markClipFromContext().toast) },
+      { name: 'Rename chapter', group: 'selection', run: () => startSceneRename() },
+      {
+        name: 'Rename speaker',
+        group: 'selection',
+        run: () => {
+          if (!startSpeakerRename().started) onToast?.('Select a speaker, then Rename.')
+        }
+      },
+      { name: 'Split chapter at playhead', group: 'edit', run: () => onToast?.(splitChapterFromContext().toast) },
+      { name: 'Remove scene', group: 'edit', run: () => onToast?.(removeSceneFromContext().toast) },
+      { name: 'Merge with previous chapter', group: 'edit', run: () => onToast?.(mergeChapterFromContext(-1).toast) },
+      { name: 'Merge with next chapter', group: 'edit', run: () => onToast?.(mergeChapterFromContext(1).toast) },
       { name: 'Fit timeline', group: 'edit', run: () => usePlayback.getState().fitTimeline() },
       {
         name: 'Cut marked range',
@@ -249,10 +291,11 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
           }
         }
       },
+      { name: 'Copy frame', group: 'edit', run: () => void copyStillFromContext().then((result) => onToast?.(result.toast)) },
       {
         name: 'Clear In and Out',
         group: 'edit',
-        run: () => dispatch({ type: 'setMarks', markIn: null, markOut: null })
+        run: () => onToast?.(clearMarksFromContext().toast)
       },
       {
         name: 'Tighten pauses in marked range',
@@ -292,42 +335,47 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
       {
         name: 'Add title',
         group: 'edit',
-        run: () =>
-          dispatch({
-            type: 'addCaption',
-            start: usePlayback.getState().programTime,
-            duration: 3,
-            text: 'Title'
-          })
+        run: () => onToast?.(applyTitleFromContext().toast)
       },
       {
         name: 'Add zoom',
         group: 'edit',
-        run: () =>
-          dispatch({
-            type: 'addZoom',
-            start: usePlayback.getState().programTime,
-            duration: 3,
-            scale: 1.45
-          })
+        run: () => onToast?.(applyZoomFromContext().toast)
       },
       {
         name: 'Caption remaining words',
         group: 'edit',
-        run: () => dispatch({ type: 'generateCaptions', maxWords: 5, emphasize: true })
+        run: () => onToast?.(generateCaptionsFromContext().toast)
       },
-      { name: 'Scene lower thirds', group: 'edit', run: () => dispatch({ type: 'addLowerThirds' }) },
+      {
+        name: 'Scene lower thirds',
+        group: 'edit',
+        run: () => onToast?.(addSceneLowerThirdsFromContext().toast)
+      },
+      {
+        name: 'Apply style to all titles',
+        group: 'edit',
+        run: () => onToast?.(applyCaptionStyleToAllFromContext().toast)
+      },
       {
         name: 'Add lower third',
         group: 'edit',
-        run: () =>
-          dispatch({
-            type: 'addTitle',
-            start: usePlayback.getState().programTime,
-            duration: 3,
-            text: 'Lower third',
-            preset: 'lower-third'
-          })
+        run: () => onToast?.(applyLowerThirdFromContext().toast)
+      },
+      {
+        name: 'Add B-roll',
+        group: 'edit',
+        run: () => void addBrollFromContext().then((result) => onToast?.(result.toast))
+      },
+      {
+        name: 'Vertical 9:16',
+        group: 'edit',
+        run: () => onToast?.(setFrameFromContext('vertical').toast)
+      },
+      {
+        name: 'YouTube 1080',
+        group: 'edit',
+        run: () => onToast?.(setFrameFromContext('youtube').toast)
       },
       {
         name: 'Fade in 0.4s',
@@ -348,12 +396,7 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
       {
         name: 'Add redaction',
         group: 'edit',
-        run: () =>
-          dispatch({
-            type: 'addRedaction',
-            start: usePlayback.getState().programTime,
-            duration: 4
-          })
+        run: () => onToast?.(applyRedactionFromContext().toast)
       },
       {
         name: 'Dissolve at playhead',
@@ -402,7 +445,7 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
       {
         name: 'Normalize to -16 LUFS',
         group: 'edit',
-        run: () => dispatch({ type: 'setAudioMaster', patch: { normalize: true } })
+        run: () => onToast?.(setNormalizeFromContext(true).toast)
       },
       {
         name: 'Export…',
@@ -415,7 +458,7 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
           ['vtt', 'Export captions VTT'],
           ['md', 'Export transcript Markdown'],
           ['txt', 'Export transcript TXT'],
-          ['chapters', 'Export chapters JSON'],
+          ['chapters', 'Copy YouTube chapters'],
           ['otio', 'Export OTIO'],
           ['fcpxml', 'Export FCPXML'],
           ['premiere', 'Export Premiere XML'],

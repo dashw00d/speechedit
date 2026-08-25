@@ -27,8 +27,8 @@ describe('caption production QoL', () => {
     })
     const caps = next.tracks.find((t) => t.type === 'caption')?.clips ?? []
     expect(caps.length).toBeGreaterThan(3)
-    expect(caps.every((c) => (c.text ?? '').split(/\s+/).length <= 8)).toBe(true)
-    expect(caps.every((c) => c.auto)).toBe(true)
+    expect(caps.some((c) => c.text && !c.auto)).toBe(true)
+    expect(caps.filter((c) => c.auto).every((c) => (c.text ?? '').split(/\s+/).length <= 8)).toBe(true)
     expect(next.tracks.find((t) => t.type === 'caption')?.hidden).toBe(false)
   })
 
@@ -125,8 +125,8 @@ describe('interchange completeness', () => {
     expect(projectToSrt(p)).toContain('Cut speech like text.')
     expect(projectToVtt(p).startsWith('WEBVTT')).toBe(true)
     expect(projectToTranscriptMd(p)).toContain('## Ryan')
-    const chapters = JSON.parse(projectToChapters(p)) as { chapters: { title: string }[] }
-    expect(chapters.chapters.some((c) => c.title === 'Thesis')).toBe(true)
+    expect(projectToChapters(p)).toMatch(/^0:00 Thesis$/m)
+    expect(projectToChapters(p)).not.toMatch(/False take/)
   })
 
   test('OTIO carries scene markers and caption metadata', () => {

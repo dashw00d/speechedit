@@ -205,6 +205,8 @@ export interface EditorialScene {
 export interface AnalysisCache {
   silence: Interval[]
   staticRegions: Interval[]
+  /** Scene-change timestamps from look analysis. Empty means no visual evidence. */
+  sceneTimes?: number[]
   loudness: { start: number; end: number; lufs: number }[]
 }
 
@@ -333,7 +335,16 @@ export type Command =
   | { type: 'applyDiarization'; assignments?: { start: number; end: number; speaker: string }[] }
   | { type: 'addOverlay'; start: number; duration: number; text: string }
   | { type: 'addZoom'; start: number; duration: number; scale: number }
-  | { type: 'addBroll'; start: number; duration: number; asset: Asset; inPoint?: number }
+  | {
+      type: 'addBroll'
+      start: number
+      duration: number
+      asset: Asset
+      inPoint?: number
+      transform?: Transform
+      muted?: boolean
+      volume?: number
+    }
   | { type: 'addAudio'; start: number; duration: number; asset: Asset; inPoint?: number }
   | { type: 'addRedaction'; start: number; duration: number }
   | { type: 'addTrack'; trackType: TrackType; name?: string }
@@ -344,6 +355,7 @@ export type Command =
   | { type: 'setEncoder'; encoder: string }
   | { type: 'removeClip'; clipId: string }
   | { type: 'applySuggestion'; suggestionId: string }
+  | { type: 'resolveSuggestion'; suggestionId: string; resolution: 'cut' | 'speed' | 'demo' | 'keep' }
   | { type: 'applySuggestions'; suggestionIds: string[] }
   | { type: 'applySafeSuggestions' }
   | { type: 'dismissSuggestion'; suggestionId: string }
@@ -404,19 +416,24 @@ export type Command =
       type: 'setAnalysis'
       silence?: AnalysisCache['silence']
       staticRegions?: AnalysisCache['staticRegions']
+      sceneTimes?: AnalysisCache['sceneTimes']
       loudness?: AnalysisCache['loudness']
     }
   | {
       type: 'appendTake'
       asset: Asset
       words: Word[]
-      analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'>
+      analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'> & {
+        sceneTimes?: number[]
+      }
     }
   | {
       type: 'attachTakeIntel'
       assetId: string
       words?: Word[]
-      analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'>
+      analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'> & {
+        sceneTimes?: number[]
+      }
       whispered?: { text: string; start: number; end: number; speaker?: string }[] | null
     }
 
@@ -424,4 +441,4 @@ export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes'
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }
 }
 
-export const DEFAULT_ANALYSIS: AnalysisCache = { silence: [], staticRegions: [], loudness: [] }
+export const DEFAULT_ANALYSIS: AnalysisCache = { silence: [], staticRegions: [], sceneTimes: [], loudness: [] }

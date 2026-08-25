@@ -10,6 +10,9 @@ import {
   suggestionsFromPace,
   leftoverKind,
   leftoverReviewQueue,
+  leftoverItems,
+  leftoverForSpan,
+  reviewGap,
   suggestionsFromLoudness,
   suggestionsFromSilence,
   suggestionsFromStatic,
@@ -18,7 +21,7 @@ import {
   withCutMargin
 } from './analysis'
 import { applyCommand, programLength } from './commands'
-import { createEmptyProject } from './demo'
+import { createDemoProject, createEmptyProject } from './demo'
 
 function word(text: string, start: number, end: number, speaker = 'ryan'): Word {
   return { id: `w_${start}_${text}`, text, start, end, speaker, deleted: false }
@@ -83,6 +86,24 @@ describe('margin-aware silence', () => {
     expect(hit.label).toMatch(/still|demo/i)
     expect(leftoverKind(hit)).toBe('still')
     expect(leftoverKind({ ...hit, label: 'Breath 0.4s · 120ms pad', action: 'cut' })).toBe('breath')
+  })
+
+  test('silence with a scene change is activity review, not a safe cut', () => {
+    const [hit] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [], 20, [3.4, 5.1])
+    expect(hit.safe).toBe(false)
+    expect(hit.action).toBe('review')
+    expect(hit.label).toMatch(/silent activity/i)
+    expect(leftoverKind(hit)).toBe('activity')
+    const [dead] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [], 20, [0.2, 18])
+    expect(dead.safe).toBe(true)
+    expect(dead.label).toMatch(/Dead air/)
+    expect(leftoverKind(dead)).toBe('other')
+  })
+
+  test('still wins over a scene mark so a frozen hold stays a still', () => {
+    const [hit] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [{ start: 1.8, end: 8.2 }], 20, [4])
+    expect(leftoverKind(hit)).toBe('still')
+    expect(hit.safe).toBe(false)
   })
 
   test('word-gap breaths come from fixture words, not ffmpeg', () => {
@@ -170,6 +191,13 @@ describe('review-not-blind detectors', () => {
       suggestions: [...screens, hot!]
     })
     expect(queue.map((s) => leftoverKind(s))).toEqual(['static', 'loud'])
+    const [activity] = suggestionsFromSilence([{ start: 1, end: 6 }], 0.12, [], 12, [2.5])
+    const queued = leftoverReviewQueue({
+      ...createEmptyProject('activity-first'),
+      suggestions: [...screens, activity, hot!]
+    })
+    expect(queued.map((s) => leftoverKind(s))).toEqual(['activity', 'static', 'loud'])
+    expect(leftoverItems({ ...createEmptyProject('acts'), suggestions: [activity] }, 'activity')).toHaveLength(1)
   })
 
   test('slow pace is review only', () => {
@@ -177,6 +205,22 @@ describe('review-not-blind detectors', () => {
     const [hit] = suggestionsFromPace(words, 20)
     expect(hit.safe).toBe(false)
     expect(hit.action).toBe('review')
+  })
+
+  test('a leftover click-through is found on the tiny gap before the next word', () => {
+    const demo = createDemoProject()
+    const leftover = leftoverForSpan(demo, 22.4, 22.72)
+    expect(leftover?.id).toBe('sug_click')
+    const review = reviewGap(demo, 22.4, 22.72)
+    expect(review.kind).toBe('activity')
+    expect(review.chip).toMatch(/silent activity/)
+  })
+
+  test('a mostly-cut first-edit pause is marked cut, not live leftover air', () => {
+    const cut = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const review = reviewGap(cut, 6.5, 16.2)
+    expect(review.kind).toBe('cut')
+    expect(review.chip).toMatch(/cut/)
   })
 })
 

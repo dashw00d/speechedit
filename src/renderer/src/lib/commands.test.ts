@@ -717,6 +717,38 @@ describe('intelligence and MCP', () => {
     expect(hits[0].action).toBe('review')
   })
 
+  test('resolveSuggestion tags a quiet click-through as silent demo in one undo', () => {
+    const [activity] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [], 20, [3.4])
+    const project = {
+      ...createEmptyProject('activity'),
+      sourceDuration: 20,
+      suggestions: [activity]
+    }
+    const tagged = applyCommand(project, {
+      type: 'resolveSuggestion',
+      suggestionId: activity.id,
+      resolution: 'demo'
+    })
+    expect(tagged.tags.some((tag) => tag.kind === 'demo' && tag.start <= 2.2 && tag.end >= 7.8)).toBe(true)
+    expect(tagged.suggestions.some((s) => s.id === activity.id)).toBe(false)
+    expect(programLength(tagged)).toBeCloseTo(20, 1)
+    const sped = applyCommand(project, {
+      type: 'resolveSuggestion',
+      suggestionId: activity.id,
+      resolution: 'speed'
+    })
+    expect(sped.suggestions.find((s) => s.id === activity.id)?.applied).toBe(true)
+    expect(programLength(sped)).toBeLessThan(20 - 2)
+    const kept = applyCommand(project, {
+      type: 'resolveSuggestion',
+      suggestionId: activity.id,
+      resolution: 'keep'
+    })
+    expect(kept.tags.some((tag) => tag.kind === 'keep' && tag.start <= 2.2 && tag.end >= 7.8)).toBe(true)
+    expect(kept.suggestions.some((s) => s.id === activity.id)).toBe(false)
+    expect(programLength(kept)).toBeCloseTo(20, 1)
+  })
+
   test('applySuggestion cuts a silent still the user confirmed', () => {
     const [still] = suggestionsFromSilence([{ start: 2, end: 8 }], 0.12, [{ start: 1.8, end: 8.2 }])
     const project = {

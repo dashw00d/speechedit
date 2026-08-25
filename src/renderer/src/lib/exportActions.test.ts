@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { createDemoProject, createEmptyProject } from './demo'
-import { SIDECARS, sidecarById, videoExportCopy } from './exportActions'
+import { copyToastForSidecar, projectHasPicture, SIDECARS, sidecarById, videoExportCopy } from './exportActions'
 
 describe('export sheet helpers', () => {
   test('common sidecars are ready on the demo and produce a body', () => {
@@ -12,8 +12,26 @@ describe('export sheet helpers', () => {
       expect(item.body(demo).length).toBeGreaterThan(20)
     }
     expect(sidecarById('srt').body(demo)).toMatch(/-->/)
+    expect(sidecarById('chapters').body(demo)).toMatch(/^0:00 Thesis$/m)
+    expect(sidecarById('chapters').ext).toBe('.chapters.txt')
+    expect(sidecarById('md').body(demo)).toMatch(/^## Ryan$/m)
+    expect(copyToastForSidecar('md')).toMatch(/Slack or Notion/)
+    expect(copyToastForSidecar('chapters')).toMatch(/description/)
+    expect(copyToastForSidecar('srt')).toBeNull()
     expect(videoExportCopy(demo).ready).toBe(false)
     expect(videoExportCopy(demo).summary).toMatch(/No media file/)
+    expect(projectHasPicture(demo)).toBe(false)
+  })
+
+  test('a video asset means the reel has picture', () => {
+    const demo = createDemoProject()
+    const asset = Object.values(demo.assets)[0]!
+    expect(
+      projectHasPicture({
+        ...demo,
+        assets: { ...demo.assets, [asset.id]: { ...asset, kind: 'video', name: 'studio-demo.mp4' } }
+      })
+    ).toBe(true)
   })
 
   test('empty reel disables captions and video', () => {

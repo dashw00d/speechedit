@@ -292,6 +292,7 @@ button:disabled,
   border-bottom: 1px solid var(--color-transcript-divider);
 }
 .speakers { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.speaker-slot { display: flex; align-items: center; gap: 4px; }
 .speaker {
   display: flex;
   align-items: center;
@@ -303,6 +304,7 @@ button:disabled,
   cursor: pointer;
   padding: 0;
 }
+.speaker[data-on] { color: var(--color-fg); }
 .speaker.add { color: var(--color-accent); }
 .speaker-edit {
   width: 9em;
@@ -1873,7 +1875,7 @@ button:disabled,
   z-index: var(--z-menubar);
   padding: 6px;
 }
-.menu:hover .menu-fly, .menu:focus-within .menu-fly { display: grid; }
+.menu[data-open='true'] .menu-fly { display: grid; }
 .menu-label {
   padding: 8px 10px 2px;
   font-size: 10px;

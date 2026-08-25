@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { createDemoProject } from './demo'
 import {
+  SCENE_CHIP_ACTION_IDS,
   groupScenesByTranscriptAnchor,
   neighborScene,
   sceneClockLabel,
@@ -18,6 +19,7 @@ describe('scene headings', () => {
     expect(sceneKindLabel(demo, takeFamily(project.scenes, demo.id))).toBe('Silent demo')
     expect(sceneKindLabel(retake, takeFamily(project.scenes, retake.id))).toBe('Take 1 of 2')
     expect(sceneClockLabel(demo)).toBe('6.5s')
+    expect(SCENE_CHIP_ACTION_IDS.has('zoom')).toBe(true)
   })
 
   test('silent demo scene still anchors in the script before the next spoken word', () => {

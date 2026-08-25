@@ -1,10 +1,33 @@
 import { blockedByLabel, leftoverItems, leftoverKind, leftoverReviewQueue } from '../lib/analysis'
-import { PACE_PRESETS, paceFromMargin, suggestTask } from '../lib/contextActions'
-import { commandForScene, suggestionForScene, takeFamily } from '../lib/sceneAnalysis'
+import { PACE_PRESETS, paceFromMargin, suggestTask, toastForEdit } from '../lib/contextActions'
+import {
+  describeRetakeReview,
+  findRetakesAndReview,
+  startLeftoverReview,
+  startRetakeReview
+} from '../lib/firstEdit'
+import { applyTitleFromContext } from '../lib/title'
+import { addSceneLowerThirdsFromContext, applyLowerThirdFromContext } from '../lib/lowerThird'
+import { captionsNeedFilling, hasSceneLowerThirds } from '../lib/captions'
+import { watchEditedReel } from '../lib/watchReel'
+import { applyZoomFromContext } from '../lib/zoom'
+import { applyRedactionFromContext } from '../lib/redaction'
+import { addBrollFromContext } from '../lib/broll'
+import { isVerticalFrame, setFrameFromContext } from '../lib/canvas'
+import { clearMarksFromContext, cutMarksFromContext } from '../lib/marks'
+import { projectHasPicture } from '../lib/exportActions'
+import { toggleNormalizeFromContext } from '../lib/loudness'
+import { generateCaptionsFromContext } from '../lib/captionGenerate'
+import {
+  commandForScene,
+  retakeReviewQueue,
+  retakeSceneDropped,
+  takeFamily
+} from '../lib/sceneAnalysis'
 import { sourceToProgramOf } from '../lib/resolver'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
-import type { EditSuggestion, SuggestionType } from '../types'
+import type { Command, EditSuggestion, EditorialScene, SuggestionType } from '../types'
 
 const GROUPS: { types: SuggestionType[]; title: string; putBack: string }[] = [
   { types: ['silence'], title: 'Silence', putBack: 'Put back silence' },
@@ -16,14 +39,16 @@ const GROUPS: { types: SuggestionType[]; title: string; putBack: string }[] = [
   { types: ['model'], title: 'Model', putBack: 'Put back model' }
 ]
 
-export function Suggestions() {
+export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
   const reviewing = useEditor((s) => s.reviewing)
   const setReviewing = useEditor((s) => s.setReviewing)
   const selected = useEditor((s) => s.selectedSuggestionId)
+  const selectedSceneId = useEditor((s) => s.selectedSceneId)
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
+  const selectScene = useEditor((s) => s.selectScene)
   const dispatch = useEditor((s) => s.dispatch)
-  const playFromSource = usePlayback((s) => s.playFromSource)
+  const ripple = useEditor((s) => s.ripple)
   const playLoop = usePlayback((s) => s.playLoop)
   const task = suggestTask(project)
   const pace = paceFromMargin(project.cutMargin)
@@ -36,20 +61,51 @@ export function Suggestions() {
   const pending = project.suggestions.filter((s) => !s.applied)
   const applied = project.suggestions.filter((s) => s.applied)
   const hasEdits = project.cuts.length > 0 || applied.length > 0
+  const audioReel = !projectHasPicture(project)
+  const showCaptions = task.showWatch && hasEdits && captionsNeedFilling(project)
+  const showChapterNames =
+    task.showWatch &&
+    hasEdits &&
+    !task.showMarkedExport &&
+    (project.scenes ?? []).filter((scene) => scene.kind !== 'retake').length >= 2 &&
+    !hasSceneLowerThirds(project)
+  const showBroll = project.transcript.words.length > 0 && !task.showMarkedExport
 
   function hearSuggestion(s: EditSuggestion) {
     selectSuggestion(s.id)
     playLoop(sourceToProgramOf(project, s.start), sourceToProgramOf(project, s.end))
   }
 
-  function resolveLeftover(command: { type: 'applySuggestion' | 'dismissSuggestion'; suggestionId: string }) {
+  function resolveLeftover(command: Command) {
+    const before = useEditor.getState().project
     dispatch(command)
+    const toast = toastForEdit(before, command)
+    if (toast) onToast?.(toast)
     const next = leftoverReviewQueue(useEditor.getState().project)[0]
     if (next) hearSuggestion(next)
   }
 
-  function hearScene(start: number, end: number) {
-    playLoop(sourceToProgramOf(project, start), sourceToProgramOf(project, end))
+  function hearScene(scene: EditorialScene) {
+    selectScene(scene.id)
+    playLoop(sourceToProgramOf(project, scene.start), sourceToProgramOf(project, scene.end))
+  }
+
+  function openReview() {
+    if (startLeftoverReview()) return
+    if (startRetakeReview()) return
+    setReviewing(true)
+  }
+
+  function resolveRetake(command: Command, scene: EditorialScene) {
+    dispatch(command)
+    const nextProject = useEditor.getState().project
+    const live = retakeReviewQueue(nextProject).filter((row) => !retakeSceneDropped(nextProject, row))
+    const dropped = retakeReviewQueue(nextProject).filter((row) => retakeSceneDropped(nextProject, row))
+    const next =
+      command.type === 'revertSuggestion' || command.type === 'restoreRange'
+        ? dropped[0]
+        : live.find((row) => row.id !== scene.id) ?? live[0]
+    if (next) hearScene(next)
   }
 
   function sceneKindChip(kind: string, takeIndex?: number) {
@@ -100,7 +156,12 @@ export function Suggestions() {
             ))}
         </div>
         {task.findRetakes && (
-          <button className="review-btn" onClick={() => dispatch({ type: 'inferScenes' })}>
+          <button
+            className="review-btn"
+            type="button"
+            title="Mark retakes from the transcript, then hear the first one"
+            onClick={() => onToast?.(findRetakesAndReview().toast)}
+          >
             Find retakes
           </button>
         )}
@@ -108,13 +169,17 @@ export function Suggestions() {
           <button
             className="review-btn"
             title="Drop every superseded take. You can put them back from Review."
-            onClick={() => dispatch({ type: 'collapseRetakes' })}
+            onClick={() => {
+              dispatch({ type: 'collapseRetakes' })
+              const scene = startRetakeReview()
+              onToast?.(describeRetakeReview(useEditor.getState().project, scene))
+            }}
           >
             Collapse retakes
           </button>
         )}
         {showReviewToggle && (
-          <button className="review-btn" onClick={() => setReviewing(!reviewing)}>
+          <button className="review-btn" onClick={() => (reviewing ? setReviewing(false) : openReview())}>
             {reviewing ? 'Hide review' : task.reviewLabel}
           </button>
         )}
@@ -128,10 +193,165 @@ export function Suggestions() {
               Cut {task.fillerCount} fillers
             </button>
           )}
+          {task.showTitle && (
+            <button
+              className="review-btn"
+              type="button"
+              title="A 3-second title at the start. Type the subject line in the inspector."
+              onClick={() => onToast?.(applyTitleFromContext().toast)}
+            >
+              Add title
+            </button>
+          )}
+          {showChapterNames && (
+            <button
+              className="review-btn"
+              type="button"
+              title="A name on each chapter. Edit any one, then Apply style to all titles."
+              onClick={() => onToast?.(addSceneLowerThirdsFromContext().toast)}
+            >
+              Chapter names
+            </button>
+          )}
+          {task.showLowerThird && (
+            <button
+              className="review-btn"
+              type="button"
+              title="A 3-second name on screen. Type it in the inspector."
+              onClick={() => onToast?.(applyLowerThirdFromContext().toast)}
+            >
+              Add lower third
+            </button>
+          )}
+          {task.showZoom && (
+            <button
+              className="review-btn"
+              type="button"
+              title="Punch in on the selected words or chapter, or 3 seconds from the playhead"
+              onClick={() => onToast?.(applyZoomFromContext().toast)}
+            >
+              Add zoom
+            </button>
+          )}
+          {task.showZoom && (
+            <button
+              className="review-btn"
+              type="button"
+              title="Blur the selected words or chapter, or 4 seconds from the playhead. Drag the box over names or PII."
+              onClick={() => onToast?.(applyRedactionFromContext().toast)}
+            >
+              Add redaction
+            </button>
+          )}
+          {showBroll && (
+            <button
+              className="review-btn"
+              type="button"
+              title="A silent face cam or still in the corner. Covers the selected words or chapter, or 6 seconds from the playhead."
+              onClick={() => {
+                void addBrollFromContext().then((result) => onToast?.(result.toast))
+              }}
+            >
+              Add B-roll
+            </button>
+          )}
+          {showCaptions && (
+            <button
+              className="review-btn"
+              type="button"
+              title="Fill the tape from the live words. Titles and edited cards stay."
+              onClick={() => onToast?.(generateCaptionsFromContext().toast)}
+            >
+              Caption remaining
+            </button>
+          )}
           {task.showWatch && (
-            <button className="review-btn" type="button" onClick={() => playFromSource(0)}>
+            <button
+              className="review-btn"
+              type="button"
+              title={
+                hasEdits
+                  ? 'Starts at 1.5× so you can skim. Switch to 1× on the monitor to hear a line.'
+                  : 'Play from the start'
+              }
+              onClick={() => onToast?.(watchEditedReel({ skim: hasEdits }).toast)}
+            >
               {hasEdits ? 'Watch edited reel' : 'Watch full reel'}
             </button>
+          )}
+          {task.showWatch && hasEdits && !task.showMarkedExport && (
+            <>
+              <button
+                className="review-btn"
+                type="button"
+                data-active={project.audioMaster.normalize}
+                title={
+                  project.audioMaster.normalize
+                    ? 'Already on. Click to leave the recording’s loudness as-is.'
+                    : 'Voice hits -16 LUFS on export. Same as Auto Edit → Normalize.'
+                }
+                onClick={() => onToast?.(toggleNormalizeFromContext().toast)}
+              >
+                Normalize
+              </button>
+              <button
+                className="review-btn"
+                type="button"
+                title={
+                  audioReel
+                    ? 'M4A of the cut. The sheet already has Audio only on.'
+                    : 'MP4 with captions burned in unless you turn that off'
+                }
+                onClick={() => window.dispatchEvent(new Event('speechedit:export'))}
+              >
+                {audioReel ? 'Export audio' : 'Export'}
+              </button>
+            </>
+          )}
+          {task.showMarkedExport && (
+            <>
+              <button
+                className="review-btn"
+                type="button"
+                title={
+                  ripple
+                    ? 'Remove In–Out and close the gap. Undo puts it back.'
+                    : 'Lift In–Out. The hole stays. Undo puts it back.'
+                }
+                onClick={() => onToast?.(cutMarksFromContext().toast)}
+              >
+                {ripple ? 'Cut marked' : 'Lift marked'}
+              </button>
+              <button
+                className="review-btn"
+                type="button"
+                data-active={isVerticalFrame(project)}
+                title="Tall 9:16 frame, centered on the picture. Drag X/Y to pick the face."
+                onClick={() => onToast?.(setFrameFromContext(isVerticalFrame(project) ? 'youtube' : 'vertical').toast)}
+              >
+                {isVerticalFrame(project) ? '16:9' : '9:16'}
+              </button>
+              <button
+                className="safe-btn"
+                type="button"
+                title={
+                  audioReel
+                    ? 'Export only In–Out as M4A. The sheet already has Audio only on.'
+                    : 'Export only In–Out. Uncheck Marked range only on the sheet for the whole reel.'
+                }
+                onClick={() => window.dispatchEvent(new Event('speechedit:export'))}
+              >
+                Export marked range
+              </button>
+              <button
+                className="review-btn"
+                type="button"
+                title="Clear In and Out, then find the next clip"
+                onClick={() => onToast?.(clearMarksFromContext().toast)}
+              >
+                Clear marks
+              </button>
+            </>
           )}
         {primaryApply && (
           <button className="safe-btn" onClick={() => dispatch({ type: 'applySafeSuggestions' })}>
@@ -139,7 +359,7 @@ export function Suggestions() {
           </button>
         )}
         {primaryReview && !reviewing && (
-          <button className="safe-btn" onClick={() => setReviewing(true)}>
+          <button className="safe-btn" onClick={openReview}>
             {task.reviewLabel}
           </button>
         )}
@@ -165,17 +385,15 @@ export function Suggestions() {
           )}
           {project.scenes.map((scene) => {
             const family = takeFamily(project.scenes, scene.id)
-            const spoken = project.transcript.words.filter((w) => w.start >= scene.start && w.end <= scene.end)
-            const dropped =
-              Boolean(suggestionForScene(project, scene)?.applied) ||
-              (spoken.length > 0 && spoken.every((w) => w.deleted))
+            const dropped = retakeSceneDropped(project, scene)
             return (
               <div
                 key={scene.id}
                 className="drawer-row"
                 data-kind={scene.kind}
                 data-applied={dropped}
-                onClick={() => hearScene(scene.start, scene.end)}
+                data-on={selectedSceneId === scene.id}
+                onClick={() => hearScene(scene)}
               >
                 <span className="kind">{sceneKindChip(scene.kind, scene.takeIndex)}</span>
                 <span>
@@ -191,7 +409,7 @@ export function Suggestions() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation()
-                      hearScene(scene.start, scene.end)
+                      hearScene(scene)
                     }}
                   >
                     Hear
@@ -202,7 +420,7 @@ export function Suggestions() {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation()
-                        dispatch(commandForScene(project, scene, 'revert'))
+                        resolveRetake(commandForScene(project, scene, 'revert'), scene)
                       }}
                     >
                       Put back
@@ -213,7 +431,7 @@ export function Suggestions() {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation()
-                        dispatch(commandForScene(project, scene, 'apply'))
+                        resolveRetake(commandForScene(project, scene, 'apply'), scene)
                       }}
                     >
                       Use later take
@@ -224,7 +442,7 @@ export function Suggestions() {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation()
-                        dispatch({ type: 'keepTake', sceneId: scene.id })
+                        resolveRetake({ type: 'keepTake', sceneId: scene.id }, scene)
                       }}
                     >
                       Keep this take
@@ -235,12 +453,49 @@ export function Suggestions() {
             )
           })}
           {(() => {
+            const activities = leftoverItems(project, 'activity')
             const stills = leftoverItems(project, 'still')
             const breaths = leftoverItems(project, 'breath')
             const statics = leftoverItems(project, 'static')
             const hots = leftoverItems(project, 'loud')
             return (
               <>
+                {activities.length > 0 && (
+                  <section className="drawer-group">
+                    <div className="drawer-row drawer-head">
+                      <span className="kind">Quiet picture</span>
+                      <span>{activities.length} need a listen</span>
+                      <span />
+                      <span />
+                    </div>
+                    {activities.map((s) => (
+                      <SuggestionRow
+                        key={s.id}
+                        s={s}
+                        selected={selected === s.id}
+                        blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
+                        onHear={() => hearSuggestion(s)}
+                        onApply={() =>
+                          resolveLeftover({
+                            type: 'resolveSuggestion',
+                            suggestionId: s.id,
+                            resolution: 'cut'
+                          })
+                        }
+                        onSkip={() =>
+                          resolveLeftover({
+                            type: 'resolveSuggestion',
+                            suggestionId: s.id,
+                            resolution: 'keep'
+                          })
+                        }
+                        onResolve={(resolution) =>
+                          resolveLeftover({ type: 'resolveSuggestion', suggestionId: s.id, resolution })
+                        }
+                      />
+                    ))}
+                  </section>
+                )}
                 {stills.length > 0 && (
                   <section className="drawer-group">
                     <div className="drawer-row drawer-head">
@@ -256,8 +511,23 @@ export function Suggestions() {
                         selected={selected === s.id}
                         blockedLabel={blockedByLabel(project.tags, s.blockedBy)}
                         onHear={() => hearSuggestion(s)}
-                        onApply={() => resolveLeftover({ type: 'applySuggestion', suggestionId: s.id })}
-                        onSkip={() => resolveLeftover({ type: 'dismissSuggestion', suggestionId: s.id })}
+                        onApply={() =>
+                          resolveLeftover({
+                            type: 'resolveSuggestion',
+                            suggestionId: s.id,
+                            resolution: 'cut'
+                          })
+                        }
+                        onSkip={() =>
+                          resolveLeftover({
+                            type: 'resolveSuggestion',
+                            suggestionId: s.id,
+                            resolution: 'keep'
+                          })
+                        }
+                        onResolve={(resolution) =>
+                          resolveLeftover({ type: 'resolveSuggestion', suggestionId: s.id, resolution })
+                        }
                       />
                     ))}
                   </section>
@@ -374,6 +644,7 @@ export function Suggestions() {
             const rows = pending.filter(
               (s) =>
                 group.types.includes(s.type) &&
+                leftoverKind(s) !== 'activity' &&
                 leftoverKind(s) !== 'still' &&
                 leftoverKind(s) !== 'breath' &&
                 leftoverKind(s) !== 'static' &&
@@ -491,7 +762,8 @@ function SuggestionRow({
   blockedLabel,
   onHear,
   onApply,
-  onSkip
+  onSkip,
+  onResolve
 }: {
   s: EditSuggestion
   selected: boolean
@@ -499,21 +771,25 @@ function SuggestionRow({
   onHear: () => void
   onApply: () => void
   onSkip: () => void
+  onResolve?: (resolution: 'cut' | 'speed' | 'demo' | 'keep') => void
 }) {
+  const leftover = leftoverKind(s)
   return (
     <div className="drawer-row" data-on={selected} data-blocked={Boolean(s.blockedBy)} onClick={onHear}>
         <span className="kind">
           {s.blockedBy
             ? 'protected'
-            : leftoverKind(s) === 'still'
+            : leftover === 'activity'
+              ? 'activity'
+              : leftover === 'still'
               ? 'still'
-              : leftoverKind(s) === 'breath'
+              : leftover === 'breath'
                 ? 'breath'
-                : leftoverKind(s) === 'static'
+                : leftover === 'static'
                   ? 'static'
-                  : leftoverKind(s) === 'low-motion'
+                  : leftover === 'low-motion'
                     ? 'talking'
-                    : leftoverKind(s) === 'loud'
+                    : leftover === 'loud'
                       ? 'hot'
                       : s.type === 'repeat'
                       ? 'retake'
@@ -548,19 +824,31 @@ function SuggestionRow({
           >
             Skip
           </button>
-        ) : leftoverKind(s) === 'still' || s.action === 'review' ? (
+        ) : leftover === 'activity' || leftover === 'still' ? (
           <>
-            {leftoverKind(s) === 'still' && (
+            {leftover === 'activity' && onResolve && (
               <>
                 <button
                   className="chip"
                   type="button"
+                  title="Keep this walkthrough. Auto Edit will skip it next time."
                   onClick={(e) => {
                     e.stopPropagation()
-                    onApply()
+                    onResolve('demo')
                   }}
                 >
-                  Cut
+                  Silent demo
+                </button>{' '}
+                <button
+                  className="chip"
+                  type="button"
+                  title="Play this stretch at 4×"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onResolve('speed')
+                  }}
+                >
+                  Speed 4×
                 </button>{' '}
               </>
             )}
@@ -569,12 +857,60 @@ function SuggestionRow({
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
-                onSkip()
+                onResolve ? onResolve('cut') : onApply()
+              }}
+            >
+              Cut
+            </button>{' '}
+            {leftover === 'still' && onResolve && (
+              <>
+                <button
+                  className="chip"
+                  type="button"
+                  title="Keep this hold. Auto Edit will skip it next time."
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onResolve('demo')
+                  }}
+                >
+                  Silent demo
+                </button>{' '}
+                <button
+                  className="chip"
+                  type="button"
+                  title="Play this wait at 4×"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onResolve('speed')
+                  }}
+                >
+                  Speed 4×
+                </button>{' '}
+              </>
+            )}
+            <button
+              className="chip"
+              type="button"
+              title="Keep this. Auto Edit will skip it next time."
+              onClick={(e) => {
+                e.stopPropagation()
+                onResolve ? onResolve('keep') : onSkip()
               }}
             >
               Keep
             </button>
           </>
+        ) : s.action === 'review' ? (
+          <button
+            className="chip"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onSkip()
+            }}
+          >
+            Keep
+          </button>
         ) : (
           <>
             <button

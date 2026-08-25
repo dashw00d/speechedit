@@ -329,6 +329,21 @@ export function uncollapsedRetakeCount(project: Pick<Project, 'scenes' | 'sugges
   return (project.scenes ?? []).filter((scene) => scene.kind === 'retake' && !retakeSceneDropped(project, scene)).length
 }
 
+export function droppedRetakeCount(project: Pick<Project, 'scenes' | 'suggestions' | 'transcript'>): number {
+  return (project.scenes ?? []).filter((scene) => scene.kind === 'retake' && retakeSceneDropped(project, scene)).length
+}
+
+/** Live retakes first (need a pick), then dropped ones (might put back). */
+export function retakeReviewQueue(
+  project: Pick<Project, 'scenes' | 'suggestions' | 'transcript'>
+): EditorialScene[] {
+  const retakes = (project.scenes ?? []).filter((scene) => scene.kind === 'retake')
+  return [
+    ...retakes.filter((scene) => !retakeSceneDropped(project, scene)),
+    ...retakes.filter((scene) => retakeSceneDropped(project, scene))
+  ]
+}
+
 export function retakeRanges(project: Pick<Project, 'scenes' | 'suggestions'>): Interval[] {
   const fromScenes = (project.scenes ?? [])
     .filter((s) => s.kind === 'retake')

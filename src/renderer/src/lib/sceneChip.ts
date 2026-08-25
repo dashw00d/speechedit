@@ -6,7 +6,9 @@ export const SCENE_CHIP_ACTION_IDS = new Set([
   'keep-take',
   'keep-all',
   'cut-scene',
-  'restore-scene'
+  'restore-scene',
+  'zoom',
+  'redact'
 ])
 
 export function sceneKindLabel(scene: EditorialScene, family: EditorialScene[]): string {

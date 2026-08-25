@@ -39,6 +39,7 @@ export function normalizeProject(project: Project): Project {
     analysis: {
       silence: project.analysis?.silence ?? DEFAULT_ANALYSIS.silence,
       staticRegions: project.analysis?.staticRegions ?? DEFAULT_ANALYSIS.staticRegions,
+      sceneTimes: project.analysis?.sceneTimes ?? DEFAULT_ANALYSIS.sceneTimes ?? [],
       loudness: project.analysis?.loudness ?? DEFAULT_ANALYSIS.loudness
     },
     transcript: {

@@ -1,9 +1,15 @@
-import type { EditSuggestion, Interval, Project } from '../types'
+import type { EditSuggestion, EditorialScene, Interval, Project } from '../types'
 import { leftoverItems, leftoverKind, leftoverReviewQueue } from './analysis'
 import { captionClipsOf, shouldAutoCaption } from './captions'
 import { overlap } from './edl'
-import { useEditor } from '../store'
-import { hasUncollapsedRetakes, uncollapsedRetakeCount } from './sceneAnalysis'
+import { sourceToProgramOf } from './resolver'
+import { useEditor, usePlayback } from '../store'
+import {
+  droppedRetakeCount,
+  hasUncollapsedRetakes,
+  retakeReviewQueue,
+  uncollapsedRetakeCount
+} from './sceneAnalysis'
 
 function countLabel(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? '' : 's'}`
@@ -209,13 +215,45 @@ export function dismissLeftoverBreaths(): number {
   return ids.length
 }
 
-/** Open review on the first leftover still, static screen, or hot-audio spike. */
-export function startLeftoverReview(): 'still' | 'static' | 'loud' | false {
+/** Open review on the first leftover quiet picture change, still, static screen, or hot spike. */
+export function startLeftoverReview(): 'activity' | 'still' | 'static' | 'loud' | false {
   const next = leftoverReviewQueue(useEditor.getState().project)[0]
   if (!next) return false
   const editor = useEditor.getState()
   editor.setReviewing(true)
   editor.selectSuggestion(next.id)
   const kind = leftoverKind(next)
-  return kind === 'still' || kind === 'static' || kind === 'loud' ? kind : false
+  return kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud' ? kind : false
+}
+
+export function describeRetakeReview(
+  project: Pick<Project, 'scenes' | 'suggestions' | 'transcript'>,
+  found: EditorialScene | false
+): string {
+  if (!found) return 'No retakes in this transcript.'
+  const live = uncollapsedRetakeCount(project)
+  if (live > 0) {
+    return `Found ${live} retake${live === 1 ? '' : 's'}. Hear this one, then Use later take.`
+  }
+  const dropped = droppedRetakeCount(project)
+  return `Dropped ${dropped} false take${dropped === 1 ? '' : 's'}. Hear this one — Put back if it was the good line.`
+}
+
+/** Open review on the first live retake, or the first dropped take if first-edit already collapsed them. */
+export function startRetakeReview(): EditorialScene | false {
+  const project = useEditor.getState().project
+  const next = retakeReviewQueue(project)[0]
+  if (!next) return false
+  const editor = useEditor.getState()
+  editor.setReviewing(true)
+  editor.selectScene(next.id)
+  usePlayback.getState().playLoop(sourceToProgramOf(project, next.start), sourceToProgramOf(project, next.end))
+  return next
+}
+
+/** Infer scenes, then hear the first take that still needs a decision. */
+export function findRetakesAndReview(): { toast: string; scene: EditorialScene | false } {
+  useEditor.getState().dispatch({ type: 'inferScenes' })
+  const scene = startRetakeReview()
+  return { toast: describeRetakeReview(useEditor.getState().project, scene), scene }
 }
