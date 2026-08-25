@@ -4,12 +4,15 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  assertMixGraph,
   buildJoinGraph,
   buildMixGraph,
   buildSegmentFilters,
   explainExportError,
+  explainGraphBuildError,
   jobDuration,
   summarizeJob,
+  validateExportJob,
   type GraphJob
 } from '../renderer/src/lib/exportGraph'
 import type { ModelEndpointOpts } from './transcribe'
@@ -49,6 +52,7 @@ export interface ProgramExportJob {
     volume: number
     fadeIn: number
     fadeOut: number
+    id?: string
   }[]
   segments: {
     start: number
@@ -61,6 +65,7 @@ export interface ProgramExportJob {
     fadeIn: number
     fadeOut: number
     overlapNext?: number
+    programStart?: number
   }[]
   layers: {
     kind: 'caption' | 'overlay' | 'image' | 'blur'
@@ -77,6 +82,13 @@ export interface ProgramExportJob {
     fadeOut?: number
     inPoint?: number
     loop?: boolean
+    id?: string
+    speed?: number
+    align?: 'left' | 'center' | 'right'
+    fill?: string
+    stroke?: string
+    position?: 'lower' | 'center' | 'upper'
+    rotation?: number
   }[]
 }
 
@@ -422,7 +434,25 @@ export async function exportProgram(
     throw new Error(`Recording is missing:\n${job.input}\nRe-import the media and export again.`)
   }
   const graphJob = asGraphJob(job)
-  const mix = buildMixGraph(graphJob, { fontFile: findExportFont() })
+  const invalid = validateExportJob(graphJob)
+  if (invalid) throw new Error(invalid)
+  for (const bed of job.beds ?? []) {
+    if (bed.path && !existsSync(bed.path)) {
+      throw new Error(`Music bed is missing:\n${bed.path}\nRelink the bed and export again.`)
+    }
+  }
+  for (const layer of job.layers) {
+    if (layer.path && !existsSync(layer.path)) {
+      throw new Error(`Overlay or still is missing:\n${layer.path}\nRelink it and export again.`)
+    }
+  }
+  let mix
+  try {
+    mix = buildMixGraph(graphJob, { fontFile: findExportFont() })
+    assertMixGraph(mix)
+  } catch (err) {
+    throw new Error(explainGraphBuildError(err))
+  }
   onProgress?.({ ratio: 0, stage: summarizeJob(graphJob, mix) })
   const encoder = await resolveEncoder(job.encoder)
   const dir = await mkdtemp(join(tmpdir(), 'speechedit-'))
@@ -433,7 +463,12 @@ export async function exportProgram(
       const seg = job.segments[i]
       const part = join(dir, `p${i}.mp4`)
       parts.push(part)
-      const filters = buildSegmentFilters(graphJob, seg)
+      let filters
+      try {
+        filters = buildSegmentFilters(graphJob, seg, i)
+      } catch (err) {
+        throw new Error(explainGraphBuildError(err))
+      }
       const stage = `encoding clip ${i + 1}/${job.segments.length}`
       await runFfmpeg(
         [

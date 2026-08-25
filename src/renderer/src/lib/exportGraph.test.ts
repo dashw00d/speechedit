@@ -6,10 +6,15 @@ import {
   buildMixGraph,
   buildSegmentFilters,
   explainExportError,
+  explainGraphBuildError,
+  programmedSegments,
   summarizeJob,
+  validateExportJob,
   voiceAudioFilters
 } from './exportGraph'
-import { buildExportJob, duckGainAt, programVolume, visibleGraphicClips } from './exportJob'
+import { buildExportJob, duckGainAt, programVolume, projectToExportJob, visibleGraphicClips } from './exportJob'
+import { bedGain, duckAt, sampleProgram } from './programLook'
+import { resolveSegments } from './resolver'
 import { DEFAULT_TRANSFORM, emptyClipFields, type Project } from '../types'
 
 function fixtureProject(): Project {
@@ -204,6 +209,30 @@ describe('export graph (ffmpeg 4.4, no process)', () => {
     expect(join?.filterComplex).toContain('acrossfade=d=0.200')
     expect(join?.mapVideo).toBe('[vout]')
     expect(join?.mapAudio).toBe('[aout]')
+
+    const mixed = {
+      ...dissolved,
+      segments: [
+        ...dissolved.segments,
+        { ...dissolved.segments[1], start: 1.8, end: 2.0, overlapNext: 0, programStart: 1.2 }
+      ]
+    }
+    const mixedJoin = buildJoinGraph(mixed, mixed.segments.length)
+    expect(mixedJoin?.filterComplex).toContain('concat=n=2:v=1:a=0')
+    expect(mixedJoin?.filterComplex).toContain('concat=n=2:v=0:a=1')
+    expect(mixedJoin?.filterComplex).not.toContain('concat=n=2:v=1:a=1')
+  })
+
+  test('dissolve then a hard cut keeps video and audio on separate concat chains', () => {
+    const job = buildExportJob(parityProject(), '/tmp/se-out.mp4')!
+    expect(job.segments.length).toBeGreaterThan(2)
+    expect(job.segments.some((s) => (s.overlapNext ?? 0) > 0.04)).toBe(true)
+    const join = buildJoinGraph(job, job.segments.length)
+    expect(join?.filterComplex).toContain('xfade=transition=fade')
+    expect(join?.filterComplex).toContain('acrossfade=')
+    expect(join?.filterComplex).toContain('concat=n=2:v=1:a=0')
+    expect(join?.filterComplex).toContain('concat=n=2:v=0:a=1')
+    expect(join?.filterComplex).not.toContain('concat=n=2:v=1:a=1')
   })
 
   test('voice-only EQ uses -af and copies video (no bad [aout] map)', () => {
@@ -238,6 +267,117 @@ describe('export graph (ffmpeg 4.4, no process)', () => {
     expect(explainExportError('Unknown encoder h264_nvenc')).toMatch(/x264/)
     expect(explainExportError('No such file or directory')).toMatch(/Re-link/)
     expect(explainExportError('width not divisible by 2')).toMatch(/even/)
+    expect(explainGraphBuildError(new Error('Video map label is missing from the filter graph.'))).toMatch(
+      /export graph/
+    )
+  })
+})
+
+function parityProject(): Project {
+  let p = applyCommand(fixtureProject(), { type: 'setSpeed', start: 0, end: 0.9, speed: 2 })
+  p = applyCommand(p, {
+    type: 'setCaptionStyleAll',
+    style: { fill: '#ffcc00', stroke: '#111111', position: 'upper', align: 'left', fontSize: 28 }
+  })
+  p = applyCommand(p, { type: 'dissolveAtPlayhead', duration: 0.18, time: 0.4 })
+  return p
+}
+
+describe('playback / export parity', () => {
+  test('job segments match resolveSegments; sampleProgram matches duck, beds, layers, speed', () => {
+    const project = parityProject()
+    const job = projectToExportJob(project, '/tmp/se-out.mp4')
+    const segs = resolveSegments(project)
+    expect(job.segments).toHaveLength(segs.length)
+    segs.forEach((seg, i) => {
+      expect(job.segments[i].start).toBeCloseTo(seg.inPoint, 5)
+      expect(job.segments[i].end).toBeCloseTo(seg.outPoint, 5)
+      expect(job.segments[i].speed).toBe(seg.speed)
+      expect(job.segments[i].volume).toBe(seg.volume)
+      expect(job.segments[i].fadeIn).toBe(seg.fadeIn)
+      expect(job.segments[i].fadeOut).toBe(seg.fadeOut)
+      expect(job.segments[i].overlapNext).toBe(seg.overlapNext)
+      expect(job.segments[i].programStart).toBeCloseTo(seg.start, 5)
+    })
+    expect(programmedSegments(job)[0].programStart).toBeCloseTo(job.segments[0].programStart ?? 0, 5)
+
+    const times = [0.05, 0.35, 0.7, 1.1]
+    for (const t of times) {
+      const look = sampleProgram(job, t)
+      const duck = duckAt(job, t)
+      expect(look.voice.ducked).toBe(duck < 0.999)
+      expect(look.voice.duckAmount).toBe(job.duck)
+      expect(duckGainAt(project, t)).toBeCloseTo(duck, 5)
+
+      const incoming = look.incoming
+      if (incoming) {
+        const local = t - incoming.programStart
+        expect(look.incomingSource).toBeCloseTo(incoming.start + local * incoming.speed, 5)
+        expect(look.incomingSpeed).toBe(incoming.speed)
+      }
+
+      for (const bed of job.beds ?? []) {
+        const sampled = look.beds.find((b) => b.bed.path === bed.path)
+        expect(sampled).toBeTruthy()
+        expect(sampled!.gain).toBeCloseTo(bedGain(job, bed, t), 5)
+      }
+
+      for (const layer of job.layers) {
+        const visible = t >= layer.start && t < layer.end
+        const sampled = look.layers.find((l) => l.layer.id === layer.id)
+        if (visible) {
+          expect(sampled).toBeTruthy()
+          expect(sampled!.layer.fill).toBe(layer.fill)
+          expect(sampled!.layer.position).toBe(layer.position)
+          expect(sampled!.layer.align).toBe(layer.align)
+          expect(sampled!.opacity).toBeCloseTo((layer.opacity ?? 1) * sampled!.fade, 5)
+        } else {
+          expect(sampled).toBeUndefined()
+        }
+      }
+    }
+  })
+
+  test('dissolve opacities follow the xfade envelope the renderer emits', () => {
+    const job = projectToExportJob(parityProject(), '/tmp/se-out.mp4')
+    const overlap = job.segments.find((s) => (s.overlapNext ?? 0) > 0.04)?.overlapNext ?? 0
+    expect(overlap).toBeGreaterThan(0.04)
+    const incoming = programmedSegments(job).find((s, i) => i > 0 && (job.segments[i - 1].overlapNext ?? 0) > 0.04)
+    expect(incoming).toBeTruthy()
+    const mid = incoming!.programStart + overlap / 2
+    const look = sampleProgram(job, mid)
+    expect(look.outgoing).toBeTruthy()
+    expect(look.incomingOpacity).toBeCloseTo(0.5, 1)
+    expect(look.outgoingOpacity).toBeCloseTo(0.5, 1)
+    const join = buildJoinGraph(job, job.segments.length)
+    expect(join?.filterComplex).toContain('xfade=transition=fade')
+    expect(join?.filterComplex).toContain(`acrossfade=d=${overlap.toFixed(3)}`)
+  })
+
+  test('caption style and overlay speed ride the same job fields as lavfi', () => {
+    const job = projectToExportJob(parityProject(), '/tmp/se-out.mp4')
+    const cap = job.layers.find((l) => l.kind === 'caption')
+    expect(cap?.fill).toBe('#ffcc00')
+    expect(cap?.stroke).toBe('#111111')
+    expect(cap?.position).toBe('upper')
+    expect(cap?.align).toBe('left')
+    expect(cap?.fontSize).toBe(28)
+    const mix = buildMixGraph(job, { fontFile: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf' })
+    expect(mix.filterComplex).toContain('fontcolor=0xFFCC00')
+    expect(mix.filterComplex).toContain('bordercolor=0x111111')
+    expect(job.segments.some((s) => s.speed === 2)).toBe(true)
+    const fast = job.segments.find((s) => s.speed === 2)!
+    const filters = buildSegmentFilters(job, fast, job.segments.indexOf(fast))
+    expect(filters.vf).toContain('setpts=PTS/2.000')
+    expect(filters.af).toContain('atempo=2.000')
+  })
+
+  test('validateExportJob names the missing bed or empty timeline', () => {
+    const job = projectToExportJob(parityProject(), '/tmp/se-out.mp4')
+    expect(validateExportJob(job)).toBeNull()
+    expect(validateExportJob({ ...job, segments: [] })).toMatch(/empty/)
+    expect(validateExportJob({ ...job, beds: [{ ...(job.beds ?? [])[0], path: '' }] })).toMatch(/bed/)
+    expect(validateExportJob({ ...job, segments: [{ ...job.segments[0], speed: 0 }] })).toMatch(/speed|0/)
   })
 })
 
@@ -265,6 +405,35 @@ describe('lavfi smoke', () => {
     expect(info.duration).toBeGreaterThan(1.1)
     expect(info.duration).toBeLessThan(2.05)
     expect(stages.some((s) => /clip|mixing|bed|caption/i.test(s))).toBe(true)
+  }, 60000)
+
+  test('dissolve + speed + caption + duck encode and probe', async () => {
+    const ffmpeg = Bun.which('ffmpeg')
+    const ffprobe = Bun.which('ffprobe')
+    if (!ffmpeg || !ffprobe) throw new Error('ffmpeg/ffprobe required for export smoke')
+
+    await Bun.$`${ffmpeg} -y -f lavfi -i testsrc=size=320x240:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 2 -pix_fmt yuv420p /tmp/se-src.mp4`.quiet()
+    await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=220:sample_rate=48000 -t 2 /tmp/se-bed.wav`.quiet()
+    await Bun.$`${ffmpeg} -y -f lavfi -i color=c=red:s=80x80 -frames:v 1 /tmp/se-still.png`.quiet()
+
+    const { exportProgram, probe } = await import('../../../main/ffmpeg.ts')
+    const job = buildExportJob(parityProject(), '/tmp/se-parity-smoke.mp4')!
+    job.encoder = 'libx264'
+    job.normalize = false
+    expect(job.segments.some((s) => (s.overlapNext ?? 0) > 0.04)).toBe(true)
+    expect(job.segments.some((s) => s.speed === 2)).toBe(true)
+    expect(job.layers.some((l) => l.kind === 'caption' && l.fill === '#ffcc00')).toBe(true)
+    expect(job.duckWindows.length).toBeGreaterThan(0)
+    const stages: string[] = []
+    await exportProgram(job, (info) => {
+      stages.push(info.stage)
+    })
+    const info = await probe('/tmp/se-parity-smoke.mp4')
+    expect(info.hasVideo).toBe(true)
+    expect(info.hasAudio).toBe(true)
+    expect(info.duration).toBeGreaterThan(0.6)
+    expect(info.duration).toBeLessThan(2.2)
+    expect(stages.some((s) => /clip|mixing|joining|caption|duck/i.test(s))).toBe(true)
   }, 60000)
 
   test('importRecording + applyCommand + exportProgram writes a program', async () => {

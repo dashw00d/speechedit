@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef } from 'react'
 import { mediaUrl } from '../host'
 import { programLength } from '../lib/commands'
 import { currentWord } from '../lib/edl'
-import { audioBeds, programVolume, visibleGraphicClips } from '../lib/exportJob'
-import { cssTransform, fadeGain } from '../lib/keyframes'
-import { pictureAt, programToSourceOf, segmentAtProgram, segmentsAtProgram } from '../lib/resolver'
+import { projectToExportJob } from '../lib/exportJob'
+import { cssTransform } from '../lib/keyframes'
+import { sampleProgram } from '../lib/programLook'
+import { pictureAt } from '../lib/resolver'
 import { formatTimecode } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import { useEngine } from '../useEngine'
@@ -17,29 +18,25 @@ export function Monitor() {
   const programTime = usePlayback((s) => s.programTime)
   const playing = usePlayback((s) => s.playing)
   const toggle = usePlayback((s) => s.toggle)
-  const duration = programLength(project)
-  const sourceTime = programToSourceOf(project, programTime)
+  const job = useMemo(() => projectToExportJob(project), [project])
+  const look = useMemo(() => sampleProgram(job, programTime), [job, programTime])
+  const duration = job.duration && job.duration > 0 ? job.duration : programLength(project)
+  const sourceTime = look.sourceTime
   const word = currentWord(project.transcript.words, sourceTime)
   const asset = Object.values(project.assets)[0]
   const src = asset?.path ? mediaUrl(asset.path) : ''
   const picture = pictureAt(project, programTime)
-  const segment = segmentAtProgram(project, programTime)
-  const stack = segmentsAtProgram(project, programTime)
-  const outgoing = stack.length > 1 ? stack[0] : undefined
-  const { gain: volume, ducked, duckAmount } = programVolume(project, programTime)
+  const { gain: volume, ducked, duckAmount, incomingGain } = look.voice
+  const captions = look.layers.filter((l) => l.layer.kind === 'caption')
+  const overlays = look.layers.filter((l) => l.layer.kind !== 'caption')
 
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    video.muted = project.audioMaster.muted || volume <= 0.0001
-    video.volume = Math.min(1, Math.max(0, volume))
-  }, [volume, project.audioMaster.muted])
+    video.muted = incomingGain <= 0.0001
+    video.volume = Math.min(1, Math.max(0, incomingGain))
+  }, [incomingGain])
 
-  const captions = visibleGraphicClips(project, programTime, 'caption')
-  const overlays = visibleGraphicClips(project, programTime, 'overlay')
-  const pictureFade = segment
-    ? fadeGain(programTime - segment.start, segment.duration, segment.fadeIn, segment.fadeOut)
-    : 1
   const crop = picture.crop
   const angle = useMemo(() => 18 + sourceTime * 37, [sourceTime])
 
@@ -47,8 +44,8 @@ export function Monitor() {
     const willPlay = !playing
     const video = videoRef.current
     if (video && willPlay) {
-      video.muted = project.audioMaster.muted
-      video.volume = Math.min(1, Math.max(0, volume))
+      video.muted = incomingGain <= 0.0001
+      video.volume = Math.min(1, Math.max(0, incomingGain))
       void video.play().catch(() => undefined)
     }
     toggle()
@@ -60,39 +57,30 @@ export function Monitor() {
         Program
         <span>
           {project.name}
-          {segment && segment.speed !== 1 ? ` · ${segment.speed}×` : ''}
+          {look.incoming && look.incoming.speed !== 1 ? ` · ${look.incoming.speed}×` : ''}
         </span>
       </div>
       <div className="crt">
         {src ? (
           <>
-            {outgoing && (
+            {look.outgoing && (
               <video
                 ref={underRef}
                 className="dissolve-under"
                 src={src}
-                muted
+                muted={look.voice.outgoingGain <= 0.0001}
                 playsInline
-                style={{
-                  opacity:
-                    picture.opacity *
-                    fadeGain(
-                      programTime - outgoing.start,
-                      outgoing.duration,
-                      outgoing.fadeIn,
-                      outgoing.fadeOut
-                    )
-                }}
+                style={{ opacity: look.outgoingOpacity }}
               />
             )}
             <video
               ref={videoRef}
               src={src}
-              muted={project.audioMaster.muted}
+              muted={incomingGain <= 0.0001}
               playsInline
               style={{
                 transform: cssTransform(picture),
-                opacity: picture.opacity * pictureFade,
+                opacity: look.incomingOpacity,
                 transformOrigin: 'center center',
                 clipPath: `inset(${(crop?.y ?? 0) * 100}% ${(1 - (crop?.x ?? 0) - (crop?.w ?? 1)) * 100}% ${(1 - (crop?.y ?? 0) - (crop?.h ?? 1)) * 100}% ${(crop?.x ?? 0) * 100}%)`
               }}
@@ -111,83 +99,76 @@ export function Monitor() {
             <div className="needle" style={{ transform: `translate(-50%, -100%) rotate(${angle}deg)` }} />
           </div>
         )}
-        {overlays.map((overlay) => {
-          const media = overlay.assetId ? project.assets[overlay.assetId] : undefined
-          const local = programTime - overlay.start
-          const fade = fadeGain(local, overlay.duration, overlay.fadeIn, overlay.fadeOut)
-          if (overlay.effect === 'blur') {
+        {overlays.map(({ layer, opacity }) => {
+          if (layer.kind === 'blur') {
             return (
               <div
-                key={overlay.id}
+                key={layer.id ?? `${layer.start}-blur`}
                 className="redact"
                 style={{
-                  transform: cssTransform(overlay.transform),
-                  opacity: overlay.transform.opacity * fade,
-                  width: `${Math.max(12, overlay.transform.scale * 100)}%`
+                  transform: `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
+                  opacity,
+                  width: `${Math.max(12, layer.scale * 100)}%`
                 }}
               />
             )
           }
-          if (media?.path) {
-            const url = mediaUrl(media.path)
-            return media.kind === 'video' ? (
+          if (layer.kind === 'image' && layer.path) {
+            const url = mediaUrl(layer.path)
+            const xf = `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`
+            return layer.loop ? (
+              <img
+                key={layer.id ?? layer.path}
+                className="broll"
+                src={url}
+                alt={layer.text}
+                style={{ transform: xf, opacity }}
+              />
+            ) : (
               <video
-                key={overlay.id}
-                data-overlay={overlay.id}
+                key={layer.id ?? layer.path}
+                data-overlay={layer.id}
                 className="broll"
                 src={url}
                 muted
                 playsInline
-                style={{
-                  transform: cssTransform(overlay.transform),
-                  opacity: overlay.transform.opacity * fade
-                }}
-              />
-            ) : (
-              <img
-                key={overlay.id}
-                className="broll"
-                src={url}
-                alt={overlay.text ?? media.name}
-                style={{
-                  transform: cssTransform(overlay.transform),
-                  opacity: overlay.transform.opacity * fade
-                }}
+                style={{ transform: xf, opacity }}
               />
             )
           }
-          if (!overlay.text) return null
+          if (!layer.text) return null
           return (
             <div
-              key={overlay.id}
+              key={layer.id ?? `${layer.start}-ov`}
               className="overlay-card"
               style={{
-                transform: cssTransform(overlay.transform),
-                opacity: overlay.transform.opacity * fade
+                transform: `translate(${layer.x}px, ${layer.y}px) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
+                opacity,
+                fontSize: layer.fontSize,
+                color: layer.fill,
+                WebkitTextStrokeColor: layer.stroke
               }}
             >
-              {overlay.text}
+              {layer.text}
             </div>
           )
         })}
-        {captions.map((caption) =>
-          caption.text ? (
+        {captions.map(({ layer, opacity }) =>
+          layer.text ? (
             <div
-              key={caption.id}
+              key={layer.id ?? `${layer.start}-cap`}
               className="caption-burn"
-              data-pos={caption.style?.position ?? 'lower'}
-              data-align={caption.style?.align ?? 'center'}
+              data-pos={layer.position ?? 'lower'}
+              data-align={layer.align ?? 'center'}
               style={{
-                fontSize: caption.style?.fontSize,
-                textAlign: caption.style?.align,
-                color: caption.style?.fill,
-                WebkitTextStrokeColor: caption.style?.stroke,
-                opacity:
-                  caption.transform.opacity *
-                  fadeGain(programTime - caption.start, caption.duration, caption.fadeIn, caption.fadeOut)
+                fontSize: layer.fontSize,
+                textAlign: layer.align,
+                color: layer.fill,
+                WebkitTextStrokeColor: layer.stroke,
+                opacity
               }}
             >
-              {caption.text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+              {layer.text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
                 part.startsWith('**') && part.endsWith('**') ? (
                   <strong key={i}>{part.slice(2, -2)}</strong>
                 ) : (
@@ -224,8 +205,8 @@ export function Monitor() {
         </button>
         <MarkButtons />
         <div className="beds" hidden>
-          {audioBeds(project).map((bed) => (
-            <audio key={bed.id} data-bed={bed.id} src={mediaUrl(bed.path)} preload="auto" />
+          {(job.beds ?? []).map((bed) => (
+            <audio key={bed.id ?? bed.path} data-bed={bed.id ?? bed.path} src={mediaUrl(bed.path)} preload="auto" />
           ))}
         </div>
       </div>

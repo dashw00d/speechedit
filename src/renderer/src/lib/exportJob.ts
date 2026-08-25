@@ -1,65 +1,16 @@
-import type { Clip, Project } from '../types'
-import { fadeGain } from './keyframes'
+import { DEFAULT_CAPTION_STYLE, type Clip, type Project } from '../types'
+import type { GraphJob, GraphLayer } from './exportGraph'
 import { normalizeProject } from './normalize'
-import { programLengthOf, resolveSegments, segmentAtProgram } from './resolver'
+import { bedGain, duckAt, voiceLook } from './programLook'
+import { programLengthOf, resolveSegments } from './resolver'
 
-export interface ExportLayer {
-  kind: 'caption' | 'overlay' | 'image' | 'blur'
-  start: number
-  end: number
-  text: string
-  fontSize: number
-  x: number
-  y: number
-  scale: number
-  opacity: number
-  path?: string
-  fadeIn: number
-  fadeOut: number
-  inPoint: number
-  loop: boolean
-}
+export type ExportLayer = GraphLayer
 
-export interface ProgramExportJob {
-  input: string
-  output: string
-  fps: number
-  width: number
-  height: number
-  volume: number
-  fadeIn: number
-  fadeOut: number
-  encoder: string
-  normalize: boolean
-  eqLow: number
-  eqMid: number
-  eqHigh: number
-  compress: boolean
-  duck: number
-  duckWindows: { start: number; end: number }[]
+export interface ProgramExportJob extends GraphJob {
+  beds: NonNullable<GraphJob['beds']>
+  duckWindows: NonNullable<GraphJob['duckWindows']>
   duration: number
-  beds: {
-    path: string
-    start: number
-    duration: number
-    inPoint: number
-    volume: number
-    fadeIn: number
-    fadeOut: number
-  }[]
-  segments: {
-    start: number
-    end: number
-    speed: number
-    scale: number
-    x: number
-    y: number
-    volume: number
-    fadeIn: number
-    fadeOut: number
-    overlapNext: number
-  }[]
-  layers: ExportLayer[]
+  layers: GraphLayer[]
 }
 
 export function audioBeds(project: Project) {
@@ -83,62 +34,16 @@ export function overlayDuckWindows(project: Project): { start: number; end: numb
   return project.tracks
     .filter((t) => t.type === 'overlay' && !t.hidden && !t.muted)
     .flatMap((t) => t.clips)
-    .filter((c) => c.assetId && project.assets[c.assetId])
+    .filter((c) => !c.muted && c.assetId && project.assets[c.assetId])
     .map((c) => ({ start: c.start, end: c.start + c.duration }))
 }
 
-export function duckGainAt(project: Project, programTime: number): number {
-  const duck = project.audioMaster.duck ?? 0
-  if (duck <= 0) return 1
-  const hit = overlayDuckWindows(project).some((w) => programTime >= w.start && programTime < w.end)
-  return hit ? Math.max(0, 1 - duck) : 1
-}
-
-export function visibleGraphicClips(
-  project: Project,
-  programTime: number,
-  type: 'overlay' | 'caption'
-): Clip[] {
-  return project.tracks
-    .filter((t) => t.type === type && !t.hidden && !t.muted)
-    .flatMap((t) => t.clips)
-    .filter((c) => !c.muted && programTime >= c.start && programTime < c.start + c.duration)
-}
-
-export function bedGainAt(
-  project: Project,
-  bed: { start: number; duration: number; volume: number; fadeIn: number; fadeOut: number },
-  programTime: number
-): number {
-  const master = project.audioMaster.muted ? 0 : project.audioMaster.volume
-  const local = programTime - bed.start
-  return master * bed.volume * fadeGain(local, bed.duration, bed.fadeIn, bed.fadeOut)
-}
-
-export function programVolume(project: Project, programTime: number) {
-  const segment = segmentAtProgram(project, programTime)
-  const duck = duckGainAt(project, programTime)
-  const master = project.audioMaster.muted ? 0 : project.audioMaster.volume
-  const fade = fadeGain(
-    programTime,
-    programLengthOf(project),
-    project.audioMaster.fadeIn,
-    project.audioMaster.fadeOut
-  )
-  return {
-    gain: master * (segment?.volume ?? 1) * duck * fade,
-    ducked: duck < 0.999,
-    duckAmount: project.audioMaster.duck ?? 0
-  }
-}
-
-export function buildExportJob(project: Project, output: string): ProgramExportJob | null {
+export function projectToExportJob(project: Project, output = ''): ProgramExportJob {
   const current = normalizeProject(project)
   const asset = Object.values(current.assets).find((a) => a.path)
-  if (!asset?.path) return null
   const segs = resolveSegments(current)
   return {
-    input: asset.path,
+    input: asset?.path ?? '',
     output,
     fps: current.fps,
     width: current.width,
@@ -155,7 +60,7 @@ export function buildExportJob(project: Project, output: string): ProgramExportJ
     duck: current.audioMaster.duck,
     duckWindows: overlayDuckWindows(current),
     duration: programLengthOf(current),
-    beds: audioBeds(current).map(({ id: _id, ...bed }) => bed),
+    beds: audioBeds(current),
     segments: segs.map((s) => ({
       start: s.inPoint,
       end: s.outPoint,
@@ -166,7 +71,10 @@ export function buildExportJob(project: Project, output: string): ProgramExportJ
       volume: s.volume,
       fadeIn: s.fadeIn,
       fadeOut: s.fadeOut,
-      overlapNext: s.overlapNext
+      overlapNext: s.overlapNext,
+      programStart: s.start,
+      opacity: s.transform.opacity,
+      rotation: s.transform.rotation
     })),
     layers: current.tracks
       .filter((t) => (t.type === 'caption' || t.type === 'overlay') && !t.hidden && !t.muted)
@@ -174,32 +82,84 @@ export function buildExportJob(project: Project, output: string): ProgramExportJ
         t.clips
           .filter((c) => !c.muted)
           .map((c) => {
-            const asset = c.assetId ? current.assets[c.assetId] : undefined
+            const media = c.assetId ? current.assets[c.assetId] : undefined
             const kind =
               c.effect === 'blur'
                 ? ('blur' as const)
-                : asset?.kind === 'image' || asset?.kind === 'video'
+                : media?.kind === 'image' || media?.kind === 'video'
                   ? ('image' as const)
                   : (t.type as 'caption' | 'overlay')
             return {
               kind,
+              id: c.id,
               start: c.start,
               end: c.start + c.duration,
               text: c.text ?? '',
-              fontSize: c.style?.fontSize ?? 42,
+              fontSize: c.style?.fontSize ?? DEFAULT_CAPTION_STYLE.fontSize,
               x: c.transform.x,
               y: c.transform.y,
               scale: c.transform.scale,
               opacity: c.transform.opacity,
-              path: asset?.path,
+              path: media?.path,
               fadeIn: c.fadeIn,
               fadeOut: c.fadeOut,
               inPoint: c.inPoint,
-              loop: asset?.kind === 'image'
+              loop: media?.kind === 'image',
+              speed: c.speed || 1,
+              align: c.style?.align ?? DEFAULT_CAPTION_STYLE.align,
+              fill: c.style?.fill ?? DEFAULT_CAPTION_STYLE.fill,
+              stroke: c.style?.stroke ?? DEFAULT_CAPTION_STYLE.stroke,
+              position: c.style?.position ?? (t.type === 'caption' ? 'lower' : 'upper'),
+              rotation: c.transform.rotation
             }
           })
       )
   }
+}
+
+export function duckGainAt(project: Project, programTime: number): number {
+  return duckAt(projectToExportJob(project), programTime)
+}
+
+export function visibleGraphicClips(
+  project: Project,
+  programTime: number,
+  type: 'overlay' | 'caption'
+): Clip[] {
+  return project.tracks
+    .filter((t) => t.type === type && !t.hidden && !t.muted)
+    .flatMap((t) => t.clips)
+    .filter((c) => !c.muted && programTime >= c.start && programTime < c.start + c.duration)
+}
+
+export function bedGainAt(
+  project: Project,
+  bed: { id?: string; start: number; duration: number; volume: number; fadeIn: number; fadeOut: number },
+  programTime: number
+): number {
+  const job = projectToExportJob(project)
+  const found =
+    (job.beds ?? []).find((b) => (bed.id && b.id === bed.id) || (b.start === bed.start && b.duration === bed.duration)) ??
+    {
+      path: '',
+      start: bed.start,
+      duration: bed.duration,
+      inPoint: 0,
+      volume: bed.volume,
+      fadeIn: bed.fadeIn,
+      fadeOut: bed.fadeOut,
+      id: bed.id
+    }
+  return bedGain(job, found, programTime)
+}
+
+export function programVolume(project: Project, programTime: number) {
+  return voiceLook(projectToExportJob(project), programTime)
+}
+
+export function buildExportJob(project: Project, output: string): ProgramExportJob | null {
+  const job = projectToExportJob(project, output)
+  return job.input ? job : null
 }
 
 export function exportDuration(project: Project): number {

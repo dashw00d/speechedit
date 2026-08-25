@@ -56,9 +56,12 @@ export function cssTransform(t: Transform): string {
   return `translate(${t.x}px, ${t.y}px) scale(${t.scale}) rotate(${t.rotation}deg)`
 }
 
+/** Matches FFmpeg afade/fade enable thresholds in exportGraph.ts. */
+export const FADE_EPS = 0.02
+
 export function fadeGain(local: number, duration: number, fadeIn: number, fadeOut: number): number {
   let g = 1
-  if (fadeIn > 0.01 && local < fadeIn) g = Math.min(g, local / fadeIn)
-  if (fadeOut > 0.01 && local > duration - fadeOut) g = Math.min(g, (duration - local) / fadeOut)
+  if (fadeIn > FADE_EPS && local < fadeIn) g = Math.min(g, local / fadeIn)
+  if (fadeOut > FADE_EPS && local > duration - fadeOut) g = Math.min(g, (duration - local) / fadeOut)
   return Math.max(0, Math.min(1, g))
 }

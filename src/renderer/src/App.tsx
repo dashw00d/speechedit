@@ -19,7 +19,7 @@ import {
   saveCurrentDocument
 } from './lib/documentIo'
 import { currentWord } from './lib/edl'
-import { summarizeJob } from './lib/exportGraph'
+import { summarizeJob, validateExportJob } from './lib/exportGraph'
 import { buildExportJob } from './lib/exportJob'
 import { programToSourceOf, snapTime, sourceToProgramOf } from './lib/resolver'
 import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
@@ -74,6 +74,11 @@ export function App() {
     const job = buildExportJob(project, '')
     if (!job) {
       setToast('Open media to export a program.')
+      return
+    }
+    const graphProblem = validateExportJob(job)
+    if (graphProblem) {
+      setToast(graphProblem)
       return
     }
     if (!isElectron) {
