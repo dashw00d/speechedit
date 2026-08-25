@@ -13,7 +13,7 @@ import {
   type TrackType,
   type Transform
 } from '../types'
-import { buildSuggestions, cutMinusProtected, suggestionsFromSilence } from './analysis'
+import { buildSuggestions, cutMinusProtected, suggestionsFromGaps } from './analysis'
 import { previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
@@ -648,10 +648,13 @@ export function applyCommand(project: Project, command: Command): Project {
     }
     case 'setCutMargin': {
       const margin = clamp(command.margin, 0, 0.45)
-      const raw = current.analysis?.silence ?? []
-      const silence = (raw.length ? suggestionsFromSilence(raw, margin) : []).filter(
-        (s) => !current.cuts.some((cut) => overlap(cut, s) > (s.end - s.start) * 0.8)
-      )
+      const silence = suggestionsFromGaps({
+        duration: current.sourceDuration,
+        silence: current.analysis?.silence ?? [],
+        sceneHits: current.analysis?.staticRegions ?? [],
+        words: current.transcript.words,
+        margin
+      }).filter((s) => !current.cuts.some((cut) => overlap(cut, s) > (s.end - s.start) * 0.8))
       return touch({
         ...current,
         cutMargin: margin,

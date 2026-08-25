@@ -146,7 +146,8 @@ export function createDemoProject(): Project {
   const project = createEmptyProject('Studio demo')
   const silence = [
     { start: 6.58, end: 16.02 },
-    { start: 23.78, end: 29.85 }
+    { start: 23.78, end: 29.85 },
+    { start: 41.4, end: 46.2 }
   ]
   return {
     ...project,
@@ -227,7 +228,7 @@ export function createDemoProject(): Project {
       }
     ],
     suggestions: [
-      ...suggestionsFromSilence(silence, 0.12),
+      ...suggestionsFromSilence(silence, 0.12, [{ start: 16.2, end: 22.4 }], asset.duration),
       {
         id: 'sug_norm',
         type: 'loud',
