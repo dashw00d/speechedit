@@ -1,6 +1,8 @@
 import { host } from '../host'
 import type { Asset, Project, Word } from '../types'
 import { buildSuggestions, speechIslands } from './analysis'
+import { applyCommand } from './commands'
+import { assignmentsFromCues, hasProviderSpeakers } from './diarize'
 import { loadSettings } from './settings'
 import { createEmptyProject } from './demo'
 import { parseSrt } from './transcript'
@@ -35,7 +37,7 @@ export async function importRecording(
         text,
         start: seg.start + ((seg.end - seg.start) * i) / Math.max(1, tokens.length),
         end: seg.start + ((seg.end - seg.start) * (i + 1)) / Math.max(1, tokens.length),
-        speaker: 'ryan',
+        speaker: seg.speaker || 'ryan',
         deleted: false
       }))
     })
@@ -58,7 +60,7 @@ export async function importRecording(
     thumbnails: thumbs
   }
   const base = createEmptyProject(name.replace(/\.[^.]+$/, ''))
-  return {
+  const draft: Project = {
     ...base,
     sourceDuration: info.duration,
     width: info.width ?? 1920,
@@ -80,6 +82,13 @@ export async function importRecording(
       margin: base.cutMargin
     })
   }
+  if (whispered && hasProviderSpeakers(whispered)) {
+    return applyCommand(draft, {
+      type: 'applyDiarization',
+      assignments: assignmentsFromCues(whispered)
+    })
+  }
+  return draft
 }
 
 export { parseSrt }

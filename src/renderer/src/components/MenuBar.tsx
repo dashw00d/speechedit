@@ -1,16 +1,21 @@
 import type { ReactNode } from 'react'
 import { host, isElectron } from '../host'
-import { withGeneratedCaptions } from '../lib/captions'
 import { importRecording } from '../lib/importMedia'
 import {
   applyInterchange,
   downloadText,
   pickInterchange,
   projectToAutoEditor,
+  projectToChapters,
   projectToFcpxml,
+  projectToKdenlive,
   projectToMlt,
   projectToOtio,
-  projectToSrt
+  projectToPremiere,
+  projectToSrt,
+  projectToTranscriptMd,
+  projectToTranscriptTxt,
+  projectToVtt
 } from '../lib/interchange'
 import { askEditor } from '../lib/askModel'
 import { programLength } from '../lib/commands'
@@ -190,11 +195,30 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           </Item>
           <Item
             onClick={() =>
-              dispatch({ type: 'replaceProject', project: withGeneratedCaptions(project) })
+              dispatch({
+                type: 'addTitle',
+                start: usePlayback.getState().programTime,
+                duration: 3,
+                text: 'Lower third',
+                preset: 'lower-third'
+              })
+            }
+          >
+            Add lower third
+          </Item>
+          <Item
+            onClick={() =>
+              dispatch({
+                type: 'generateCaptions',
+                maxWords: 5,
+                speakerPrefix: project.transcript.speakers.length > 1,
+                emphasize: true
+              })
             }
           >
             Caption remaining words
           </Item>
+          <Item onClick={() => dispatch({ type: 'addLowerThirds' })}>Scene lower thirds</Item>
           <Item
             onClick={async () => {
               const asset = await pickBroll()
@@ -256,6 +280,30 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           <Item onClick={() => void exportInterchange('srt', projectToSrt(project), `${project.name}.srt`)}>
             Captions SRT
           </Item>
+          <Item onClick={() => void exportInterchange('vtt', projectToVtt(project), `${project.name}.vtt`)}>
+            Captions VTT
+          </Item>
+          <Item
+            onClick={() =>
+              void exportInterchange('transcript', projectToTranscriptMd(project), `${project.name}.md`)
+            }
+          >
+            Transcript Markdown
+          </Item>
+          <Item
+            onClick={() =>
+              void exportInterchange('transcript', projectToTranscriptTxt(project), `${project.name}.txt`)
+            }
+          >
+            Transcript TXT
+          </Item>
+          <Item
+            onClick={() =>
+              void exportInterchange('chapters', projectToChapters(project), `${project.name}.chapters.json`)
+            }
+          >
+            Chapters JSON
+          </Item>
           <Item onClick={() => void exportInterchange('otio', projectToOtio(project), `${project.name}.otio`)}>
             OpenTimelineIO
           </Item>
@@ -263,6 +311,11 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             onClick={() => void exportInterchange('fcpxml', projectToFcpxml(project), `${project.name}.fcpxml`)}
           >
             FCPXML
+          </Item>
+          <Item
+            onClick={() => void exportInterchange('premiere', projectToPremiere(project), `${project.name}.xml`)}
+          >
+            Premiere XML
           </Item>
           <Item
             onClick={() =>
@@ -275,6 +328,13 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
             onClick={() => void exportInterchange('mlt', projectToMlt(project), `${project.name}.mlt`)}
           >
             Shotcut MLT
+          </Item>
+          <Item
+            onClick={() =>
+              void exportInterchange('kdenlive', projectToKdenlive(project), `${project.name}.kdenlive`)
+            }
+          >
+            Kdenlive
           </Item>
         </Menu>
         <Menu label="Auto Edit">

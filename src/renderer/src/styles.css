@@ -332,7 +332,14 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   color: var(--paper);
   -webkit-text-stroke: 3px #16140f;
   paint-order: stroke fill;
+  white-space: pre-line;
 }
+.caption-burn[data-pos='upper'] { top: 10%; bottom: auto; }
+.caption-burn[data-pos='center'] { top: 42%; bottom: auto; }
+.caption-burn[data-pos='lower'] { bottom: 12%; }
+.caption-burn[data-align='left'] { text-align: left; }
+.caption-burn[data-align='right'] { text-align: right; }
+.caption-burn strong { color: #e6c36a; }
 .broll {
   position: absolute;
   max-width: 46%;

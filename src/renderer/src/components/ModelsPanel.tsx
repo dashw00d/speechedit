@@ -41,10 +41,18 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           text: c.text,
           start: c.start,
           end: c.end,
-          speaker: project.transcript.speakers[0]?.id ?? 'ryan',
+          speaker: c.speaker || project.transcript.speakers[0]?.id || 'ryan',
           deleted: false
         }))
       )
+      if (cues.some((c) => c.speaker)) {
+        useEditor.getState().dispatch({
+          type: 'applyDiarization',
+          assignments: cues
+            .filter((c) => c.speaker)
+            .map((c) => ({ start: c.start, end: c.end, speaker: c.speaker as string }))
+        })
+      }
       onToast(`Transcript · ${cues.length} cues`)
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Transcribe failed.')

@@ -26,7 +26,7 @@ export interface SpeechHost {
   transcribe: (
     file: string,
     opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }
-  ) => Promise<{ text: string; start: number; end: number }[] | null>
+  ) => Promise<{ text: string; start: number; end: number; speaker?: string }[] | null>
   complete: (req: {
     endpoint: { baseUrl?: string; model?: string; apiKey?: string }
     messages: { role: string; content: string }[]

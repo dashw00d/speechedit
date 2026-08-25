@@ -48,6 +48,7 @@ export interface ApiWord {
   text: string
   start: number
   end: number
+  speaker?: string
 }
 
 export async function transcribeOpenAI(
@@ -69,22 +70,6 @@ export async function transcribeOpenAI(
     const detail = await res.text().catch(() => res.statusText)
     throw new Error(`Transcribe ${res.status}: ${detail.slice(0, 240)}`)
   }
-  const data = (await res.json()) as {
-    words?: { word?: string; text?: string; start: number; end: number }[]
-    segments?: { text: string; start: number; end: number; words?: { word: string; start: number; end: number }[] }[]
-  }
-  if (data.words?.length) {
-    return data.words.map((w) => ({
-      text: String(w.word ?? w.text ?? '').trim(),
-      start: w.start,
-      end: w.end
-    })).filter((w) => w.text)
-  }
-  const fromSegs =
-    data.segments?.flatMap((seg) =>
-      seg.words?.length
-        ? seg.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-        : [{ text: seg.text.trim(), start: seg.start, end: seg.end }]
-    ) ?? []
-  return fromSegs.filter((w) => w.text)
+  const { cuesFromTranscriptJson } = await import('./diarize')
+  return cuesFromTranscriptJson(await res.json())
 }

@@ -166,13 +166,22 @@ export function Monitor() {
         {caption?.text && (
           <div
             className="caption-burn"
+            data-pos={caption.style?.position ?? 'lower'}
+            data-align={caption.style?.align ?? 'center'}
             style={{
               fontSize: caption.style?.fontSize,
               textAlign: caption.style?.align,
-              color: caption.style?.fill
+              color: caption.style?.fill,
+              WebkitTextStrokeColor: caption.style?.stroke
             }}
           >
-            {caption.text}
+            {caption.text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+              part.startsWith('**') && part.endsWith('**') ? (
+                <strong key={i}>{part.slice(2, -2)}</strong>
+              ) : (
+                <span key={i}>{part}</span>
+              )
+            )}
           </div>
         )}
         {word && <div className="now-word">{word.text}</div>}

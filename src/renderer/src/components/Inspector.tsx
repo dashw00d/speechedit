@@ -311,6 +311,22 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
 
         {tab === 'caption' && (
           <>
+            <button
+              className="chip"
+              onClick={() =>
+                dispatch({
+                  type: 'generateCaptions',
+                  maxWords: 5,
+                  speakerPrefix: project.transcript.speakers.length > 1,
+                  emphasize: true
+                })
+              }
+            >
+              Caption remaining words
+            </button>
+            <button className="chip" onClick={() => dispatch({ type: 'addLowerThirds' })}>
+              Scene lower thirds
+            </button>
             <Field label="Text">
               <textarea
                 rows={4}
@@ -320,21 +336,92 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 }
               />
             </Field>
-            {overlayClip?.style && (
-              <Slider
-                label="Size"
-                value={overlayClip.style.fontSize}
-                min={18}
-                max={96}
-                onChange={(fontSize) =>
-                  dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { fontSize } })
-                }
-              />
+            {overlayClip && (
+              <>
+                <Slider
+                  label="Size"
+                  value={overlayClip.style?.fontSize ?? 42}
+                  min={18}
+                  max={96}
+                  onChange={(fontSize) =>
+                    dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { fontSize } })
+                  }
+                />
+                <Field label="Align">
+                  <select
+                    value={overlayClip.style?.align ?? 'center'}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'setCaptionStyle',
+                        clipId: overlayClip.id,
+                        style: { align: e.target.value as 'left' | 'center' | 'right' }
+                      })
+                    }
+                  >
+                    <option value="left">Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                </Field>
+                <Field label="Position">
+                  <select
+                    value={overlayClip.style?.position ?? 'lower'}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'setCaptionStyle',
+                        clipId: overlayClip.id,
+                        style: { position: e.target.value as 'lower' | 'center' | 'upper' }
+                      })
+                    }
+                  >
+                    <option value="lower">Lower third</option>
+                    <option value="center">Center</option>
+                    <option value="upper">Upper</option>
+                  </select>
+                </Field>
+                <Field label="Fill">
+                  <input
+                    type="text"
+                    value={overlayClip.style?.fill ?? '#F4EEE4'}
+                    onChange={(e) =>
+                      dispatch({ type: 'setCaptionStyle', clipId: overlayClip.id, style: { fill: e.target.value } })
+                    }
+                  />
+                </Field>
+                <Field label="Stroke">
+                  <input
+                    type="text"
+                    value={overlayClip.style?.stroke ?? '#16140F'}
+                    onChange={(e) =>
+                      dispatch({
+                        type: 'setCaptionStyle',
+                        clipId: overlayClip.id,
+                        style: { stroke: e.target.value }
+                      })
+                    }
+                  />
+                </Field>
+                <button
+                  className="chip"
+                  onClick={() =>
+                    dispatch({
+                      type: 'setCaptionStyleAll',
+                      style: overlayClip.style ?? {}
+                    })
+                  }
+                >
+                  Apply style to all titles
+                </button>
+              </>
             )}
+            <p className="help">
+              Captions stay on V3. Scene lower thirds land on V2. Both ride the command bus, so undo
+              works and FFmpeg burns what you see.
+            </p>
           </>
         )}
 
-        {!clip && tab !== 'project' && tab !== 'audio' && (
+        {!clip && tab !== 'project' && tab !== 'audio' && tab !== 'caption' && (
           <p className="help">Select a picture segment or overlay on the tape.</p>
         )}
       </div>

@@ -113,11 +113,15 @@ ipcMain.handle('dialog:saveText', async (_e, suggested: string) => {
     title: 'Export interchange',
     defaultPath: suggested,
     filters: [
-      { name: 'Captions', extensions: ['srt'] },
+      { name: 'Captions', extensions: ['srt', 'vtt'] },
+      { name: 'Transcript', extensions: ['md', 'txt'] },
+      { name: 'Chapters', extensions: ['json'] },
       { name: 'OpenTimelineIO', extensions: ['otio'] },
       { name: 'Final Cut XML', extensions: ['fcpxml'] },
+      { name: 'Premiere XML', extensions: ['xml'] },
       { name: 'Auto-Editor', extensions: ['json'] },
-      { name: 'Shotcut MLT', extensions: ['mlt'] }
+      { name: 'Shotcut MLT', extensions: ['mlt'] },
+      { name: 'Kdenlive', extensions: ['kdenlive'] }
     ]
   })
   return result.canceled ? null : result.filePath
@@ -164,7 +168,7 @@ ipcMain.handle('dialog:openInterchange', async () => {
     title: 'Import timeline',
     properties: ['openFile'],
     filters: [
-      { name: 'Timelines', extensions: ['otio', 'fcpxml', 'mlt', 'json', 'xml'] }
+      { name: 'Timelines', extensions: ['otio', 'fcpxml', 'mlt', 'kdenlive', 'json', 'xml', 'srt', 'vtt'] }
     ]
   })
   if (result.canceled || !result.filePaths[0]) return null

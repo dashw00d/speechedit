@@ -637,8 +637,17 @@ export async function thumbnails(file: string, count = 20): Promise<string[]> {
   }
 }
 
+function cueSpeaker(raw: {
+  speaker?: string
+  speaker_id?: string
+  speaker_label?: string
+}): string | undefined {
+  const value = raw.speaker ?? raw.speaker_id ?? raw.speaker_label
+  return value ? String(value) : undefined
+}
+
 export async function transcribe(file: string): Promise<
-  { text: string; start: number; end: number }[] | null
+  { text: string; start: number; end: number; speaker?: string }[] | null
 > {
   const binaries = ['whisper', 'whisper-ctranslate2', 'faster-whisper']
   for (const bin of binaries) {
@@ -647,12 +656,34 @@ export async function transcribe(file: string): Promise<
       const match = out.match(/\{[\s\S]*"segments"[\s\S]*\}/)
       if (!match) continue
       const json = JSON.parse(match[0]) as {
-        segments?: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[]
+        words?: { word?: string; text?: string; start: number; end: number; speaker?: string }[]
+        segments?: {
+          start: number
+          end: number
+          text: string
+          speaker?: string
+          words?: { word: string; start: number; end: number; speaker?: string }[]
+        }[]
+      }
+      if (json.words?.length) {
+        return json.words
+          .map((w) => ({
+            text: String(w.word ?? w.text ?? '').trim(),
+            start: w.start,
+            end: w.end,
+            speaker: cueSpeaker(w)
+          }))
+          .filter((w) => w.text)
       }
       const words = json.segments?.flatMap((s) =>
         s.words?.length
-          ? s.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-          : [{ text: s.text.trim(), start: s.start, end: s.end }]
+          ? s.words.map((w) => ({
+              text: w.word.trim(),
+              start: w.start,
+              end: w.end,
+              speaker: cueSpeaker(w) ?? cueSpeaker(s)
+            }))
+          : [{ text: s.text.trim(), start: s.start, end: s.end, speaker: cueSpeaker(s) }]
       )
       if (words?.length) return words.filter((w) => w.text)
     } catch {
@@ -672,7 +703,7 @@ export interface ModelEndpointOpts {
 export async function transcribeMedia(
   file: string,
   opts?: ModelEndpointOpts
-): Promise<{ text: string; start: number; end: number }[] | null> {
+): Promise<{ text: string; start: number; end: number; speaker?: string }[] | null> {
   if (opts?.kind === 'openai-compatible' && opts.baseUrl && opts.model) {
     const dir = await mkdtemp(join(tmpdir(), 'speechedit-asr-'))
     const wav = join(dir, 'a.wav')
@@ -694,19 +725,35 @@ export async function transcribeMedia(
       })
       if (!res.ok) throw new Error(`Transcribe ${res.status}: ${(await res.text()).slice(0, 200)}`)
       const data = (await res.json()) as {
-        words?: { word?: string; text?: string; start: number; end: number }[]
-        segments?: { text: string; start: number; end: number; words?: { word: string; start: number; end: number }[] }[]
+        words?: { word?: string; text?: string; start: number; end: number; speaker?: string }[]
+        segments?: {
+          text: string
+          start: number
+          end: number
+          speaker?: string
+          words?: { word: string; start: number; end: number; speaker?: string }[]
+        }[]
       }
       if (data.words?.length) {
         return data.words
-          .map((w) => ({ text: String(w.word ?? w.text ?? '').trim(), start: w.start, end: w.end }))
+          .map((w) => ({
+            text: String(w.word ?? w.text ?? '').trim(),
+            start: w.start,
+            end: w.end,
+            speaker: cueSpeaker(w)
+          }))
           .filter((w) => w.text)
       }
       return (
         data.segments?.flatMap((seg) =>
           seg.words?.length
-            ? seg.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-            : [{ text: seg.text.trim(), start: seg.start, end: seg.end }]
+            ? seg.words.map((w) => ({
+                text: w.word.trim(),
+                start: w.start,
+                end: w.end,
+                speaker: cueSpeaker(w) ?? cueSpeaker(seg)
+              }))
+            : [{ text: seg.text.trim(), start: seg.start, end: seg.end, speaker: cueSpeaker(seg) }]
         ) ?? []
       )
     } finally {

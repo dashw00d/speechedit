@@ -14,6 +14,15 @@ import {
   type Transform
 } from '../types'
 import { buildSuggestions, cutMinusProtected, suggestionsFromSilence } from './analysis'
+import {
+  TITLE_PRESETS,
+  clipsFromCaptionCues,
+  parseCaptionCues,
+  withCaptionClips,
+  withGeneratedCaptions,
+  withLowerThirds
+} from './captions'
+import { prettySpeakerName, speakerSlug } from './diarize'
 import { previousSentenceRange, sentenceRange } from './transcriptEdit'
 import {
   clamp,
@@ -367,6 +376,41 @@ function eraseTag(project: Project, start: number, end: number, kind?: TagKind):
   return touch({ ...project, tags })
 }
 
+function applyDiarization(
+  project: Project,
+  assignments?: { start: number; end: number; speaker: string }[]
+): Project {
+  const colors = ['#C4452D', '#2F6F8F', '#3d7a52', '#8a5a32', '#6b4c9a', '#b4532a']
+  const speakers = [...project.transcript.speakers]
+  const resolve = (label: string): string => {
+    const existing = speakers.find(
+      (s) => s.id === label || s.id === speakerSlug(label) || s.name.toLowerCase() === label.toLowerCase()
+    )
+    if (existing) return existing.id
+    const id = speakerSlug(label)
+    const again = speakers.find((s) => s.id === id)
+    if (again) return again.id
+    speakers.push({
+      id,
+      name: prettySpeakerName(label),
+      color: colors[speakers.length % colors.length]
+    })
+    return id
+  }
+
+  const words = assignments?.length
+    ? project.transcript.words.map((word) => {
+        const hit = assignments.find((a) => overlap(word, a) > 0)
+        return hit ? { ...word, speaker: resolve(hit.speaker) } : word
+      })
+    : project.transcript.words.map((word) => ({ ...word, speaker: resolve(word.speaker) }))
+
+  return touch({
+    ...project,
+    transcript: { ...project.transcript, words, speakers }
+  })
+}
+
 function newGraphic(
   project: Project,
   trackType: 'caption' | 'overlay',
@@ -574,6 +618,46 @@ export function applyCommand(project: Project, command: Command): Project {
       }))
     case 'addCaption':
       return newGraphic(current, 'caption', command.start, command.duration, command.text)
+    case 'generateCaptions':
+      return touch(
+        withGeneratedCaptions(current, {
+          maxWords: command.maxWords ?? 5,
+          speakerPrefix: command.speakerPrefix,
+          emphasize: command.emphasize ?? true
+        })
+      )
+    case 'addTitle': {
+      const preset = command.preset ?? 'title'
+      const trackType = preset === 'title' ? 'caption' : 'overlay'
+      return newGraphic(current, trackType, command.start, command.duration, command.text, {
+        style: { ...TITLE_PRESETS[preset] }
+      })
+    }
+    case 'addLowerThirds':
+      return touch(withLowerThirds(current))
+    case 'setCaptionStyleAll':
+      return touch({
+        ...current,
+        tracks: current.tracks.map((track) =>
+          track.type === 'caption' || track.type === 'overlay'
+            ? {
+                ...track,
+                clips: track.clips.map((clip) =>
+                  clip.text
+                    ? {
+                        ...clip,
+                        style: { ...DEFAULT_CAPTION_STYLE, ...clip.style, ...command.style }
+                      }
+                    : clip
+                )
+              }
+            : track
+        )
+      })
+    case 'importCaptions':
+      return touch(withCaptionClips(current, clipsFromCaptionCues(parseCaptionCues(command.text))))
+    case 'applyDiarization':
+      return applyDiarization(current, command.assignments)
     case 'addOverlay':
       return newGraphic(current, 'overlay', command.start, command.duration, command.text)
     case 'addZoom':

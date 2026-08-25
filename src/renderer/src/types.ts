@@ -53,6 +53,8 @@ export interface Keyframe {
   easing: Easing
 }
 
+export type TitlePreset = 'title' | 'lower-third' | 'chapter'
+
 export interface CaptionStyle {
   fontSize: number
   align: 'left' | 'center' | 'right'
@@ -262,6 +264,17 @@ export type Command =
   | { type: 'setText'; clipId: string; text: string }
   | { type: 'setCaptionStyle'; clipId: string; style: Partial<CaptionStyle> }
   | { type: 'addCaption'; start: number; duration: number; text: string }
+  | {
+      type: 'generateCaptions'
+      maxWords?: number
+      speakerPrefix?: boolean
+      emphasize?: boolean
+    }
+  | { type: 'addTitle'; start: number; duration: number; text: string; preset?: TitlePreset }
+  | { type: 'addLowerThirds' }
+  | { type: 'setCaptionStyleAll'; style: Partial<CaptionStyle> }
+  | { type: 'importCaptions'; filename: string; text: string }
+  | { type: 'applyDiarization'; assignments?: { start: number; end: number; speaker: string }[] }
   | { type: 'addOverlay'; start: number; duration: number; text: string }
   | { type: 'addZoom'; start: number; duration: number; scale: number }
   | { type: 'addBroll'; start: number; duration: number; asset: Asset }

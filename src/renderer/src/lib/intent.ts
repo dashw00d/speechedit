@@ -11,6 +11,23 @@ export function planIntent(project: Project, intent: string): IntentPlan {
   const quoted = [...text.matchAll(/[“"]([^”"]+)[”"]/g)].map((m) => m[1])
   const lower = text.toLowerCase()
 
+  if (/caption remaining|generate captions|burn captions|caption the/.test(lower)) {
+    return {
+      commands: [
+        {
+          type: 'generateCaptions',
+          maxWords: 5,
+          speakerPrefix: /speaker/.test(lower),
+          emphasize: !/no emphasis/.test(lower)
+        }
+      ],
+      note: 'Generate captions from live words.'
+    }
+  }
+  if (/lower[- ]thirds?|chapter titles/.test(lower)) {
+    return { commands: [{ type: 'addLowerThirds' }], note: 'Add scene lower thirds.' }
+  }
+
   if (/rebuild|re-?analy/.test(lower)) {
     return { commands: [{ type: 'rebuildSuggestions' }], note: 'Rebuild suggestions from analysis + words.' }
   }
