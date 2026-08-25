@@ -154,7 +154,7 @@ export function Timeline() {
               )
             })}
             {project.suggestions
-              .filter((s) => !s.applied)
+              .filter((s) => s.action !== 'normalize' && s.action !== 'review')
               .map((s) => {
                 const start = sourceToProgramOf(project, s.start)
                 const end = sourceToProgramOf(project, s.end)
@@ -164,11 +164,21 @@ export function Timeline() {
                     className="sug-mark"
                     data-safe={s.safe}
                     data-type={s.type}
-                    style={{ left: start * pps, width: Math.max(4, (end - start) * pps) }}
+                    data-applied={s.applied}
+                    data-blocked={Boolean(s.blockedBy)}
+                    title={
+                      s.applied
+                        ? `${s.label} · click to put this auto-edit back`
+                        : s.blockedBy
+                          ? `${s.label} · guarded`
+                          : s.label
+                    }
+                    style={{ left: start * pps, width: Math.max(s.applied ? 8 : 4, (end - start) * pps) }}
                     onClick={(e) => {
                       e.stopPropagation()
                       selectSuggestion(s.id)
                       seekProgram(start)
+                      if (s.applied) dispatch({ type: 'revertSuggestion', suggestionId: s.id })
                     }}
                   />
                 )
@@ -232,7 +242,10 @@ function GuardLane({
   const left = stroke ? Math.min(stroke.start, stroke.end) * pps : 0
   const width = stroke ? Math.max(4, Math.abs(stroke.end - stroke.start) * pps) : 0
   return (
-    <div className="lane guard-lane" title="Drag to paint a guard. Alt-drag erases. Shift = silent demo.">
+    <div className="lane guard-lane" title="Drag to paint a keep. Shift-drag = silent demo. Alt-drag erases.">
+      {tags.filter((t) => t.kind === 'keep' || t.kind === 'demo').length === 0 && !stroke && (
+        <div className="guard-hint">Drag here · silent product demo stays</div>
+      )}
       {tags
         .filter((t) => t.kind === 'keep' || t.kind === 'demo')
         .map((tag) => {
@@ -250,7 +263,10 @@ function GuardLane({
                 onRemove(tag.id)
               }}
             >
-              {tag.kind}
+              {tag.kind === 'demo' ? 'demo' : 'keep'}
+              {tag.label && tag.label !== 'Keep · auto-edit skips this' && tag.label !== 'Demo · silent walkthrough'
+                ? ` · ${tag.label}`
+                : ''}
             </button>
           )
         })}
@@ -260,7 +276,9 @@ function GuardLane({
           data-kind={stroke.kind}
           data-erase={stroke.erase}
           style={{ left, width }}
-        />
+        >
+          {stroke.erase ? 'erase' : stroke.kind === 'demo' ? 'demo' : 'keep'}
+        </div>
       )}
     </div>
   )

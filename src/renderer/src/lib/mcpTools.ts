@@ -157,7 +157,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'add_tag',
-    description: 'Paint a keep/demo/note guard so Auto Edit skips that footage.',
+    description: 'Paint a keep/demo/note guard so Auto Edit skips that footage. Keep/demo also puts back overlapping auto-edits.',
     inputSchema: {
       type: 'object',
       properties: {

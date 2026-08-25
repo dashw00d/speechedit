@@ -112,7 +112,11 @@ export function renderAgentBrief(project: Project): string {
     .join('\n')
   const open = ctx.suggestions
     .filter((s) => !s.applied)
-    .map((s) => `- ${s.id} ${s.type} ${s.action} ${formatClock(s.start)}–${formatClock(s.end)} ${s.label}${s.blockedBy ? ' [protected]' : ''}`)
+    .map((s) => {
+      const guard = s.blockedBy ? ctx.tags.find((t) => t.id === s.blockedBy) : undefined
+      const stamp = guard ? ` [blocked by ${guard.label || guard.kind}]` : ''
+      return `- ${s.id} ${s.type} ${s.action} ${formatClock(s.start)}–${formatClock(s.end)} ${s.label}${stamp}`
+    })
     .join('\n')
   return [
     `Reel: ${ctx.name}`,
