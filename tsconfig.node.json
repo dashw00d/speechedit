@@ -10,5 +10,11 @@
     "types": ["node"],
     "outDir": "out"
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "electron.vite.config.ts", "vite.web.config.ts"]
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "electron.vite.config.ts",
+    "vite.web.config.ts",
+    "src/renderer/src/lib/exportGraph.ts"
+  ]
 }

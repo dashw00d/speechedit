@@ -9,6 +9,7 @@ import { Transcript } from './components/Transcript'
 import { host, isElectron } from './host'
 import { programLength } from './lib/commands'
 import { currentWord } from './lib/edl'
+import { summarizeJob } from './lib/exportGraph'
 import { buildExportJob } from './lib/exportJob'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
 import { extendSelection, wordRange } from './lib/transcriptEdit'
@@ -19,10 +20,11 @@ export function App() {
   const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
-    if (!toast) return
-    const id = setTimeout(() => setToast(null), 3600)
+    if (!toast || exporting) return
+    const sticky = /failed|missing|cannot|need/i.test(toast)
+    const id = setTimeout(() => setToast(null), sticky ? 14000 : 3600)
     return () => clearTimeout(id)
-  }, [toast])
+  }, [toast, exporting])
 
   useHotkeys(setToast)
 
@@ -40,10 +42,13 @@ export function App() {
     const output = await host.chooseExport()
     if (!output) return
     setExporting(true)
-    const stop = host.onExportProgress((ratio) => setToast(`Export ${Math.round(ratio * 100)}%`))
+    setToast(`Export 0% — ${summarizeJob(job)}`)
+    const stop = host.onExportProgress((info) =>
+      setToast(`Export ${Math.round(info.ratio * 100)}% — ${info.stage}`)
+    )
     try {
       await host.exportProgram({ ...job, output })
-      setToast('Export finished — dissolves, captions, loudnorm, and hardware encode are in the file.')
+      setToast(`Export finished — ${summarizeJob(job)}. File: ${output}`)
     } catch (err) {
       setToast(err instanceof Error ? err.message : 'Export failed.')
     } finally {

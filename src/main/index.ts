@@ -236,8 +236,8 @@ ipcMain.handle('media:thumbnails', async (_e, file: string) => thumbnails(file))
 ipcMain.handle('media:encoders', async () => detectEncoders())
 
 ipcMain.handle('media:export', async (e, job) => {
-  await exportProgram(job, (ratio) => {
-    e.sender.send('media:export-progress', ratio)
+  await exportProgram(job, (info) => {
+    e.sender.send('media:export-progress', info)
   })
   return job.output
 })

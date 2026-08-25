@@ -380,6 +380,12 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 }
 .timecode { color: var(--paper); letter-spacing: 0.04em; }
 .timecode small { color: var(--steel); margin-left: 8px; }
+.duck-flag {
+  color: var(--phosphor);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
 
 .inspector { background: var(--chassis); }
 .tabs { display: flex; gap: 2px; padding: 0 10px 8px; }

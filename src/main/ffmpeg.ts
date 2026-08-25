@@ -1,7 +1,17 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import {
+  buildJoinGraph,
+  buildMixGraph,
+  buildSegmentFilters,
+  explainExportError,
+  jobDuration,
+  summarizeJob,
+  type GraphJob
+} from '../renderer/src/lib/exportGraph'
 export interface EncoderOption {
   id: string
   label: string
@@ -60,8 +70,12 @@ export interface ProgramExportJob {
     path?: string
     fadeIn?: number
     fadeOut?: number
+    inPoint?: number
+    loop?: boolean
   }[]
 }
+
+export type ExportProgress = { ratio: number; stage: string }
 
 export interface ProbeResult {
   duration: number
@@ -107,6 +121,52 @@ function runStrict(cmd: string, args: string[]): Promise<string> {
       else reject(new Error(`${cmd} exited ${code}: ${stderr.slice(-500)}`))
     })
   })
+}
+
+function parseFfmpegTime(line: string): number | null {
+  const m = line.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/)
+  if (!m) return null
+  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
+}
+
+function runFfmpeg(args: string[], onTime?: (seconds: number) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    const onChunk = (d: Buffer) => {
+      const text = d.toString()
+      stderr += text
+      if (!onTime) return
+      for (const line of text.split(/\r|\n/)) {
+        const t = parseFfmpegTime(line)
+        if (t != null) onTime(t)
+      }
+    }
+    child.stdout.on('data', (d) => (stdout += d.toString()))
+    child.stderr.on('data', onChunk)
+    child.on('error', (err) =>
+      reject(new Error(`FFmpeg did not start (${err.message}). Install ffmpeg 4.4+ and keep it on PATH.`))
+    )
+    child.on('close', (code) => {
+      if (code === 0) resolve(stderr + stdout)
+      else reject(new Error(explainExportError(stderr)))
+    })
+  })
+}
+
+const FONT_CANDIDATES = [
+  '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+  '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+  '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+  '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+  '/System/Library/Fonts/Supplemental/Arial.ttf',
+  '/Library/Fonts/Arial.ttf',
+  'C:/Windows/Fonts/arial.ttf'
+]
+
+export function findExportFont(): string | undefined {
+  return FONT_CANDIDATES.find((p) => existsSync(p))
 }
 
 const ENCODER_CANDIDATES: EncoderOption[] = [
@@ -302,270 +362,128 @@ export async function detectLoudness(
   return windows.filter((w) => w.lufs > -14)
 }
 
-function escapeDrawtext(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/'/g, "’").replace(/:/g, '\\:').replace(/%/g, '\\%')
-}
-
-function atempoChain(speed: number): string {
-  const filters: string[] = []
-  let remain = speed
-  while (remain > 2.0001) {
-    filters.push('atempo=2.0')
-    remain /= 2
-  }
-  while (remain < 0.499) {
-    filters.push('atempo=0.5')
-    remain /= 0.5
-  }
-  filters.push(`atempo=${remain.toFixed(3)}`)
-  return filters.join(',')
-}
-
-function even(n: number): number {
-  return Math.max(2, n - (n % 2))
-}
-
-function jobDuration(job: ProgramExportJob): number {
-  if (job.duration && job.duration > 0) return job.duration
-  let t = 0
-  for (const seg of job.segments) {
-    const duration = (seg.end - seg.start) / Math.max(0.1, seg.speed)
-    t += duration - (seg.overlapNext ?? 0)
-  }
-  return Math.max(0.01, t)
+function asGraphJob(job: ProgramExportJob): GraphJob {
+  return job
 }
 
 async function joinParts(
   dir: string,
   parts: string[],
   job: ProgramExportJob,
-  encoder: string
+  encoder: string,
+  onProgress?: (info: ExportProgress) => void
 ): Promise<string> {
   const body = join(dir, 'body.mp4')
   if (parts.length === 1) {
-    await runStrict('ffmpeg', ['-y', '-i', parts[0], '-c', 'copy', body])
+    await runFfmpeg(['-y', '-i', parts[0], '-c', 'copy', body])
     return body
   }
-  const hasDissolve = job.segments.some((s) => (s.overlapNext ?? 0) > 0.04)
-  if (!hasDissolve) {
+  const joinGraph = buildJoinGraph(asGraphJob(job), parts.length)
+  if (!joinGraph) {
     const concatList = join(dir, 'list.txt')
     await writeFile(concatList, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'))
-    await runStrict('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', concatList, '-c', 'copy', body])
+    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concatList, '-c', 'copy', body])
     return body
-  }
-
-  const starts: number[] = []
-  let cursor = 0
-  for (const seg of job.segments) {
-    starts.push(cursor)
-    const duration = (seg.end - seg.start) / Math.max(0.1, seg.speed)
-    cursor += duration - (seg.overlapNext ?? 0)
   }
   const args = ['-y']
   for (const part of parts) args.push('-i', part)
-  const filters: string[] = []
-  let v = '[0:v]'
-  let a = '[0:a]'
-  for (let i = 1; i < parts.length; i++) {
-    const overlap = job.segments[i - 1]?.overlapNext ?? 0
-    const nextV = i === parts.length - 1 ? '[vout]' : `[v${i}]`
-    const nextA = i === parts.length - 1 ? '[aout]' : `[a${i}]`
-    if (overlap > 0.04) {
-      filters.push(
-        `${v}[${i}:v]xfade=transition=fade:duration=${overlap.toFixed(3)}:offset=${starts[i].toFixed(3)}${nextV}`
-      )
-      filters.push(`${a}[${i}:a]acrossfade=d=${overlap.toFixed(3)}${nextA}`)
-    } else {
-      filters.push(`${v}[${i}:v]${a}[${i}:a]concat=n=2:v=1:a=1${nextV}${nextA}`)
-    }
-    v = nextV
-    a = nextA
-  }
   args.push(
     '-filter_complex',
-    filters.join(';'),
+    joinGraph.filterComplex,
     '-map',
-    v,
+    joinGraph.mapVideo,
     '-map',
-    a,
+    joinGraph.mapAudio,
     ...videoEncodeArgs(encoder),
     ...audioEncodeArgs(),
     body
   )
-  await runStrict('ffmpeg', args)
+  const total = jobDuration(asGraphJob(job))
+  await runFfmpeg(args, (seconds) => {
+    onProgress?.({
+      ratio: 0.72 + Math.min(0.1, (seconds / Math.max(0.01, total)) * 0.1),
+      stage: 'joining dissolves'
+    })
+  })
   return body
 }
 
 export async function exportProgram(
   job: ProgramExportJob,
-  onProgress?: (ratio: number) => void
+  onProgress?: (info: ExportProgress) => void
 ): Promise<void> {
   if (!job.segments.length) throw new Error('Nothing to export — the timeline is empty.')
+  if (!existsSync(job.input)) {
+    throw new Error(`Recording is missing:\n${job.input}\nRe-import the media and export again.`)
+  }
+  const graphJob = asGraphJob(job)
+  const mix = buildMixGraph(graphJob, { fontFile: findExportFont() })
+  onProgress?.({ ratio: 0, stage: summarizeJob(graphJob, mix) })
   const encoder = await resolveEncoder(job.encoder)
   const dir = await mkdtemp(join(tmpdir(), 'speechedit-'))
+  const duration = jobDuration(graphJob)
   try {
     const parts: string[] = []
     for (let i = 0; i < job.segments.length; i++) {
       const seg = job.segments[i]
       const part = join(dir, `p${i}.mp4`)
       parts.push(part)
-      const scale = Math.max(0.2, seg.scale)
-      const zoomW = even(Math.round(job.width * scale))
-      const zoomH = even(Math.round(job.height * scale))
-      const x = Math.round(job.width / 2 - zoomW / 2 + seg.x)
-      const y = Math.round(job.height / 2 - zoomH / 2 + seg.y)
-      const overlap = seg.overlapNext ?? 0
-      const vfade: string[] = []
-      if (overlap <= 0.04 && seg.fadeIn > 0.02) vfade.push(`fade=t=in:st=0:d=${seg.fadeIn.toFixed(2)}`)
-      if (overlap <= 0.04 && seg.fadeOut > 0.02) {
-        const dur = (seg.end - seg.start) / Math.max(0.1, seg.speed)
-        vfade.push(`fade=t=out:st=${Math.max(0, dur - seg.fadeOut).toFixed(2)}:d=${seg.fadeOut.toFixed(2)}`)
-      }
-      const vf = [
-        `scale=${zoomW}:${zoomH}:force_original_aspect_ratio=increase`,
-        `crop=${job.width}:${job.height}:${x}:${y}`,
-        ...vfade,
-        `fps=${job.fps}`
-      ].join(',')
-      const af = [
-        `volume=${(job.volume * seg.volume).toFixed(3)}`,
-        `aformat=sample_fmts=fltp:channel_layouts=stereo`,
-        seg.speed !== 1 ? atempoChain(seg.speed) : ''
-      ]
-        .filter(Boolean)
-        .join(',')
-      await runStrict('ffmpeg', [
-        '-y',
-        '-ss',
-        seg.start.toFixed(3),
-        '-to',
-        seg.end.toFixed(3),
-        '-i',
-        job.input,
-        '-vf',
-        vf,
-        '-af',
-        af || 'anull',
-        ...videoEncodeArgs(encoder),
-        ...audioEncodeArgs(),
-        part
-      ])
-      onProgress?.((i + 0.5) / (job.segments.length + 2))
+      const filters = buildSegmentFilters(graphJob, seg)
+      const stage = `encoding clip ${i + 1}/${job.segments.length}`
+      await runFfmpeg(
+        [
+          '-y',
+          '-ss',
+          seg.start.toFixed(3),
+          '-to',
+          seg.end.toFixed(3),
+          '-i',
+          job.input,
+          '-vf',
+          filters.vf,
+          '-af',
+          filters.af,
+          '-t',
+          filters.duration.toFixed(3),
+          ...videoEncodeArgs(encoder),
+          ...audioEncodeArgs(),
+          part
+        ],
+        (seconds) => {
+          const inner = Math.min(1, seconds / Math.max(0.01, filters.duration))
+          onProgress?.({
+            ratio: ((i + inner) / (job.segments.length + 2)) * 0.72,
+            stage
+          })
+        }
+      )
+      onProgress?.({ ratio: ((i + 1) / (job.segments.length + 2)) * 0.72, stage })
     }
-    const body = await joinParts(dir, parts, job, encoder)
-    onProgress?.(0.8)
+    const body = await joinParts(dir, parts, job, encoder, onProgress)
+    onProgress?.({ ratio: 0.82, stage: mix.notes.length ? `mixing ${mix.notes.join(', ')}` : 'writing program' })
 
-    const images = job.layers.filter((l) => l.kind === 'image' && l.path)
-    const blurs = job.layers.filter((l) => l.kind === 'blur')
-    const texts = job.layers.filter((l) => l.kind !== 'image' && l.kind !== 'blur' && l.text)
-    const duration = jobDuration(job)
-    const af: string[] = []
-    if (job.eqLow) af.push(`equalizer=f=120:t=q:w=0.8:g=${job.eqLow.toFixed(1)}`)
-    if (job.eqMid) af.push(`equalizer=f=1000:t=q:w=0.8:g=${job.eqMid.toFixed(1)}`)
-    if (job.eqHigh) af.push(`equalizer=f=8000:t=q:w=0.7:g=${job.eqHigh.toFixed(1)}`)
-    if (job.compress) af.push('acompressor=threshold=-18dB:ratio=3:attack=15:release=180:makeup=2')
-    if (job.duck && job.duckWindows?.length) {
-      const enable = job.duckWindows
-        .map((w) => `between(t,${w.start.toFixed(3)},${w.end.toFixed(3)})`)
-        .join('+')
-      af.push(`volume=${(1 - job.duck).toFixed(2)}:enable='${enable}'`)
-    }
-    if (job.normalize) af.push('loudnorm=I=-16:TP=-1.5:LRA=11')
-    if (job.fadeIn > 0.02) af.push(`afade=t=in:st=0:d=${job.fadeIn.toFixed(2)}`)
-    if (job.fadeOut > 0.02) {
-      af.push(`afade=t=out:st=${Math.max(0, duration - job.fadeOut).toFixed(2)}:d=${job.fadeOut.toFixed(2)}`)
-    }
-
-    const beds = (job.beds ?? []).filter((b) => b.path && b.volume > 0.001)
     const args = ['-y', '-i', body]
-    for (const layer of images) args.push('-i', layer.path!)
-    for (const bed of beds) args.push('-i', bed.path)
-    const filters: string[] = []
-    let last = '[0:v]'
-    blurs.forEach((layer, i) => {
-      const bw = even(Math.round(job.width * Math.max(0.12, layer.scale)))
-      const bh = even(Math.round(bw * 0.62))
-      const bx = Math.max(0, Math.min(job.width - bw, Math.round((job.width - bw) / 2 + layer.x)))
-      const by = Math.max(0, Math.min(job.height - bh, Math.round((job.height - bh) / 2 + layer.y)))
-      const src = `blur${i}s`
-      const tag = `blur${i}`
-      filters.push(`${last}split[${src}keep][${src}src]`)
-      filters.push(`[${src}src]crop=${bw}:${bh}:${bx}:${by},boxblur=24:4[${src}]`)
-      filters.push(
-        `[${src}keep][${src}]overlay=${bx}:${by}:enable='between(t,${layer.start.toFixed(3)},${layer.end.toFixed(3)})'[${tag}]`
-      )
-      last = `[${tag}]`
-    })
-    images.forEach((layer, i) => {
-      const w = even(Math.round(job.width * Math.max(0.15, layer.scale)))
-      const x = Math.round((job.width - w) / 2 + layer.x)
-      const y = Math.round(80 + layer.y)
-      const tag = `ov${i}`
-      filters.push(`[${i + 1}:v]scale=${w}:-1[${tag}s]`)
-      filters.push(
-        `${last}[${tag}s]overlay=${x}:${y}:enable='between(t,${layer.start.toFixed(3)},${layer.end.toFixed(3)})'[${tag}]`
-      )
-      last = `[${tag}]`
-    })
-    if (texts.length) {
-      const draw = texts
-        .map((layer) => {
-          const y =
-            layer.kind === 'caption'
-              ? `h-th-80+${Math.round(layer.y)}`
-              : `${Math.round(80 + layer.y)}`
-          return `drawtext=text='${escapeDrawtext(layer.text)}':fontsize=${Math.round(layer.fontSize * layer.scale)}:fontcolor=white:borderw=3:bordercolor=black:x=(w-text_w)/2+${Math.round(layer.x)}:y=${y}:enable='between(t,${layer.start.toFixed(3)},${layer.end.toFixed(3)})'`
-        })
-        .join(',')
-      filters.push(`${last}${draw}[vout]`)
-      last = '[vout]'
-    }
-
-    const videoGraph = filters.length > 0
-    if (beds.length || (af.length && videoGraph)) {
-      const voice = beds.length ? 'a0' : 'aout'
-      filters.push(af.length ? `[0:a]${af.join(',')}[${voice}]` : `[0:a]anull[${voice}]`)
-      if (beds.length) {
-        const bedOffset = 1 + images.length
-        beds.forEach((bed, i) => {
-          const delay = Math.max(0, Math.round(bed.start * 1000))
-          const parts = [
-            `atrim=start=${bed.inPoint.toFixed(3)}:duration=${Math.max(0.05, bed.duration).toFixed(3)}`,
-            'asetpts=PTS-STARTPTS',
-            `volume=${bed.volume.toFixed(3)}`
-          ]
-          if (bed.fadeIn > 0.02) parts.push(`afade=t=in:st=0:d=${bed.fadeIn.toFixed(2)}`)
-          if (bed.fadeOut > 0.02) {
-            parts.push(
-              `afade=t=out:st=${Math.max(0, bed.duration - bed.fadeOut).toFixed(2)}:d=${bed.fadeOut.toFixed(2)}`
-            )
-          }
-          parts.push(`adelay=${delay}|${delay}:all=1`)
-          filters.push(`[${bedOffset + i}:a]${parts.join(',')}[bed${i}]`)
-        })
-        const mix = ['[a0]', ...beds.map((_, i) => `[bed${i}]`)].join('')
-        filters.push(
-          `${mix}amix=inputs=${1 + beds.length}:duration=first:dropout_transition=0:normalize=0[aout]`
-        )
-      }
-    }
-
-    const audioGraph = filters.some((f) => f.includes('[aout]'))
-    if (filters.length) {
-      args.push('-filter_complex', filters.join(';'), '-map', videoGraph ? last : '0:v', '-map', audioGraph ? '[aout]' : '0:a?')
-      if (videoGraph) args.push(...videoEncodeArgs(encoder))
+    for (const input of mix.inputs) args.push(...input.args)
+    if (mix.filterComplex) {
+      args.push('-filter_complex', mix.filterComplex, '-map', mix.mapVideo, '-map', mix.mapAudio)
+      if (mix.encodeVideo) args.push(...videoEncodeArgs(encoder))
       else args.push('-c:v', 'copy')
-      if (audioGraph || af.length) args.push(...audioEncodeArgs())
+      if (mix.encodeAudio) args.push(...audioEncodeArgs())
       else args.push('-c:a', 'copy')
     } else {
-      if (af.length) args.push('-af', af.join(','))
+      if (mix.simpleAudio) args.push('-af', mix.simpleAudio)
       args.push('-c:v', 'copy')
-      if (af.length) args.push(...audioEncodeArgs())
+      if (mix.encodeAudio) args.push(...audioEncodeArgs())
       else args.push('-c:a', 'copy')
     }
-    args.push(job.output)
-    await runStrict('ffmpeg', args)
-    onProgress?.(1)
+    args.push('-t', duration.toFixed(3), job.output)
+    await runFfmpeg(args, (seconds) => {
+      onProgress?.({
+        ratio: 0.82 + Math.min(0.18, (seconds / Math.max(0.01, duration)) * 0.18),
+        stage: mix.notes.length ? `mixing ${mix.notes.join(', ')}` : 'writing program'
+      })
+    })
+    onProgress?.({ ratio: 1, stage: 'done' })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -580,7 +498,7 @@ export async function exportCut(
     width: number
     height: number
   },
-  onProgress?: (ratio: number) => void
+  onProgress?: (info: ExportProgress) => void
 ): Promise<void> {
   await exportProgram(
     {
