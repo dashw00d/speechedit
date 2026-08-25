@@ -1,9 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { host, isElectron } from '../host'
 import { wordsFromAsr } from '../lib/asr'
-import { extractJson } from '../lib/providers'
-import { intelligencePrompt, parseIntelligence } from '../lib/intelligence'
-import { planIntent } from '../lib/intent'
+import { askEditor } from '../lib/askModel'
+import { currentEditorSession } from '../lib/editorSession'
 import {
   INTEL_PRESETS,
   TRANSCRIPT_PRESETS,
@@ -12,7 +11,6 @@ import {
   type AppSettings
 } from '../lib/settings'
 import { presetIdFor } from '../../../shared/asr'
-import { applyCommand } from '../lib/commands'
 import { useEditor } from '../store'
 
 export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
@@ -57,35 +55,18 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   async function ask(intent?: string) {
     const promptIntent =
       intent ?? window.prompt('What should SpeechEdit do? (scenes, retakes, or “cut the ums”)') ?? ''
-    if (!promptIntent && settings.intelligence.kind === 'off') {
+    if (!promptIntent) {
       onToast('Type a request, or turn on a local/API model.')
       return
     }
     setBusy('intel')
     try {
-      if (settings.intelligence.kind === 'openai-compatible' && settings.intelligence.baseUrl) {
-        const prompt = intelligencePrompt(project, promptIntent || undefined)
-        const text = await host.complete({
-          endpoint: settings.intelligence,
-          messages: [
-            { role: 'system', content: prompt.system },
-            { role: 'user', content: prompt.user }
-          ]
-        })
-        const draft = parseIntelligence(extractJson(text))
-        let next = applyCommand(project, {
-          type: 'mergeIntelligence',
-          scenes: draft.scenes,
-          suggestions: draft.suggestions
-        })
-        next = draft.commands.reduce((acc, command) => applyCommand(acc, command), next)
-        dispatch({ type: 'replaceProject', project: next })
-        onToast(draft.notes || `Model · ${draft.scenes.length} scenes · ${draft.suggestions.length} cuts`)
-        return
+      const before = useEditor.getState().project
+      const result = await askEditor(before, promptIntent, currentEditorSession())
+      if (result.project !== before) {
+        dispatch({ type: 'replaceProject', project: result.project })
       }
-      const plan = planIntent(project, promptIntent)
-      plan.commands.forEach((command) => dispatch(command))
-      onToast(plan.note)
+      onToast(result.message)
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Model failed.')
     } finally {
@@ -231,7 +212,11 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
         <button className="chip" disabled={Boolean(busy)} onClick={() => void ask()}>
           {busy === 'intel' ? 'Thinking…' : 'Ask model…'}
         </button>
-        <button className="chip" disabled={Boolean(busy)} onClick={() => void ask('Group scenes and mark retakes. Do not cut yet.')}>
+        <button
+          className="chip"
+          disabled={Boolean(busy)}
+          onClick={() => void ask('Find scenes and mark retakes. Do not cut yet.')}
+        >
           Find scenes
         </button>
         <button className="chip" disabled={Boolean(busy)} onClick={() => dispatch({ type: 'inferScenes' })}>

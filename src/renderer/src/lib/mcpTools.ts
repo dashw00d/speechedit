@@ -1,11 +1,53 @@
 import type { Command, Project, SuggestionType, TagKind } from '../types'
-import { buildAgentContext, renderAgentBrief } from './agentContext'
+import {
+  EMPTY_SESSION,
+  buildAgentContext,
+  compactSnapshot,
+  renderAgentBrief,
+  type EditorSession
+} from './agentContext'
 import { applyCommand, programLength } from './commands'
-import { planIntent } from './intent'
 import { runSceneIntelligence } from './intelligence'
 import { endpointReady } from './providers'
+import { programToSourceOf, sourceToProgramOf } from './resolver'
 import type { ModelEndpoint } from './settings'
 import { wordRange, wordsMatchingPhrase } from './transcriptEdit'
+
+/** Agent-exposed applyCommand types. Not the full Command union (NLE owns moveClip, setTrackFlag, …). */
+export const COMMAND_BUS: Command['type'][] = [
+  'deleteRange',
+  'restoreRange',
+  'toggleWords',
+  'setWordText',
+  'splitAt',
+  'rippleDelete',
+  'rippleDeleteMarks',
+  'applySuggestion',
+  'applySafeSuggestions',
+  'dismissSuggestion',
+  'revertSuggestion',
+  'revertSuggestionType',
+  'addTag',
+  'eraseTag',
+  'removeTag',
+  'setMarks',
+  'addCaption',
+  'rebuildSuggestions',
+  'cutSentence',
+  'cutPreviousSentence',
+  'tightenRange',
+  'setScenes',
+  'revertAt',
+  'inferScenes',
+  'rebuildIntelligence',
+  'collapseRetakes',
+  'keepTake',
+  'applyModelSuggestions',
+  'setSpeed',
+  'setSpeaker',
+  'addSpeaker',
+  'renameSpeaker'
+]
 
 export interface ToolSpec {
   name: string
@@ -70,8 +112,24 @@ export const MCP_TOOLS: ToolSpec[] = [
     inputSchema: { type: 'object', properties: {} }
   },
   {
+    name: 'get_snapshot',
+    description: 'Compact view of the same project JSON (no waveforms). Enough to auto-cut with guards, retakes, speakers, I/O.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_cuts',
+    description: 'Source cuts with program-time mapping.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_selection',
+    description: 'Selected words, selected clip, playhead (program + source), and I/O marks.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'list_commands',
-    description: 'Command-bus types the editor accepts.',
+    description:
+      'Agent-exposed applyCommand types (subset of the full Command union; NLE-only types like moveClip/setTrackFlag are omitted).',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -80,12 +138,30 @@ export const MCP_TOOLS: ToolSpec[] = [
     inputSchema: { type: 'object', properties: { command: { type: 'object' } }, required: ['command'] }
   },
   {
-    name: 'cut_range',
-    description: 'Ripple-cut a source-time range.',
+    name: 'delete_range',
+    description: 'Ripple-cut a source-time range via deleteRange.',
     inputSchema: {
       type: 'object',
       properties: { start: { type: 'number' }, end: { type: 'number' }, source: { type: 'string' } },
       required: ['start', 'end']
+    }
+  },
+  {
+    name: 'cut_range',
+    description: 'Alias of delete_range.',
+    inputSchema: {
+      type: 'object',
+      properties: { start: { type: 'number' }, end: { type: 'number' }, source: { type: 'string' } },
+      required: ['start', 'end']
+    }
+  },
+  {
+    name: 'toggle_words',
+    description: 'Toggle cut/restore on word ids (same as clicking words).',
+    inputSchema: {
+      type: 'object',
+      properties: { wordIds: { type: 'array', items: { type: 'string' } } },
+      required: ['wordIds']
     }
   },
   {
@@ -129,6 +205,21 @@ export const MCP_TOOLS: ToolSpec[] = [
   {
     name: 'apply_safe_edits',
     description: 'Apply safe silence/filler/normalize suggestions. Guarded demo/keep ranges stay.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'apply_safe_suggestions',
+    description: 'Alias of apply_safe_edits (applySafeSuggestions).',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'dismiss_suggestion',
+    description: 'Dismiss one suggestion without applying it.',
+    inputSchema: { type: 'object', properties: { suggestionId: { type: 'string' } }, required: ['suggestionId'] }
+  },
+  {
+    name: 'ripple_delete_marks',
+    description: 'Ripple-delete the current I/O marks.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -224,6 +315,20 @@ export const MCP_TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: 'add_speaker',
+    description: 'Add a speaker to the reel.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' } } }
+  },
+  {
+    name: 'rename_speaker',
+    description: 'Rename a speaker.',
+    inputSchema: {
+      type: 'object',
+      properties: { speakerId: { type: 'string' }, name: { type: 'string' } },
+      required: ['speakerId', 'name']
+    }
+  },
+  {
     name: 'rebuild_suggestions',
     description: 'Rebuild silence/filler/repeat/static suggestions. Keeps applied ones.',
     inputSchema: { type: 'object', properties: {} }
@@ -261,8 +366,59 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'run_intelligence',
-    description: 'Group scenes and retakes. Uses the configured LLM, or a local heuristic if none is set.',
+    description:
+      'Group scenes, find retakes, propose cuts. Uses the configured LLM, or a local heuristic pass if none is set.',
     inputSchema: { type: 'object', properties: { intent: { type: 'string' } } }
+  },
+  {
+    name: 'infer_scenes',
+    description: 'Local (no LLM) scene/retake grouping from the transcript and analysis cache.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'collapse_retakes',
+    description: 'Cut superseded takes. Same as the Collapse retakes button. Undo via revert_suggestion or undo.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'apply_model_suggestions',
+    description: 'Apply unblocked model-type cuts from the intelligence pass.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'set_speed',
+    description: 'Speed a source-time range (static screens, loading).',
+    inputSchema: {
+      type: 'object',
+      properties: { start: { type: 'number' }, end: { type: 'number' }, speed: { type: 'number' } },
+      required: ['start', 'end', 'speed']
+    }
+  },
+  {
+    name: 'add_caption',
+    description: 'Add a caption/title on the caption track at program time.',
+    inputSchema: {
+      type: 'object',
+      properties: { start: { type: 'number' }, duration: { type: 'number' }, text: { type: 'string' } },
+      required: ['start', 'text']
+    }
+  },
+  {
+    name: 'add_zoom',
+    description: 'Add a zoom overlay at program time.',
+    inputSchema: {
+      type: 'object',
+      properties: { start: { type: 'number' }, duration: { type: 'number' }, scale: { type: 'number' } },
+      required: ['start']
+    }
+  },
+  {
+    name: 'get_mapping',
+    description: 'Map a source time to program time, or the reverse.',
+    inputSchema: {
+      type: 'object',
+      properties: { source: { type: 'number' }, program: { type: 'number' } }
+    }
   }
 ]
 
@@ -270,7 +426,8 @@ export async function runTool(
   project: Project,
   name: string,
   args: Record<string, unknown>,
-  intel?: ModelEndpoint
+  intel?: ModelEndpoint,
+  session: EditorSession = EMPTY_SESSION
 ): Promise<ToolResult> {
   const apply = (command: Command, message: string): ToolResult => ({
     project: applyCommand(project, command),
@@ -279,7 +436,35 @@ export async function runTool(
 
   switch (name) {
     case 'get_context':
-      return { project, message: renderAgentBrief(project), data: buildAgentContext(project) }
+      return {
+        project,
+        message: renderAgentBrief(project, session),
+        data: buildAgentContext(project, session)
+      }
+    case 'get_snapshot':
+      return {
+        project,
+        message: 'Compact project snapshot.',
+        data: compactSnapshot(project)
+      }
+    case 'get_cuts':
+      return {
+        project,
+        message: `${project.cuts.length} cuts`,
+        data: buildAgentContext(project, session).cuts
+      }
+    case 'get_selection':
+      return {
+        project,
+        message: session.selectedWordIds.length
+          ? `${session.selectedWordIds.length} words selected`
+          : 'No words selected.',
+        data: {
+          ...buildAgentContext(project, session).selection,
+          playhead: buildAgentContext(project, session).playhead,
+          marks: buildAgentContext(project, session).marks
+        }
+      }
     case 'get_transcript':
       return { project, message: `${project.transcript.words.length} words`, data: project.transcript }
     case 'search_transcript': {
@@ -319,18 +504,35 @@ export async function runTool(
         }
       }
     case 'list_commands':
-      return { project, message: `${MCP_TOOLS.length} tools`, data: MCP_TOOLS.map((t) => t.name) }
+      return {
+        project,
+        message: `${COMMAND_BUS.length} agent-exposed command types`,
+        data: { commands: COMMAND_BUS, scope: 'agent-exposed subset of applyCommand' }
+      }
     case 'apply_command':
       return apply(args.command as Command, 'Applied command.')
+    case 'delete_range':
     case 'cut_range':
       return apply(
-        { type: 'deleteRange', start: num(args.start), end: num(args.end), source: 'model' },
+        {
+          type: 'deleteRange',
+          start: num(args.start),
+          end: num(args.end),
+          source: args.source === 'transcript' || args.source === 'repeat' || args.source === 'silence' || args.source === 'filler'
+            ? args.source
+            : 'model'
+        },
         'Cut range.'
       )
+    case 'toggle_words': {
+      const wordIds = Array.isArray(args.wordIds) ? args.wordIds.map(String) : []
+      if (!wordIds.length) return { project, message: 'No word ids.' }
+      return apply({ type: 'toggleWords', wordIds }, `Toggled ${wordIds.length} words.`)
+    }
     case 'restore_range':
       return apply({ type: 'restoreRange', start: num(args.start), end: num(args.end) }, 'Restored range.')
     case 'cut_words': {
-      const words = wordsMatchingPhrase(project.transcript.words, String(args.phrase ?? ''))
+      const words = wordsMatchingPhrase(project.transcript.words, String(args.phrase ?? '')).filter((w) => !w.deleted)
       if (!words.length) return { project, message: 'No matching words.' }
       return apply({ type: 'toggleWords', wordIds: words.map((w) => w.id) }, `Cut “${args.phrase}”.`)
     }
@@ -347,7 +549,12 @@ export async function runTool(
     case 'tighten':
       return apply({ type: 'tightenRange', start: num(args.start), end: num(args.end) }, 'Tightened gaps.')
     case 'apply_safe_edits':
+    case 'apply_safe_suggestions':
       return apply({ type: 'applySafeSuggestions' }, 'Applied safe edits.')
+    case 'dismiss_suggestion':
+      return apply({ type: 'dismissSuggestion', suggestionId: String(args.suggestionId) }, 'Dismissed suggestion.')
+    case 'ripple_delete_marks':
+      return apply({ type: 'rippleDeleteMarks' }, 'Ripple deleted I/O.')
     case 'apply_suggestion':
       return apply({ type: 'applySuggestion', suggestionId: String(args.suggestionId) }, 'Applied suggestion.')
     case 'revert_suggestion':
@@ -409,6 +616,13 @@ export async function runTool(
         },
         'Assigned speaker.'
       )
+    case 'add_speaker':
+      return apply({ type: 'addSpeaker', name: args.name ? String(args.name) : undefined }, 'Added speaker.')
+    case 'rename_speaker':
+      return apply(
+        { type: 'renameSpeaker', speakerId: String(args.speakerId), name: String(args.name ?? '') },
+        'Renamed speaker.'
+      )
     case 'rebuild_suggestions':
       return apply({ type: 'rebuildSuggestions' }, 'Rebuilt suggestions.')
     case 'rebuild_intelligence':
@@ -422,28 +636,9 @@ export async function runTool(
     case 'set_scenes':
       return apply({ type: 'setScenes', scenes: (args.scenes as Project['scenes']) ?? [] }, 'Set scenes.')
     case 'edit_with_intent': {
-      const intent = String(args.intent ?? '')
-      const local = planIntent(project, intent)
-      if (local.commands.length) {
-        const next = local.commands.reduce((acc, command) => applyCommand(acc, command), project)
-        return { project: next, message: local.note, data: local.commands }
-      }
-      const draft = await runSceneIntelligence(
-        project,
-        intel && endpointReady(intel) ? intel : undefined,
-        intent
-      )
-      let next = applyCommand(project, {
-        type: 'mergeIntelligence',
-        scenes: draft.scenes,
-        suggestions: draft.suggestions
-      })
-      next = draft.commands.reduce((acc, command) => applyCommand(acc, command), next)
-      return {
-        project: next,
-        message: draft.notes || local.note || 'Proposed scenes and cuts.',
-        data: draft
-      }
+      const { runAgent } = await import('./agent')
+      const turn = await runAgent(project, String(args.intent ?? ''), session, intel)
+      return { project: turn.project, message: turn.message, data: turn.calls }
     }
     case 'run_intelligence': {
       const draft = await runSceneIntelligence(
@@ -457,6 +652,40 @@ export async function runTool(
         suggestions: draft.suggestions
       })
       return { project: next, message: draft.notes || 'Proposed scenes and cuts.', data: draft }
+    }
+    case 'apply_model_suggestions':
+      return apply({ type: 'applyModelSuggestions' }, 'Applied model cuts.')
+    case 'set_speed':
+      return apply(
+        { type: 'setSpeed', start: num(args.start), end: num(args.end), speed: num(args.speed, 4) },
+        'Set speed.'
+      )
+    case 'add_caption':
+      return apply(
+        {
+          type: 'addCaption',
+          start: num(args.start),
+          duration: num(args.duration, 3),
+          text: String(args.text ?? 'Title')
+        },
+        'Added caption.'
+      )
+    case 'add_zoom':
+      return apply(
+        {
+          type: 'addZoom',
+          start: num(args.start),
+          duration: num(args.duration, 3),
+          scale: num(args.scale, 1.45)
+        },
+        'Added zoom.'
+      )
+    case 'get_mapping': {
+      const source =
+        args.source != null ? num(args.source) : programToSourceOf(project, num(args.program))
+      const program =
+        args.program != null ? num(args.program) : sourceToProgramOf(project, source)
+      return { project, message: `source ${source.toFixed(3)} ↔ program ${program.toFixed(3)}`, data: { source, program } }
     }
     default:
       return { project, message: `Unknown tool ${name}` }

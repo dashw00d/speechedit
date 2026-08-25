@@ -38,7 +38,8 @@ const COMMAND_TYPES = new Set<Command['type']>([
   'inferScenes',
   'rebuildIntelligence',
   'collapseRetakes',
-  'keepTake'
+  'keepTake',
+  'applyModelSuggestions'
 ])
 
 export function parseIntelligence(raw: unknown): IntelligenceDraft {
@@ -123,7 +124,7 @@ Rules:
 - Never cut ranges tagged keep or demo unless the user explicitly says to.
 - A retake scene should set takeOf to the keeper scene id, takeIndex on every take, and prefer cutting the worse take as type repeat, safe:false.
 - Prefer specific commands when the user asked to change the cut. Prefer cuts/scenes when analyzing.
-- Allowed command types: deleteRange, restoreRange, toggleWords, applySafeSuggestions, applySuggestion, revertSuggestion, revertSuggestionType, addTag, tightenRange, cutSentence, rebuildSuggestions, revertAt, inferScenes, rebuildIntelligence, collapseRetakes, keepTake.
+- Allowed command types: deleteRange, restoreRange, toggleWords, applySafeSuggestions, applySuggestion, revertSuggestion, revertSuggestionType, addTag, tightenRange, cutSentence, rebuildSuggestions, revertAt, inferScenes, rebuildIntelligence, collapseRetakes, keepTake, applyModelSuggestions.
 - Do not invent word ids. Use deleteRange for time spans.`,
     user: `${intent ? `User request:\n${intent}\n\n` : 'Analyze this reel. Group scenes, mark retakes, and propose cuts a human would make.\n\n'}${renderAgentBrief(project)}`
   }

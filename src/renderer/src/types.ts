@@ -302,6 +302,8 @@ export type Command =
   | { type: 'rebuildIntelligence' }
   | { type: 'collapseRetakes' }
   | { type: 'keepTake'; sceneId: string }
+  | { type: 'applyModelSuggestions' }
+  | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked'>> }
 
 export function emptyClipFields(): Pick<Clip, 'fadeIn' | 'fadeOut' | 'keyframes' | 'effect'> {
   return { fadeIn: 0, fadeOut: 0, keyframes: [], effect: 'none' }

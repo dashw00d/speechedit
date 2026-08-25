@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { AgentPanel } from './components/AgentPanel'
 import { Inspector } from './components/Inspector'
 import { MenuBar } from './components/MenuBar'
 import { Monitor } from './components/Monitor'
@@ -19,6 +20,7 @@ import { currentProgramDuration, useEditor, usePlayback } from './store'
 export function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const agentOpen = useEditor((s) => s.agentOpen)
 
   useEffect(() => {
     if (!toast || exporting) return
@@ -69,6 +71,7 @@ export function App() {
       <Timeline />
       <Suggestions />
       <Palette />
+      {agentOpen && <AgentPanel variant="dock" onToast={setToast} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
@@ -86,6 +89,11 @@ function useHotkeys(setToast: (msg: string) => void) {
       if (meta && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         editor.setPalette(!editor.palette)
+        return
+      }
+      if (meta && e.key.toLowerCase() === 'j') {
+        e.preventDefault()
+        editor.setAgentOpen(!editor.agentOpen)
         return
       }
       if (e.code === 'Space' && !typing) {

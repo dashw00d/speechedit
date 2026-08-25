@@ -977,6 +977,66 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
 }
 .palette button:hover { background: var(--ghost); }
 
+.agent-dock-back {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 3, 0.45);
+  display: grid;
+  place-items: start end;
+  padding: 56px 18px 18px;
+  z-index: 45;
+}
+.agent-dock {
+  width: min(440px, 94vw);
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  background: #1c1913;
+  border: 1px solid var(--brass);
+  box-shadow: var(--shadow);
+  padding: 12px 14px 16px;
+}
+.agent-dock-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-family: var(--serif);
+  font-size: 18px;
+}
+.agent-dock-head .chip { margin-left: auto; }
+.agent-calls {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.agent-calls code { color: var(--brass-hot); }
+.agent-panel { display: grid; gap: 10px; }
+.agent-log {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--steel);
+}
+.agent-log strong {
+  display: block;
+  color: #ece6da;
+  font-weight: 600;
+}
+.agent-brief {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--well);
+  border: 1px solid var(--hair);
+  color: var(--steel);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }

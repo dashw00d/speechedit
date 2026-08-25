@@ -940,6 +940,17 @@ export function applyCommand(project: Project, command: Command): Project {
       if (hit) return revertSuggestion(current, hit.id)
       return restoreSourceRange(current, command.start, command.end)
     }
+    case 'applyModelSuggestions':
+      return current.suggestions
+        .filter((s) => s.type === 'model' && !s.applied && !s.blockedBy && s.action === 'cut')
+        .reduce((acc, suggestion) => applySuggestion(acc, suggestion.id), current)
+    case 'setTrackFlag':
+      return touch({
+        ...current,
+        tracks: current.tracks.map((track) =>
+          track.id === command.trackId ? { ...track, ...command.patch } : track
+        )
+      })
     default:
       return current
   }

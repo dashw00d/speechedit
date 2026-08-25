@@ -47,7 +47,7 @@ On WSL, if the window never appears: `NO_SANDBOX=1 bun run dev`.
 - Review or apply safe cuts
 - Same `deleteRange` / `setSpeed` as the mouse
 
-`⌘K` is the command palette. `I` / `O` set marks. Delete ripples them.
+`⌘K` is the command palette. `⌘J` opens the agent (tools → command bus → toast; undo with `⌘Z`). `I` / `O` set marks. Delete ripples them.
 
 ## Models and agents
 
