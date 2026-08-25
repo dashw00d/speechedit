@@ -74,6 +74,7 @@ export async function importRecording(
     suggestions: buildSuggestions({
       duration: info.duration,
       silence: analysis.silence,
+      scenes: analysis.scenes.times,
       sceneHits: analysis.scenes.staticRegions,
       loudnessWindows: analysis.loudness,
       words,
