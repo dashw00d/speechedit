@@ -11,6 +11,7 @@ import { programLength } from './lib/commands'
 import { currentWord } from './lib/edl'
 import { buildExportJob } from './lib/exportJob'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
+import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from './lib/scriptActions'
 import { extendSelection, wordRange } from './lib/transcriptEdit'
 import { currentProgramDuration, useEditor, usePlayback } from './store'
 
@@ -187,6 +188,31 @@ function useHotkeys(setToast: (msg: string) => void) {
           editor.dispatch({ type: 'tightenRange', start: span.start, end: span.end })
           setToast('Tightened gaps — guarded demo/keep ranges stayed.')
         }
+        return
+      }
+      if ((e.key === 'p' || e.key === 'P') && !typing && !meta) {
+        e.preventDefault()
+        playInOutOrSelection()
+        setToast(
+          editor.project.markIn != null && editor.project.markOut != null
+            ? 'Playing I/O.'
+            : editor.selectedWordIds.length
+              ? 'Playing the selection.'
+              : 'Playing from the playhead.'
+        )
+        return
+      }
+      if ((e.key === 'c' || e.key === 'C') && !typing && !meta) {
+        const before = editor.project.splits?.length ?? 0
+        e.preventDefault()
+        bladeAtWord()
+        const after = useEditor.getState().project.splits?.length ?? 0
+        if (after !== before) setToast('Bladed at the word.')
+        return
+      }
+      if ((e.key === 'a' || e.key === 'A') && !typing && !meta) {
+        e.preventDefault()
+        selectParagraphAtCaret()
         return
       }
       if ((e.key === 'x' || e.key === 'X') && !typing && !meta && editor.selectedWordIds.length) {

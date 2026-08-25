@@ -235,6 +235,15 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
   border-color: #b4532a;
   color: #8a3d1c;
 }
+.gap-chip.put-back {
+  border-style: solid;
+  border-color: var(--oxide);
+  color: var(--oxide);
+  cursor: pointer;
+}
+.gap-chip.put-back:hover {
+  background: rgba(196, 69, 45, 0.12);
+}
 .scene-head {
   display: block;
   margin: 16px 0 6px;

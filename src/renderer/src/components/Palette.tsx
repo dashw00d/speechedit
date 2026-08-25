@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { withGeneratedCaptions } from '../lib/captions'
+import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
 import { useEditor, usePlayback } from '../store'
 
@@ -86,6 +87,9 @@ export function Palette() {
             time: programToSourceOf(useEditor.getState().project, usePlayback.getState().programTime)
           })
       },
+      { name: 'Blade at word', run: () => bladeAtWord() },
+      { name: 'Play I/O or selection', run: () => playInOutOrSelection() },
+      { name: 'Select paragraph', run: () => selectParagraphAtCaret() },
       {
         name: 'Ripple delete I/O',
         run: () => dispatch({ type: 'rippleDeleteMarks' })

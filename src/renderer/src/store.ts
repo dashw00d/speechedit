@@ -4,6 +4,7 @@ import { applyCommand, programLength } from './lib/commands'
 import { createDemoProject, createEmptyProject } from './lib/demo'
 import { normalizeProject } from './lib/normalize'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
+import { wordRange } from './lib/transcriptEdit'
 import type { Command, Project, TagKind, Word } from './types'
 
 const HISTORY_LIMIT = 80
@@ -209,28 +210,62 @@ export interface PlaybackState {
   playing: boolean
   programTime: number
   loop: boolean
+  playUntil: number | null
   pixelsPerSecond: number
   play: () => void
   pause: () => void
   toggle: () => void
   seekProgram: (time: number) => void
   seekSource: (time: number) => void
+  playFromSource: (time: number) => void
+  playRange: (start: number, end: number) => void
+  playSelectionOrMarks: () => void
   setPixelsPerSecond: (value: number) => void
   tickTo: (time: number) => void
 }
 
-export const usePlayback = create<PlaybackState>((set) => ({
+export const usePlayback = create<PlaybackState>((set, get) => ({
   playing: false,
   programTime: 0,
   loop: false,
+  playUntil: null,
   pixelsPerSecond: 72,
   play: () => set({ playing: true }),
-  pause: () => set({ playing: false }),
-  toggle: () => set((s) => ({ playing: !s.playing })),
-  seekProgram: (time) => set({ programTime: Math.max(0, time), playing: false }),
+  pause: () => set({ playing: false, playUntil: null }),
+  toggle: () => set((s) => ({ playing: !s.playing, playUntil: s.playing ? null : s.playUntil })),
+  seekProgram: (time) => set({ programTime: Math.max(0, time), playing: false, playUntil: null }),
   seekSource: (time) => {
     const project = useEditor.getState().project
-    set({ programTime: sourceToProgramOf(project, time), playing: false })
+    set({ programTime: sourceToProgramOf(project, time), playing: false, playUntil: null })
+  },
+  playFromSource: (time) => {
+    const project = useEditor.getState().project
+    set({ programTime: sourceToProgramOf(project, time), playing: true, playUntil: null })
+  },
+  playRange: (start, end) => {
+    const a = Math.min(start, end)
+    const b = Math.max(start, end)
+    set({ programTime: a, playing: true, playUntil: b })
+  },
+  playSelectionOrMarks: () => {
+    const project = useEditor.getState().project
+    const selected = useEditor.getState().selectedWordIds
+    const span = wordRange(project.transcript.words, selected)
+    if (project.markIn != null && project.markOut != null) {
+      const a = Math.min(project.markIn, project.markOut)
+      const b = Math.max(project.markIn, project.markOut)
+      set({ programTime: a, playing: true, playUntil: get().loop ? null : b })
+      return
+    }
+    if (span) {
+      set({
+        programTime: sourceToProgramOf(project, span.start),
+        playing: true,
+        playUntil: sourceToProgramOf(project, span.end)
+      })
+      return
+    }
+    set({ playing: true, playUntil: null })
   },
   setPixelsPerSecond: (value) => set({ pixelsPerSecond: Math.min(280, Math.max(18, value)) }),
   tickTo: (time) => set({ programTime: time })

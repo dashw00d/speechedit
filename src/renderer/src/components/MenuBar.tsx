@@ -15,6 +15,7 @@ import {
 import { askEditor } from '../lib/askModel'
 import { programLength } from '../lib/commands'
 import { pickAudio, pickBroll } from '../lib/pickFile'
+import { bladeAtWord, playInOutOrSelection, selectParagraphAtCaret } from '../lib/scriptActions'
 import { programToSourceOf } from '../lib/resolver'
 import { parseAnyTranscript } from '../lib/transcript'
 import { useEditor, usePlayback } from '../store'
@@ -161,6 +162,9 @@ export function MenuBar({ onToast, onExport, exporting }: Props) {
           >
             Razor at playhead
           </Item>
+          <Item onClick={() => bladeAtWord()}>Blade at word</Item>
+          <Item onClick={() => playInOutOrSelection()}>Play I/O or selection</Item>
+          <Item onClick={() => selectParagraphAtCaret()}>Select paragraph</Item>
           <Item onClick={() => dispatch({ type: 'rippleDeleteMarks' })}>Ripple delete I/O</Item>
         </Menu>
         <Menu label="Sequence">
