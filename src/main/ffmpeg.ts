@@ -2,6 +2,10 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { ModelEndpointOpts } from './transcribe'
+
+export type { ModelEndpointOpts, TranscribeProgress } from './transcribe'
+export { listAsrPath, transcribe, transcribeMedia } from './transcribe'
 export interface EncoderOption {
   id: string
   label: string
@@ -635,85 +639,6 @@ export async function thumbnails(file: string, count = 20): Promise<string[]> {
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
-}
-
-export async function transcribe(file: string): Promise<
-  { text: string; start: number; end: number }[] | null
-> {
-  const binaries = ['whisper', 'whisper-ctranslate2', 'faster-whisper']
-  for (const bin of binaries) {
-    try {
-      const out = await run(bin, [file, '--output_format', 'json', '--output_dir', tmpdir()])
-      const match = out.match(/\{[\s\S]*"segments"[\s\S]*\}/)
-      if (!match) continue
-      const json = JSON.parse(match[0]) as {
-        segments?: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[]
-      }
-      const words = json.segments?.flatMap((s) =>
-        s.words?.length
-          ? s.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-          : [{ text: s.text.trim(), start: s.start, end: s.end }]
-      )
-      if (words?.length) return words.filter((w) => w.text)
-    } catch {
-      continue
-    }
-  }
-  return null
-}
-
-export interface ModelEndpointOpts {
-  kind?: string
-  baseUrl?: string
-  model?: string
-  apiKey?: string
-}
-
-export async function transcribeMedia(
-  file: string,
-  opts?: ModelEndpointOpts
-): Promise<{ text: string; start: number; end: number }[] | null> {
-  if (opts?.kind === 'openai-compatible' && opts.baseUrl && opts.model) {
-    const dir = await mkdtemp(join(tmpdir(), 'speechedit-asr-'))
-    const wav = join(dir, 'a.wav')
-    try {
-      await runStrict('ffmpeg', ['-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav])
-      const buf = await readFile(wav)
-      const blob = new Blob([buf], { type: 'audio/wav' })
-      const body = new FormData()
-      body.append('file', blob, 'audio.wav')
-      body.append('model', opts.model)
-      body.append('response_format', 'verbose_json')
-      body.append('timestamp_granularities[]', 'word')
-      const headers: Record<string, string> = {}
-      if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`
-      const res = await fetch(`${opts.baseUrl.replace(/\/$/, '')}/audio/transcriptions`, {
-        method: 'POST',
-        headers,
-        body
-      })
-      if (!res.ok) throw new Error(`Transcribe ${res.status}: ${(await res.text()).slice(0, 200)}`)
-      const data = (await res.json()) as {
-        words?: { word?: string; text?: string; start: number; end: number }[]
-        segments?: { text: string; start: number; end: number; words?: { word: string; start: number; end: number }[] }[]
-      }
-      if (data.words?.length) {
-        return data.words
-          .map((w) => ({ text: String(w.word ?? w.text ?? '').trim(), start: w.start, end: w.end }))
-          .filter((w) => w.text)
-      }
-      return (
-        data.segments?.flatMap((seg) =>
-          seg.words?.length
-            ? seg.words.map((w) => ({ text: w.word.trim(), start: w.start, end: w.end }))
-            : [{ text: seg.text.trim(), start: seg.start, end: seg.end }]
-        ) ?? []
-      )
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  }
-  return transcribe(file)
 }
 
 export async function completeChat(

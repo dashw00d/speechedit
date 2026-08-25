@@ -27,6 +27,9 @@ export interface SpeechHost {
     file: string,
     opts?: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }
   ) => Promise<{ text: string; start: number; end: number }[] | null>
+  asrPath: () => Promise<
+    { kind: string; binaries: string[]; found: string[]; available: boolean }[]
+  >
   complete: (req: {
     endpoint: { baseUrl?: string; model?: string; apiKey?: string }
     messages: { role: string; content: string }[]
@@ -43,6 +46,7 @@ export interface SpeechHost {
   exportProgram: (job: unknown) => Promise<string>
   onExportProgress: (fn: (ratio: number) => void) => () => void
   onAnalyzeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
+  onTranscribeProgress: (fn: (info: { stage: string; ratio: number }) => void) => () => void
 }
 
 const missing = async () => null
@@ -69,6 +73,7 @@ export const host: SpeechHost = window.speech ?? {
   scenes: async () => ({ times: [], staticRegions: [] }),
   loudness: empty,
   transcribe: async () => null,
+  asrPath: async () => [],
   complete: async (req) => {
     const { completeOpenAI } = await import('./lib/providers')
     return completeOpenAI(
@@ -94,7 +99,8 @@ export const host: SpeechHost = window.speech ?? {
     throw new Error('Export needs the Electron app.')
   },
   onExportProgress: () => () => undefined,
-  onAnalyzeProgress: () => () => undefined
+  onAnalyzeProgress: () => () => undefined,
+  onTranscribeProgress: () => () => undefined
 }
 
 export function mediaUrl(filePath: string): string {
