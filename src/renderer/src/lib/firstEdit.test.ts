@@ -5,6 +5,7 @@ import { createDemoProject } from './demo'
 import {
   applySafeFirstEdit,
   describeFirstEdit,
+  dismissLeftoverBreaths,
   looksSafeSpans,
   safeEditCandidates,
   startLeftoverReview
@@ -734,5 +735,58 @@ describe('safe first edit', () => {
     )
     expect(startLeftoverReview()).toBe('static')
     expect(useEditor.getState().selectedSuggestionId).toBe(screen.id)
+  })
+
+  test('dismissLeftoverBreaths also clears talking-over-static and pace notes', () => {
+    const [talking] = suggestionsFromStatic(
+      [{ start: 2, end: 6 }],
+      [{ id: 'w1', text: 'hello', start: 2.2, end: 2.6, speaker: 'S1', deleted: false }]
+    )
+    useEditor.getState().loadProject(
+      {
+        ...createDemoProject(),
+        suggestions: [
+          {
+            id: 'b1',
+            type: 'silence',
+            start: 1,
+            end: 1.4,
+            action: 'cut',
+            label: 'Breath 0.4s · 120ms pad',
+            safe: false,
+            applied: false
+          },
+          talking,
+          {
+            id: 'p1',
+            type: 'pace',
+            start: 0,
+            end: 10,
+            action: 'review',
+            label: 'Slow pace · 80 wpm talking',
+            safe: false,
+            applied: false
+          },
+          {
+            id: 'hot-1',
+            type: 'loud',
+            start: 2,
+            end: 4,
+            action: 'volume',
+            volume: 0.4,
+            label: 'Hot audio -8.0 LUFS → Quiet',
+            safe: false,
+            applied: false
+          }
+        ]
+      },
+      { clean: true }
+    )
+    expect(dismissLeftoverBreaths()).toBe(3)
+    const left = useEditor.getState().project.suggestions.map((s) => s.id)
+    expect(left).toContain('hot-1')
+    expect(left).not.toContain('b1')
+    expect(left).not.toContain('p1')
+    expect(left).not.toContain(talking.id)
   })
 })

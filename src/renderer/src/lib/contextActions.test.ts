@@ -13,7 +13,7 @@ import {
   transcriptChoices,
   wordsInspectorDetail
 } from './contextActions'
-import { suggestionsFromSilence, suggestionsFromStatic } from './analysis'
+import { suggestionsFromLoudness, suggestionsFromSilence, suggestionsFromStatic } from './analysis'
 import { createDemoProject } from './demo'
 
 describe('transcript context choices', () => {
@@ -131,10 +131,7 @@ describe('suggest task copy', () => {
     const project = { ...createDemoProject(), suggestions: [hot] }
     const task = suggestTask({
       ...project,
-      suggestions: [
-        ...createDemoProject().suggestions.map((s) => ({ ...s, applied: s.safe })),
-        hot
-      ]
+      suggestions: [...createDemoProject().suggestions.map((s) => ({ ...s, applied: true })), hot]
     })
     expect(task.headline).toMatch(/hot spike/)
     expect(task.reviewLabel).toBe('Review 1 spike')

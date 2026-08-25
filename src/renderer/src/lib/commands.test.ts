@@ -774,6 +774,15 @@ describe('intelligence and MCP', () => {
     expect(restored?.volume).toBeCloseTo(1, 2)
   })
 
+  test('setRangeVolume blades a span without changing program length', () => {
+    const project = { ...createEmptyProject('gain'), sourceDuration: 10 }
+    const quiet = applyCommand(project, { type: 'setRangeVolume', start: 2, end: 4, volume: 0.4 })
+    const seg = resolveSegments(quiet).find((s) => s.inPoint <= 3 && s.outPoint >= 3)
+    expect(seg?.volume).toBeCloseTo(0.4, 2)
+    expect(programLength(quiet)).toBeCloseTo(10, 1)
+    expect(quiet.inserts ?? []).toEqual(project.inserts ?? [])
+  })
+
   test('dismissSuggestions drops leftover breaths in one undoable command', () => {
     const project = {
       ...createEmptyProject('air'),
