@@ -6,13 +6,14 @@ import {
   captionClipsOf,
   captionsNeedFilling,
   projectToChapters,
+  projectToTranscriptMd,
   shouldAutoCaption,
   transcriptReadyForCaptions,
   wordsToCaptions
 } from './captions'
 import { generateCaptionsFromContext } from './captionGenerate'
 import { createDemoProject, createEmptyProject } from './demo'
-import { useEditor } from '../store'
+import { useEditor, usePlayback } from '../store'
 
 function word(text: string, start: number, end: number) {
   return { id: text, text, start, end, speaker: 'ryan', deleted: false }
@@ -59,8 +60,15 @@ describe('auto captions from words', () => {
     useEditor.getState().loadProject(createDemoProject(), { clean: true })
     const result = generateCaptionsFromContext()
     expect(result.filled).toBe(true)
-    expect(result.toast).toMatch(/Titles stayed/)
-    expect(captionClipsOf(useEditor.getState().project).some((clip) => clip.text === 'Cut speech like text.')).toBe(true)
+    expect(result.toast).toMatch(/first block is on the picture/)
+    expect(useEditor.getState().selectedClipId).toBeNull()
+    const clips = captionClipsOf(useEditor.getState().project)
+    expect(clips.some((clip) => clip.text === 'Cut speech like text.')).toBe(true)
+    const firstNew = clips.find((clip) => clip.auto) ?? clips.find((clip) => clip.text !== 'Cut speech like text.')
+    expect(firstNew).toBeTruthy()
+    const head = usePlayback.getState().programTime
+    expect(head).toBeGreaterThanOrEqual(firstNew!.start)
+    expect(head).toBeLessThan(firstNew!.start + firstNew!.duration)
   })
 
   test('generateCaptions does not wipe the lane when there are no real words', () => {
@@ -148,6 +156,52 @@ describe('auto captions from words', () => {
     const moved = captionClipsOf(project).find((clip) => clip.id === late?.id)
     expect(moved?.start).toBeCloseTo((late?.start ?? 0) - 3, 1)
     expect(programLength(project)).toBeCloseTo(7, 1)
+  })
+})
+
+describe('transcript markdown notes', () => {
+  test('Copy notes uses chapter headings and skips retakes', () => {
+    const text = projectToTranscriptMd(createDemoProject())
+    expect(text).toMatch(/^### Thesis$/m)
+    expect(text).toMatch(/^## Ryan$/m)
+    expect(text).toMatch(/### Walk the editor/)
+    expect(text).not.toMatch(/False take/)
+  })
+
+  test('a typed tape note lands in the paste where it was dropped', () => {
+    const demo = createDemoProject()
+    const tagged = {
+      ...demo,
+      tags: [...demo.tags, { id: 'n1', start: 2.9, end: 3.2, kind: 'note' as const, label: 'check the price' }]
+    }
+    const text = projectToTranscriptMd(tagged)
+    expect(text).toContain('> check the price')
+    expect(text).toMatch(/build[\s\S]*> check the price[\s\S]*local/)
+    expect(projectToTranscriptMd(demo)).not.toContain('>')
+  })
+
+  test('an empty Note placeholder stays out of the paste', () => {
+    const demo = createDemoProject()
+    const tagged = {
+      ...demo,
+      tags: [...demo.tags, { id: 'n1', start: 2.5, end: 2.8, kind: 'note' as const, label: 'Note' }]
+    }
+    expect(projectToTranscriptMd(tagged)).not.toContain('> Note')
+  })
+
+  test('notes without scenes stay speaker turns', () => {
+    const project = {
+      ...createEmptyProject('notes'),
+      transcript: {
+        speakers: [{ id: 'a', name: 'Alex', color: '#c00' }],
+        words: [
+          { id: 'w1', text: 'Hello', start: 0, end: 0.4, speaker: 'a', deleted: false },
+          { id: 'w2', text: 'there', start: 0.5, end: 0.9, speaker: 'a', deleted: false }
+        ]
+      },
+      scenes: []
+    }
+    expect(projectToTranscriptMd(project)).toBe('## Alex\n\nHello there\n')
   })
 })
 

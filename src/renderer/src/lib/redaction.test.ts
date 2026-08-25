@@ -37,6 +37,8 @@ describe('redaction placement', () => {
     const { placement, toast } = applyRedactionFromContext()
     expect(placement.basis).toBe('scene')
     expect(toast).toMatch(/Drag the box/)
+    expect(usePlayback.getState().playing).toBe(true)
+    expect(usePlayback.getState().loopFrom).not.toBeNull()
     const project = useEditor.getState().project
     const blur = project.tracks.flatMap((track) => track.clips).find((clip) => clip.effect === 'blur' && clip.start > 20)
     expect(blur?.duration).toBeCloseTo(placement.duration, 1)

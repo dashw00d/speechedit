@@ -5,10 +5,12 @@ import { useEditor, usePlayback } from '../store'
 import {
   addSceneLowerThirdsFromContext,
   applyLowerThirdFromContext,
+  describeLowerThird,
   hasLowerThird,
   isLowerThirdCard,
   LOWER_THIRD_PLACEHOLDER,
-  lowerThirdPlacement
+  lowerThirdPlacement,
+  nameForLowerThird
 } from './lowerThird'
 import { hasSceneLowerThirds } from './captions'
 import { applyTitleFromContext, hasOpeningTitle } from './title'
@@ -45,20 +47,44 @@ describe('lower third', () => {
     expect(hasOpeningTitle(named)).toBe(false)
   })
 
-  test('applyLowerThirdFromContext lands a Name card and selects it', () => {
-    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+  test('applyLowerThirdFromContext lands the speaker name and points at Fill', () => {
+    const demo = createDemoProject()
+    useEditor.getState().loadProject(demo, { clean: true })
     usePlayback.getState().seekProgram(20)
+    const who = nameForLowerThird(demo, 20, [])
+    expect(who).toBe('Ryan')
     const { toast, placement } = applyLowerThirdFromContext()
     expect(placement.at).toBe('playhead')
     expect(placement.start).toBe(20)
-    expect(toast).toMatch(/Type/)
+    expect(toast).toBe(describeLowerThird(placement, who))
+    expect(toast).toMatch(/Fill/)
+    expect(usePlayback.getState().programTime).toBeCloseTo(20.15)
     const editor = useEditor.getState()
     const clip = editor.project.tracks.flatMap((track) => track.clips).find((row) => row.id === editor.selectedClipId)
-    expect(clip?.text).toBe(LOWER_THIRD_PLACEHOLDER)
+    expect(clip?.text).toBe('Ryan')
     expect(clip?.style?.position).toBe('lower')
     expect(editor.inspectorTab).toBe('caption')
     expect(isLowerThirdCard(clip)).toBe(true)
     expect(hasLowerThird(editor.project)).toBe(true)
+  })
+
+  test('a selected chapter covers that beat, not a 3s guess', () => {
+    const demo = createDemoProject()
+    const walk = demo.scenes.find((row) => row.title === 'Walk the editor')!
+    useEditor.getState().loadProject(demo, { clean: true })
+    useEditor.getState().selectScene(walk.id)
+    usePlayback.getState().seekProgram(0)
+    const { toast, placement } = applyLowerThirdFromContext()
+    expect(placement.at).toBe('scene')
+    expect(placement.start).toBeCloseTo(walk.start, 2)
+    expect(placement.duration).toBeCloseTo(walk.end - walk.start, 2)
+    expect(toast).toMatch(/this chapter/)
+    expect(toast).toMatch(/Fill/)
+    const clip = useEditor
+      .getState()
+      .project.tracks.flatMap((track) => track.clips)
+      .find((row) => row.id === useEditor.getState().selectedClipId)
+    expect(clip?.duration).toBeCloseTo(walk.end - walk.start, 2)
   })
 
   test('after a title at 0 with the playhead on the card, the name follows it', () => {
@@ -76,12 +102,35 @@ describe('lower third', () => {
     usePlayback.getState().seekProgram(0)
     const result = addSceneLowerThirdsFromContext()
     expect(result.added).toBe(true)
-    expect(result.toast).toMatch(/Apply style/)
+    expect(result.toast).toMatch(/Type this name/)
+    expect(result.toast).toMatch(/Enter/)
+    expect(result.toast).toMatch(/Fill/)
     const editor = useEditor.getState()
     expect(hasSceneLowerThirds(editor.project)).toBe(true)
-    const selected = editor.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === editor.selectedClipId)
-    expect(selected?.text).toMatch(/Thesis/)
-    expect(editor.inspectorTab).toBe('caption')
+    expect(editor.selectedClipId).toBeTruthy()
+    const card = editor.project.tracks
+      .flatMap((track) => track.clips)
+      .find((clip) => clip.text?.includes('Thesis'))
+    expect(card).toBeTruthy()
+    const head = usePlayback.getState().programTime
+    expect(head).toBeGreaterThanOrEqual(card!.start)
+    expect(head).toBeLessThan(card!.start + card!.duration)
     expect(addSceneLowerThirdsFromContext().added).toBe(false)
+  })
+
+  test('rewriting a chapter name does not ask for Chapter names again', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    addSceneLowerThirdsFromContext()
+    const card = useEditor
+      .getState()
+      .project.tracks.flatMap((track) => track.clips)
+      .find((clip) => clip.text?.includes('Thesis'))
+    expect(card).toBeTruthy()
+    useEditor.getState().dispatch({ type: 'setText', clipId: card!.id, text: 'Sprint 14' })
+    expect(hasSceneLowerThirds(useEditor.getState().project)).toBe(true)
+    expect(addSceneLowerThirdsFromContext()).toEqual({
+      toast: 'Chapter names are already on the tape.',
+      added: false
+    })
   })
 })

@@ -304,8 +304,11 @@ function resetView(
   | 'past'
   | 'future'
   | 'selectedWordIds'
+  | 'selectedSceneId'
   | 'selectedClipId'
   | 'selectedClipIds'
+  | 'selectedSuggestionId'
+  | 'selectedGap'
   | 'dirty'
   | 'documentPath'
   | 'lastSavedAt'
@@ -318,8 +321,11 @@ function resetView(
     past: [],
     future: [],
     selectedWordIds: [],
+    selectedSceneId: null,
     selectedClipId: null,
     selectedClipIds: [],
+    selectedSuggestionId: null,
+    selectedGap: null,
     dirty: extra.dirty,
     documentPath: extra.documentPath,
     lastSavedAt: extra.lastSavedAt,

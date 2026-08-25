@@ -345,7 +345,15 @@ export type Command =
       muted?: boolean
       volume?: number
     }
-  | { type: 'addAudio'; start: number; duration: number; asset: Asset; inPoint?: number }
+  | {
+      type: 'addAudio'
+      start: number
+      duration: number
+      asset: Asset
+      inPoint?: number
+      fadeIn?: number
+      fadeOut?: number
+    }
   | { type: 'addRedaction'; start: number; duration: number }
   | { type: 'addTrack'; trackType: TrackType; name?: string }
   | { type: 'removeTrack'; trackId: string }
@@ -378,6 +386,7 @@ export type Command =
   | { type: 'splitScene'; sceneId: string; time: number }
   | { type: 'mergeScenes'; sceneId: string; otherId: string }
   | { type: 'addTag'; start: number; end: number; kind: TagKind; label?: string }
+  | { type: 'setTagLabel'; tagId: string; label: string }
   | { type: 'eraseTag'; start: number; end: number; kind?: TagKind }
   | { type: 'removeTag'; tagId: string }
   | { type: 'setMarks'; markIn?: number | null; markOut?: number | null }
@@ -388,6 +397,7 @@ export type Command =
   | { type: 'setSpeaker'; wordIds: string[]; speakerId: string }
   | { type: 'addSpeaker'; name?: string }
   | { type: 'renameSpeaker'; speakerId: string; name: string }
+  | { type: 'removeSpeaker'; speakerId: string }
   | { type: 'renameScene'; sceneId: string; title?: string; summary?: string }
   | { type: 'rebuildSuggestions' }
   | { type: 'setTranscript'; words: Word[] }

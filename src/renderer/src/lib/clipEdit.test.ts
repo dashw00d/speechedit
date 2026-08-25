@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { hopNote, rolledPair, slippedClip } from './clipEdit'
+import { hopNote, isTapeNote, noteDraft, rolledPair, slippedClip } from './clipEdit'
 import { DEFAULT_TRANSFORM, emptyClipFields, type Clip, type Project } from '../types'
 
 function clip(partial: Partial<Clip> & Pick<Clip, 'id' | 'start' | 'duration' | 'inPoint' | 'outPoint'>): Clip {
@@ -44,5 +44,22 @@ describe('clipEdit', () => {
     expect(hopNote(project, 2.2, 1)?.label).toBe('B')
     expect(hopNote(project, 8.2, 1)?.label).toBe('A')
     expect(hopNote(project, 8.2, -1)?.label).toBe('A')
+  })
+
+  test('old Hook and CTA tags hop and type like notes', () => {
+    expect(isTapeNote('hook')).toBe(true)
+    expect(isTapeNote('cta')).toBe(true)
+    expect(isTapeNote('keep')).toBe(false)
+    expect(noteDraft('Hook')).toBe('')
+    expect(noteDraft('CTA')).toBe('')
+    expect(noteDraft('hook — first second')).toBe('hook — first second')
+    const project = {
+      tags: [
+        { id: 'h', start: 1, end: 2, kind: 'hook', label: 'Hook' },
+        { id: 'c', start: 5, end: 6, kind: 'cta', label: 'ask for the link' }
+      ]
+    } as Project
+    expect(hopNote(project, 0, 1)?.id).toBe('h')
+    expect(hopNote(project, 1.2, 1)?.label).toBe('ask for the link')
   })
 })

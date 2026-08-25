@@ -1,5 +1,5 @@
 import { programToSourceOf, sourceToProgramOf } from './resolver'
-import { caretWord, paragraphIds, wordRange } from './transcriptEdit'
+import { caretWord, isParagraphSelection, paragraphIds, wordRange } from './transcriptEdit'
 import { formatSpan } from './contextActions'
 import { useEditor, usePlayback } from '../store'
 
@@ -21,7 +21,7 @@ export function selectParagraphAtCaret(): void {
   selectParagraphFromContext()
 }
 
-/** Hear the paragraph at the caret, then Delete removes it. */
+/** Hear the paragraph at the caret. Remove paragraph on the bar (or Delete) cuts it. */
 export function selectParagraphFromContext(): { toast: string; count: number } {
   const editor = useEditor.getState()
   const playback = usePlayback.getState()
@@ -40,5 +40,34 @@ export function selectParagraphFromContext(): { toast: string; count: number } {
   if (ids.length < 2) {
     return { toast: 'That line is already the whole paragraph. Delete removes it.', count: ids.length }
   }
-  return { toast: `Paragraph selected · ${formatSpan(dur)}. Delete removes it.`, count: ids.length }
+  return {
+    toast: `Paragraph selected · ${formatSpan(dur)}. Remove paragraph on the bar (or Delete) hears the join.`,
+    count: ids.length
+  }
+}
+
+function savedLabel(seconds: number): string {
+  if (seconds < 10) return `${seconds.toFixed(1)} seconds`
+  return `${Math.round(seconds)} seconds`
+}
+
+export function describeCutParagraph(saved: number): string {
+  return `Removed the paragraph — saved ${savedLabel(saved)}. Hear the join.`
+}
+
+/** Cut the selected paragraph and play the join. A first if you have not heard it. */
+export function cutParagraphFromContext(): { toast: string; cut: boolean } {
+  const editor = useEditor.getState()
+  const words = editor.project.transcript.words
+  const ids = editor.selectedWordIds
+  if (!isParagraphSelection(words, ids)) {
+    return { toast: 'Press A to hear the paragraph, then Remove paragraph.', cut: false }
+  }
+  const span = wordRange(words, ids)
+  if (!span) return { toast: 'Press A to hear the paragraph, then Remove paragraph.', cut: false }
+  editor.dispatch({ type: 'toggleWords', wordIds: ids })
+  editor.clearSelection()
+  const join = sourceToProgramOf(useEditor.getState().project, span.start)
+  usePlayback.getState().playLoop(Math.max(0, join - 0.6), join + 1.4)
+  return { toast: describeCutParagraph(span.end - span.start), cut: true }
 }

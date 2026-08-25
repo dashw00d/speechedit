@@ -37,6 +37,11 @@ export function useClearSelection() {
         editor.setAgentOpen(false)
         return
       }
+      if (editor.reviewing) {
+        e.preventDefault()
+        editor.setReviewing(false)
+        return
+      }
       if (editor.tool === 'guard') {
         e.preventDefault()
         editor.setTool('select')

@@ -48,19 +48,20 @@ describe('transcript context choices', () => {
     expect(ids.length).toBeGreaterThan(2)
     const { choices, summary } = transcriptChoices(project, ids)
     expect(summary).toMatch(/words/)
-    expect(choices.find((c) => c.id === 'remove')?.label).toBe('Remove paragraph')
+    expect(choices.find((c) => c.id === 'cut-paragraph')?.label).toBe('Remove paragraph')
+    expect(choices.some((c) => c.id === 'cut-sentence')).toBe(false)
     expect(toastForEdit(project, { type: 'toggleWords', wordIds: ids })).toMatch(/Removed the paragraph/)
     const detail = wordsInspectorDetail(project, ids)
     expect(detail?.title).toBe('Paragraph')
-    expect(detail?.nextHint).toMatch(/Delete removes this paragraph/)
+    expect(detail?.nextHint).toMatch(/Remove paragraph/)
   })
 
-  test('selectParagraphFromContext points at Delete', () => {
+  test('selectParagraphFromContext points at Remove paragraph', () => {
     useEditor.getState().loadProject(createDemoProject(), { clean: true })
     usePlayback.getState().seekProgram(0.7)
     const result = selectParagraphFromContext()
     expect(result.count).toBeGreaterThan(2)
-    expect(result.toast).toMatch(/Delete removes it/)
+    expect(result.toast).toMatch(/Remove paragraph/)
     expect(useEditor.getState().selectedWordIds.length).toBe(result.count)
   })
 
@@ -118,7 +119,7 @@ describe('transcript context choices', () => {
     const next = applyCommand(project, cutPrev!.command)
     expect(next.transcript.words.filter((w) => w.start >= 30.2 && w.end <= 31.7).every((w) => w.deleted)).toBe(true)
     expect(next.transcript.words.find((w) => w.id === thats.id)?.deleted).toBe(false)
-    expect(toastForCommand(cutPrev!.command)).toMatch(/Undo/)
+    expect(toastForCommand(cutPrev!.command)).toMatch(/Hear the join/)
   })
 
   test('a long previous chapter does not steal a chip — comma still exists', () => {
@@ -126,6 +127,9 @@ describe('transcript context choices', () => {
     const first = project.transcript.words.find((w) => w.text === 'First')!
     const { choices } = transcriptChoices(project, [first.id])
     expect(choices.some((c) => c.id === 'cut-prev')).toBe(false)
+    const cutThis = choices.find((c) => c.id === 'cut-sentence')
+    expect(cutThis?.label).toBe('Cut this sentence')
+    expect(cutThis?.command.type).toBe('cutSentence')
   })
 
   test('an already-cut previous sentence does not offer Cut previous sentence', () => {
@@ -212,6 +216,32 @@ describe('suggest task copy', () => {
     expect(task.showZoom).toBe(true)
     expect(task.showTitle).toBe(true)
     expect(task.showLowerThird).toBe(true)
+    expect(task.showBreaths).toBe(true)
+    expect(task.breathCount).toBeGreaterThan(0)
+  })
+
+  test('leftover breaths get Cut and Keep in the inspector', () => {
+    const demo = createDemoProject()
+    const breath = demo.suggestions.find((s) => s.id === 'sug_breath')
+    expect(breath).toBeTruthy()
+    const detail = suggestionInspectorDetail(demo, breath!.id)
+    expect(detail?.title).toBe('Breath')
+    expect(detail?.actions.some((a) => a.id === 'apply' && a.label === 'Cut')).toBe(true)
+    expect(detail?.actions.find((a) => a.id === 'keep')?.command.type).toBe('resolveSuggestion')
+    expect(detail?.explanation).toMatch(/hisses|breathe/)
+    const first = applyCommand(demo, { type: 'applySafeSuggestions' })
+    expect(suggestTask(first).showBreaths).toBe(false)
+    const leftoversGone = {
+      ...first,
+      suggestions: first.suggestions.map((s) => {
+        const kind = leftoverKind(s)
+        return kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud'
+          ? { ...s, applied: true }
+          : s
+      })
+    }
+    expect(suggestTask(leftoversGone).showBreaths).toBe(true)
+    expect(suggestTask(leftoversGone).headline).not.toMatch(/need review/)
   })
 
   test('silent stills get Cut, Silent demo, Speed, and Keep in the inspector', () => {

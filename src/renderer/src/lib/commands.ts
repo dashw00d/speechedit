@@ -34,6 +34,8 @@ import {
   withLowerThirds
 } from './captions'
 import { autoHideEmptyStackTrack, revealStackTrack } from './timelineTracks'
+import { isZoomClip } from './zoom'
+import { isRedactionClip } from './redaction'
 import { speakerPalette } from './theme'
 import { assignmentsFromCues, hasProviderSpeakers, prettySpeakerName, speakerSlug } from './diarize'
 import {
@@ -498,10 +500,21 @@ function tightenRange(project: Project, start: number, end: number): Project {
     const gapEnd = Math.min(hi, words[i].start)
     if (gapEnd - gapStart >= 0.25) gaps.push({ start: gapStart, end: gapEnd })
   }
-  return gaps.reduce((acc, gap) => {
+  const next = gaps.reduce((acc, gap) => {
     const pieces = cutMinusProtected(gap, protectIntervals(acc.tags ?? []))
-    return pieces.reduce((next, piece) => deleteSourceRange(next, piece.start, piece.end, 'silence'), acc)
+    return pieces.reduce((cur, piece) => deleteSourceRange(cur, piece.start, piece.end, 'silence'), acc)
   }, project)
+  if (project.markIn == null || project.markOut == null) return next
+  const markA = Math.min(project.markIn, project.markOut)
+  const markB = Math.max(project.markIn, project.markOut)
+  const marked = {
+    start: programToSourceOf(project, markA),
+    end: programToSourceOf(project, markB)
+  }
+  if (overlap(marked, { start: lo, end: hi }) < 0.05) return next
+  const saved = programLength(project) - programLength(next)
+  if (saved < 0.02) return next
+  return { ...next, markIn: markA, markOut: Math.max(markA + 0.05, markB - saved) }
 }
 
 const TAG_LABELS: Record<TagKind, string> = {
@@ -966,7 +979,7 @@ export function applyCommand(project: Project, command: Command): Project {
             ? {
                 ...track,
                 clips: track.clips.map((clip) =>
-                  clip.text
+                  clip.text && !isZoomClip(clip) && !isRedactionClip(clip)
                     ? {
                         ...clip,
                         auto: false,
@@ -1022,7 +1035,9 @@ export function applyCommand(project: Project, command: Command): Project {
         muted: false,
         speed: 1,
         text: command.asset.name,
-        ...emptyClipFields()
+        ...emptyClipFields(),
+        fadeIn: command.fadeIn ?? 0,
+        fadeOut: command.fadeOut ?? 0
       }
       return touch({
         ...next,
@@ -1316,6 +1331,13 @@ export function applyCommand(project: Project, command: Command): Project {
       return revertSuggestionType(current, command.suggestionType)
     case 'addTag':
       return addTag(current, command.start, command.end, command.kind, command.label)
+    case 'setTagLabel': {
+      const label = command.label.trim() || TAG_LABELS.note
+      return touch({
+        ...current,
+        tags: (current.tags ?? []).map((tag) => (tag.id === command.tagId ? { ...tag, label } : tag))
+      })
+    }
     case 'eraseTag':
       return eraseTag(current, command.start, command.end, command.kind)
     case 'removeTag':
@@ -1373,6 +1395,21 @@ export function applyCommand(project: Project, command: Command): Project {
           )
         }
       })
+    case 'removeSpeaker': {
+      const speakers = current.transcript.speakers
+      if (speakers.length <= 1 || !speakers.some((row) => row.id === command.speakerId)) return current
+      const keep = speakers.find((row) => row.id !== command.speakerId)!
+      return touch({
+        ...current,
+        transcript: {
+          ...current.transcript,
+          speakers: speakers.filter((row) => row.id !== command.speakerId),
+          words: current.transcript.words.map((word) =>
+            word.speaker === command.speakerId ? { ...word, speaker: keep.id } : word
+          )
+        }
+      })
+    }
     case 'renameScene': {
       const scenes = current.scenes.map((scene) => {
         if (scene.id !== command.sceneId) return scene

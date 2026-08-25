@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
-import { isElectron } from '../host'
 import { captionsForExport } from '../lib/captions'
 import {
   exportContentPackage,
+  exportPrimaryCopy,
   exportSidecar,
   exportVideoAction,
   projectHasPicture,
-  SIDECARS,
-  videoExportCopy
+  SIDECARS
 } from '../lib/exportActions'
 import { setNormalizeFromContext } from '../lib/loudness'
 import { isVerticalFrame, setFrameFromContext } from '../lib/canvas'
@@ -31,7 +30,7 @@ export function ExportSheet({
   const [audioOnly, setAudioOnly] = useState(false)
   const [burnCaptions, setBurnCaptions] = useState(true)
   const exportOpts = { markedOnly, audioOnly, burnCaptions }
-  const video = videoExportCopy(project, exportOpts)
+  const primary = exportPrimaryCopy(project, exportOpts)
   const hasMarks = project.markIn != null && project.markOut != null
   const hasCaptions = captionsForExport(project).length > 0
   const hasPicture = projectHasPicture(project)
@@ -75,8 +74,12 @@ export function ExportSheet({
           {exporting
             ? 'Rendering the program — leave this open or cancel.'
             : hasPicture
-              ? 'The movie, or just the words. Pipeline formats stay under More.'
-              : 'This reel is audio. M4A is already selected — or export the words below.'}
+              ? primary.kind === 'pack'
+                ? 'MP4 needs a recording on disk and the desktop app. Download the words now.'
+                : 'The movie, or just the words. Pipeline formats stay under More.'
+              : primary.kind === 'pack'
+                ? 'This reel is audio and has no file on disk. Download the words, or open a recording for M4A.'
+                : 'This reel is audio. M4A is already selected — or export the words below.'}
         </p>
         <div className="chips export-presets">
           <button
@@ -154,27 +157,28 @@ export function ExportSheet({
           type="button"
           className="export-choice"
           data-primary="true"
-          disabled={ffmpegImportBusy(analyzing) || (!exporting && !video.ready)}
+          disabled={ffmpegImportBusy(analyzing) || (!exporting && primary.kind === 'blocked')}
           onClick={() => {
             if (exporting) {
               void cancelExport()
+              return
+            }
+            if (primary.kind === 'pack') {
+              void exportContentPackage(
+                onToast,
+                audioOnly
+                  ? 'Downloaded the words. M4A needs the desktop app and a linked recording.'
+                  : 'Downloaded captions and the transcript. MP4 needs the desktop app and a linked recording.'
+              )
               return
             }
             void exportVideoAction(onToast, exportOpts)
           }}
         >
           <strong>
-            {exporting ? 'Cancel video export' : audioOnly ? 'Audio · M4A' : 'Video · MP4'}
+            {exporting ? 'Cancel video export' : primary.label}
           </strong>
-          <span>
-            {exporting
-              ? 'Stop the render'
-              : !video.ready
-                ? video.summary
-                : !isElectron
-                  ? `${video.summary} · desktop app for MP4`
-                  : video.summary}
-          </span>
+          <span>{exporting ? 'Stop the render' : primary.detail}</span>
         </button>
         <button
           type="button"

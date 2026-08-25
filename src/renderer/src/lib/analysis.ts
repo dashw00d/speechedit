@@ -596,10 +596,17 @@ export function leftoverItems(project: Project, kind: Exclude<LeftoverKind, 'oth
 
 const GAP_HIT = 0.2
 
+export function leftoverHearQueue(project: Project): EditSuggestion[] {
+  return [...leftoverReviewQueue(project), ...leftoverItems(project, 'breath')]
+}
+
 export function leftoverForSpan(project: Project, start: number, end: number): EditSuggestion | undefined {
   const span = { start, end }
-  return leftoverReviewQueue(project)
-    .filter((suggestion) => overlap(suggestion, span) > GAP_HIT)
+  return leftoverHearQueue(project)
+    .filter((suggestion) => {
+      const hold = suggestion.end - suggestion.start
+      return overlap(suggestion, span) > Math.min(GAP_HIT, hold * 0.45)
+    })
     .sort((a, b) => overlap(b, span) - overlap(a, span))[0]
 }
 
@@ -617,7 +624,7 @@ export function gapIsMostlyCut(project: Project, start: number, end: number): bo
   return cut / span >= 0.55
 }
 
-export type GapReviewKind = 'activity' | 'still' | 'static' | 'loud' | 'cut' | 'demo' | 'live'
+export type GapReviewKind = 'activity' | 'still' | 'static' | 'loud' | 'breath' | 'cut' | 'demo' | 'live'
 
 export interface GapReview {
   kind: GapReviewKind
@@ -633,13 +640,18 @@ export function reviewGap(project: Project, start: number, end: number): GapRevi
   if (leftover) {
     const kind = leftoverKind(leftover)
     const reviewKind: GapReviewKind =
-      kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud' ? kind : 'live'
+      kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud' || kind === 'breath'
+        ? kind
+        : 'live'
+    const hold = (leftover.end - leftover.start).toFixed(1)
     const chip =
       reviewKind === 'activity'
-        ? `${(leftover.end - leftover.start).toFixed(1)}s silent activity`
+        ? `${hold}s silent activity`
         : reviewKind === 'still'
-          ? `${(leftover.end - leftover.start).toFixed(1)}s silent still`
-          : `${(leftover.end - leftover.start).toFixed(1)}s leftover`
+          ? `${hold}s silent still`
+          : reviewKind === 'breath'
+            ? `${hold}s breath`
+            : `${hold}s leftover`
     return {
       kind: reviewKind,
       start: leftover.start,
@@ -649,7 +661,9 @@ export function reviewGap(project: Project, start: number, end: number): GapRevi
       title:
         reviewKind === 'activity'
           ? 'Quiet click-through — click to review · double-click cuts'
-          : 'Leftover pause — click to review · double-click cuts'
+          : reviewKind === 'breath'
+            ? 'Breath — click to hear · double-click cuts'
+            : 'Leftover pause — click to review · double-click cuts'
     }
   }
   const applied = appliedForSpan(project, start, end)

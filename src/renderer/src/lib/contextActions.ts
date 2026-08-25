@@ -10,10 +10,18 @@ import {
   uncollapsedRetakeCount
 } from './sceneAnalysis'
 import { isFillerToken } from './transcript'
-import { coveringAppliedSuggestion, isParagraphSelection, restartBeforeWord, tagAt, wordRange } from './transcriptEdit'
+import {
+  coveringAppliedSuggestion,
+  isParagraphSelection,
+  liveSentenceRange,
+  restartBeforeWord,
+  tagAt,
+  wordRange
+} from './transcriptEdit'
 import { captionClipsOf } from './captions'
 import { hasOpeningTitle } from './title'
 import { hasLowerThird } from './lowerThird'
+import { describeNoteSaved } from './noteEdit'
 import { describeProtect } from './protect'
 import { describeSceneRemove, sceneForSpan } from './sceneRemove'
 import { DEFAULT_ZOOM_SCALE, zoomCommand, zoomPlacement } from './zoom'
@@ -55,6 +63,8 @@ export interface SuggestTask {
   showPreviewToggle: boolean
   fillerCount: number
   showMarkedExport: boolean
+  showBreaths: boolean
+  breathCount: number
 }
 
 export function formatSpan(seconds: number): string {
@@ -64,13 +74,16 @@ export function formatSpan(seconds: number): string {
 }
 
 export function toastForCommand(command: Command): string | null {
-  if (command.type === 'cutPreviousSentence') return 'Cut the previous sentence. Undo to put it back.'
-  if (command.type === 'cutSentence') return 'Cut this sentence. Undo to put it back.'
+  if (command.type === 'cutPreviousSentence') return 'Cut the previous sentence — saved the time. Hear the join.'
+  if (command.type === 'cutSentence') return 'Cut this sentence — saved the time. Hear the join.'
   if (command.type === 'resolveSuggestion' && command.resolution === 'cut') {
     return 'Removed the pause. Undo to put it back.'
   }
   if (command.type === 'resolveSuggestion' && command.resolution === 'keep') {
     return 'Protected. Auto Edit will skip this.'
+  }
+  if (command.type === 'resolveSuggestion' && command.resolution === 'speed') {
+    return 'Sped the wait 4×. Undo to play it at 1×.'
   }
   if (command.type === 'resolveSuggestion' && command.resolution === 'demo') {
     return 'Silent demo. Auto Edit will skip pauses here.'
@@ -84,9 +97,9 @@ export function toastForCommand(command: Command): string | null {
     return 'Export will keep the recording’s loudness.'
   }
   if (command.type === 'addLowerThirds') {
-    return 'Chapter names on the tape. Edit any one, then Apply style to all titles.'
+    return 'Type this name — Enter keeps it and opens the next. Fill is on the tape.'
   }
-  if (command.type === 'setCaptionStyleAll') return 'This look is on every title and caption.'
+  if (command.type === 'setCaptionStyleAll') return 'This look is on every title. Hear the next card, or Export.'
   return null
 }
 
@@ -104,6 +117,8 @@ export function toastForEdit(project: Project, command: Command): string | null 
   if (command.type === 'addTag' && (command.kind === 'keep' || command.kind === 'demo')) {
     return describeProtect(project, command.start, command.end, command.kind)
   }
+  if (command.type === 'addTag' && command.kind === 'note') return 'Note on the tape. Type what it is for.'
+  if (command.type === 'setTagLabel') return describeNoteSaved(command.label) ?? 'Note saved.'
   return null
 }
 
@@ -199,6 +214,7 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
 
   const caret = selectedWordIds[0] ?? live[0]?.id
   const restart = caret && live.length ? restartBeforeWord(project.transcript.words, caret) : null
+  const allFillers = live.length > 0 && live.every((w) => isFillerToken(w.text))
   if (restart && caret) {
     choices.push({
       id: 'cut-prev',
@@ -207,8 +223,20 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
       command: { type: 'cutPreviousSentence', wordId: caret }
     })
   }
+  const paragraph = isParagraphSelection(project.transcript.words, selectedWordIds)
+  const thisLine =
+    caret && live.length && !restart && !allFillers && !paragraph
+      ? liveSentenceRange(project.transcript.words, caret)
+      : null
+  if (thisLine && caret) {
+    choices.push({
+      id: 'cut-sentence',
+      label: 'Cut this sentence',
+      consequence: `Removes this ${formatSpan(thisLine.end - thisLine.start)} line and closes the gap.`,
+      command: { type: 'cutSentence', wordId: caret }
+    })
+  }
 
-  const allFillers = live.length > 0 && live.every((w) => isFillerToken(w.text))
   if (allFillers) {
     choices.push({
       id: 'remove',
@@ -236,16 +264,22 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
         command: { type: 'toggleWords', wordIds: [...fillerIds] }
       })
     }
-  } else {
-    const paragraph = isParagraphSelection(project.transcript.words, selectedWordIds)
+  } else if (paragraph) {
     choices.push({
-      id: 'remove',
-      label: paragraph ? 'Remove paragraph' : 'Remove',
-      consequence: paragraph
-        ? `Removes this ${formatSpan(dur)} stretch and closes the gap.`
-        : `Removes ${formatSpan(dur)} and closes the gap. Captions stay in sync.`,
+      id: 'cut-paragraph',
+      label: 'Remove paragraph',
+      consequence: `Removes this ${formatSpan(dur)} stretch and closes the gap. Hear the join.`,
       command: { type: 'toggleWords', wordIds: selectedWordIds }
     })
+  } else {
+    choices.push({
+      id: 'remove',
+      label: 'Remove',
+      consequence: `Removes ${formatSpan(dur)} and closes the gap. Captions stay in sync.`,
+      command: { type: 'toggleWords', wordIds: selectedWordIds }
+    })
+  }
+  if (!allFillers) {
     if (dur > 1.2) {
       choices.push({
         id: 'tighten',
@@ -258,7 +292,7 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
     choices.push({
       id: 'zoom',
       label: 'Add zoom',
-      consequence: `Punches in at ${DEFAULT_ZOOM_SCALE}× for ${formatSpan(zoom.duration)}. Scale is in Transform.`,
+      consequence: `Punches in at ${DEFAULT_ZOOM_SCALE}× for ${formatSpan(zoom.duration)}. Scale is on the picture.`,
       command: zoomCommand(zoom)
     })
   }
@@ -307,6 +341,20 @@ export function markedRange(project: Project): { start: number; end: number; dur
   return { start, end, duration }
 }
 
+function attachBreaths(
+  project: Project,
+  task: Omit<SuggestTask, 'showMarkedExport' | 'showBreaths' | 'breathCount'>
+): Omit<SuggestTask, 'showMarkedExport'> {
+  const leftoverPriority =
+    leftoverItems(project, 'activity').length ||
+    leftoverItems(project, 'still').length ||
+    leftoverItems(project, 'static').length ||
+    leftoverItems(project, 'loud').length
+  const breaths = leftoverItems(project, 'breath')
+  const showBreaths = task.showWatch && leftoverPriority === 0 && breaths.length > 0
+  return { ...task, showBreaths, breathCount: showBreaths ? breaths.length : 0 }
+}
+
 function attachMarkedExport(project: Project, task: Omit<SuggestTask, 'showMarkedExport'>): SuggestTask {
   const marked = markedRange(project)
   if (!marked) return { ...task, showMarkedExport: false }
@@ -318,14 +366,14 @@ function attachMarkedExport(project: Project, task: Omit<SuggestTask, 'showMarke
 }
 
 export function suggestTask(project: Project): SuggestTask {
-  return attachMarkedExport(project, buildSuggestTask(project))
+  return attachMarkedExport(project, attachBreaths(project, buildSuggestTask(project)))
 }
 
-function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport'> {
+function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport' | 'showBreaths' | 'breathCount'> {
   const pending = project.suggestions.filter((s) => !s.applied)
   const applied = project.suggestions.filter((s) => s.applied)
   const safe = safeEditCandidates(project)
-  const review = pending.filter((s) => !safe.includes(s))
+  const review = pending.filter((s) => !safe.includes(s) && leftoverKind(s) !== 'breath')
   const activities = leftoverItems(project, 'activity')
   const stills = leftoverItems(project, 'still')
   const statics = leftoverItems(project, 'static')
@@ -473,7 +521,7 @@ function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport
       fillerCount
     }
   }
-  if (applied.length && !pending.length) {
+  if (applied.length && !review.length) {
     const retakes = retakeTaskCopy(project)
     return {
       headline: retakes
@@ -560,7 +608,7 @@ export interface WordsInspectorDetail {
   clock: string
   speakerId?: string
   scene?: { title: string; kind: string; summary?: string }
-  tag?: { kind: 'keep' | 'demo'; label: string }
+  tag?: { id: string; kind: string; label: string }
   actions: InspectorAction[]
   relatedSuggestions: Array<{ id: string; label: string; safe: boolean; applied: boolean }>
   nextHint?: string
@@ -607,7 +655,7 @@ export interface GapInspectorDetail {
   headline: string
   clock: string
   explanation: string
-  tag?: { kind: 'keep' | 'demo'; label: string }
+  tag?: { id: string; kind: string; label: string }
   actions: InspectorAction[]
   similarSafeCount: number
   nextHint?: string
@@ -671,6 +719,9 @@ function suggestionSafetyExplanation(project: Project, suggestion: EditSuggestio
     }
     if (leftoverKind(suggestion) === 'still') {
       return 'The picture is still while the room is quiet — a silent demo hold, or dead air. Hear it, then Cut, Silent demo, or Speed.'
+    }
+    if (leftoverKind(suggestion) === 'breath') {
+      return 'A short breath between words. Hear it — Cut if it hisses, Keep if the line should still breathe.'
     }
     if (suggestion.action === 'review') return 'Flagged for manual review before applying.'
     if (suggestion.type === 'silence') return 'Long or unusual pause — worth a quick listen.'
@@ -816,6 +867,7 @@ export function gapInspectorDetail(project: Project, start: number, end: number)
   if (review.kind === 'demo' || tag?.kind === 'demo') {
     explanation = 'Silent demo is in this pause. Double-click will not cut the walkthrough.'
   } else if (tag?.kind === 'keep') explanation = 'Protected. Auto Edit will not cut here.'
+    else if (tag?.kind === 'note') explanation = 'A note on this pause. Type it — Auto Edit ignores notes.'
   else if (dur > 3) explanation = 'Long pause — often safe to remove when nothing happens on screen.'
 
   return {
@@ -823,10 +875,13 @@ export function gapInspectorDetail(project: Project, start: number, end: number)
     headline: isCut ? `${dur.toFixed(1)} second pause removed` : `${dur.toFixed(1)} second pause`,
     clock: `${formatClock(start)}–${formatClock(end)}`,
     explanation,
-    tag:
-      tag && (tag.kind === 'keep' || tag.kind === 'demo')
-        ? { kind: tag.kind, label: tag.label || (tag.kind === 'demo' ? 'Silent demo' : 'Protected') }
-        : undefined,
+    tag: tag
+      ? {
+          id: tag.id,
+          kind: tag.kind,
+          label: tag.label || (tag.kind === 'demo' ? 'Silent demo' : tag.kind === 'keep' ? 'Protected' : 'Note')
+        }
+      : undefined,
     actions: actions.slice(0, 4),
     similarSafeCount: similarSafe,
     nextHint: similarSafe > 1 ? `${similarSafe} other safe pauses are waiting in the bar below.` : undefined,
@@ -899,12 +954,14 @@ export function wordsInspectorDetail(project: Project, selectedWordIds: string[]
   else if (allFillers && live.length === 1)
     nextHint = 'All fillers removes every um, uh, and you know in one pass.'
   else if (live.length && isParagraphSelection(project.transcript.words, selectedWordIds))
-    nextHint = 'Delete removes this paragraph and closes the gap.'
+    nextHint = 'Remove paragraph on the bar (or Delete) hears the join.'
   else if (live.length && restartBeforeWord(project.transcript.words, selectedWordIds[0] ?? live[0].id))
     nextHint = '`,` cuts the previous sentence if this line was a restart.'
   else if (live.length && captionClipsOf(project).some((clip) => clip.auto))
     nextHint = 'Fix a name here — captions follow.'
-  else if (live.length) nextHint = 'Copy quote pastes the speaker and time for Slack or a deck.'
+  else if (live.length && liveSentenceRange(project.transcript.words, selectedWordIds[0] ?? live[0].id))
+    nextHint = '`.` cuts this sentence and plays the join.'
+  else if (live.length) nextHint = 'Copy quote pastes this line with the speaker and time. Mark clip if it should ship.'
 
   return {
     title,
@@ -913,13 +970,18 @@ export function wordsInspectorDetail(project: Project, selectedWordIds: string[]
     clock: `${formatClock(span.start)}–${formatClock(span.end)}`,
     speakerId,
     scene: scene ? { title: scene.title, kind: scene.kind, summary: scene.summary || undefined } : undefined,
-    tag:
-      tag && (tag.kind === 'keep' || tag.kind === 'demo')
-        ? { kind: tag.kind, label: tag.label || (tag.kind === 'demo' ? 'Silent demo' : 'Protected') }
-        : undefined,
+    tag: tag
+      ? {
+          id: tag.id,
+          kind: tag.kind,
+          label: tag.label || (tag.kind === 'demo' ? 'Silent demo' : tag.kind === 'keep' ? 'Protected' : 'Note')
+        }
+      : undefined,
     actions: choices.map((c, i) => ({ ...c, primary: i === 0 })),
     relatedSuggestions,
-    nextHint
+    nextHint: tag?.kind === 'note' || tag?.kind === 'hook' || tag?.kind === 'cta'
+      ? 'Type hook, ask, or why you parked — or double-click the chip in the script.'
+      : nextHint
   }
 }
 
@@ -1005,7 +1067,7 @@ export function sceneInspectorDetail(project: Project, sceneId: string): SceneIn
   actions.push({
     id: 'zoom',
     label: 'Add zoom',
-    consequence: `Punches in at ${DEFAULT_ZOOM_SCALE}× for ${formatSpan(zoom.duration)}. Scale is in Transform.`,
+    consequence: `Punches in at ${DEFAULT_ZOOM_SCALE}× for ${formatSpan(zoom.duration)}. Scale is on the picture.`,
     command: zoomCommand(zoom)
   })
   const redact = redactionPlacement(project, scene.start, [], scene.id)
@@ -1151,19 +1213,23 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
     actions.push({
       id: 'apply',
       label:
-        suggestion.action === 'speed'
-          ? `Speed ${suggestion.speed ?? 4}×`
-          : suggestion.action === 'volume'
-            ? 'Quiet'
-            : 'Apply',
-      consequence:
-        suggestion.action === 'cut'
-          ? `Removes ${formatSpan(dur)} and closes the gap.`
+        leftoverKind(suggestion) === 'breath'
+          ? 'Cut'
           : suggestion.action === 'speed'
-            ? `Plays this ${formatSpan(dur)} at ${suggestion.speed ?? 4}× so the still screen is shorter.`
+            ? `Speed ${suggestion.speed ?? 4}×`
             : suggestion.action === 'volume'
-              ? `Lowers this ${formatSpan(dur)} toward -16 LUFS without changing length.`
-              : 'Normalizes loudness on this stretch.',
+              ? 'Quiet'
+              : 'Apply',
+      consequence:
+        leftoverKind(suggestion) === 'breath'
+          ? `Removes this ${formatSpan(dur)} breath and closes the gap.`
+          : suggestion.action === 'cut'
+            ? `Removes ${formatSpan(dur)} and closes the gap.`
+            : suggestion.action === 'speed'
+              ? `Plays this ${formatSpan(dur)} at ${suggestion.speed ?? 4}× so the still screen is shorter.`
+              : suggestion.action === 'volume'
+                ? `Lowers this ${formatSpan(dur)} toward -16 LUFS without changing length.`
+                : 'Normalizes loudness on this stretch.',
       command: { type: 'applySuggestion', suggestionId: suggestion.id },
       primary: true
     })
@@ -1171,12 +1237,17 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
       id: 'keep',
       label: 'Keep',
       consequence:
-        leftoverKind(suggestion) === 'static'
-          ? 'Leaves this screen at 1×.'
-          : leftoverKind(suggestion) === 'loud'
-            ? 'Leaves this stretch at full level.'
-            : 'Leaves this section unchanged.',
-      command: { type: 'dismissSuggestion', suggestionId: suggestion.id }
+        leftoverKind(suggestion) === 'breath'
+          ? 'Leaves this breath. Auto Edit will skip it.'
+          : leftoverKind(suggestion) === 'static'
+            ? 'Leaves this screen at 1×.'
+            : leftoverKind(suggestion) === 'loud'
+              ? 'Leaves this stretch at full level.'
+              : 'Leaves this section unchanged.',
+      command:
+        leftoverKind(suggestion) === 'breath'
+          ? { type: 'resolveSuggestion', suggestionId: suggestion.id, resolution: 'keep' }
+          : { type: 'dismissSuggestion', suggestionId: suggestion.id }
     })
   }
 
@@ -1210,9 +1281,11 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
               ? 'Talking over still'
               : leftoverKind(suggestion) === 'loud'
                 ? 'Hot audio'
-                : suggestion.type === 'silence'
-                  ? 'Pause'
-                  : suggestion.type,
+                : leftoverKind(suggestion) === 'breath'
+                  ? 'Breath'
+                  : suggestion.type === 'silence'
+                    ? 'Pause'
+                    : suggestion.type,
     headline: suggestion.label,
     clock: `${formatClock(suggestion.start)}–${formatClock(suggestion.end)}${suggestion.safe ? ' · safe' : ' · review'}`,
     explanation: suggestionSafetyExplanation(project, suggestion),

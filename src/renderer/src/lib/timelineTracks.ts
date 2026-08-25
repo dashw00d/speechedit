@@ -21,8 +21,20 @@ export function trackLaneName(track: Pick<Track, 'name'>): string {
   return track.name.replace(/^[VA]\d+\s+/, '') || track.name
 }
 
-export function findRevealableStackTrack(tracks: Track[], trackType: Extract<TrackType, 'overlay' | 'caption'>): Track | undefined {
-  return tracks.find((t) => t.type === trackType && t.clips.length === 0 && t.hidden)
+/** Hidden overlay/caption — a filled lane you hid, then the empty default stack. */
+export function findRevealableStackTrack(
+  tracks: Track[],
+  trackType: Extract<TrackType, 'overlay' | 'caption'>
+): Track | undefined {
+  return (
+    tracks.find((track) => track.type === trackType && track.hidden && track.clips.length > 0) ??
+    tracks.find((track) => track.type === trackType && track.hidden)
+  )
+}
+
+/** Picture, Voice, or extra audio — hide removes the header, so the toolbar has to bring it back. */
+export function hiddenLaneTracks(tracks: Track[]): Track[] {
+  return tracks.filter((track) => track.hidden && (track.type === 'video' || track.type === 'audio'))
 }
 
 /** Solo one lane: mute the others. Voice stays if Picture or Voice is soloed. */

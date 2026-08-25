@@ -1,6 +1,6 @@
 import { host, isElectron } from '../host'
 import { programLength } from './commands'
-import { captionsForExport } from './captions'
+import { captionsForExport, typedTapeNotes } from './captions'
 import { summarizeJob, validateExportJob } from './exportGraph'
 import { buildExportJob, type ExportVideoOpts } from './exportJob'
 import {
@@ -85,7 +85,7 @@ export const SIDECARS: SidecarSpec[] = [
   {
     id: 'md',
     label: 'Transcript · Markdown',
-    hint: 'Copy speaker notes. Paste into Slack or Notion.',
+    hint: 'Copy notes with chapter headings. Paste into Slack or Notion.',
     group: 'common',
     ext: '.md',
     body: projectToTranscriptMd,
@@ -165,16 +165,90 @@ export const SIDECARS: SidecarSpec[] = [
   }
 ]
 
-export function copyToastForSidecar(id: SidecarId): string | null {
-  if (id === 'chapters') return 'Copied YouTube chapters. Paste into the description.'
-  if (id === 'md') return 'Copied the transcript. Paste into Slack or Notion.'
+export function copyToastForSidecar(id: SidecarId, project?: Project): string | null {
+  if (id === 'chapters') {
+    const n = project ? youtubeChapterCount(project) : 0
+    return n > 1
+      ? `Copied ${n} YouTube chapters. Paste into the description.`
+      : 'Copied YouTube chapters. Paste into the description.'
+  }
+  if (id === 'md') {
+    const n = project ? typedTapeNotes(project).length : 0
+    if (n) {
+      return n === 1
+        ? 'Copied the notes. The mark you typed is in the paste. Drop it into Slack or Notion.'
+        : `Copied the notes. ${n} marks you typed are in the paste. Drop it into Slack or Notion.`
+    }
+    return 'Copied the notes. Chapter headings are in the paste. Drop it into Slack or Notion.'
+  }
+  if (id === 'srt') return 'Copied the captions. Upload the SRT next to the MP4.'
   return null
+}
+
+/** SRT is a file YouTube and an LMS can upload. Copy is extra. */
+export function sidecarAlsoSaves(id: SidecarId): boolean {
+  return id === 'srt'
+}
+
+export function fileToastForSidecar(id: SidecarId, filename: string): string {
+  const verb = isElectron ? 'Saved' : 'Downloaded'
+  if (id === 'srt') return `${verb} ${filename}. Upload it next to the MP4.`
+  if (id === 'md') return `${verb} ${filename}. Drop it into Slack or Notion.`
+  if (id === 'chapters') return `${verb} ${filename}. Paste into the description.`
+  return `${verb} ${filename}`
+}
+
+export function hasExportableCaptions(project: Project): boolean {
+  return sidecarById('srt').ready(project)
+}
+
+export function youtubeChapterCount(project: Project): number {
+  const text = projectToChapters(project)
+  return text ? text.split('\n').filter(Boolean).length : 0
+}
+
+export function hasYouTubeChapters(project: Project): boolean {
+  return youtubeChapterCount(project) >= 2
 }
 
 export function sidecarById(id: SidecarId): SidecarSpec {
   const spec = SIDECARS.find((item) => item.id === id)
   if (!spec) throw new Error(`Unknown export ${id}`)
   return spec
+}
+
+export function canPackSidecars(project: Project): boolean {
+  return SIDECARS.some((item) => item.group === 'common' && item.ready(project))
+}
+
+/** Render the movie when we can. Otherwise ship the words — the studio demo has no file on disk. */
+export function exportPrimaryCopy(
+  project: Project,
+  opts: ExportVideoOpts = {},
+  electron = isElectron
+): { label: string; detail: string; kind: 'render' | 'pack' | 'blocked' } {
+  const video = videoExportCopy(project, opts)
+  if (video.ready && electron) {
+    return {
+      label: opts.audioOnly ? 'Audio · M4A' : 'Video · MP4',
+      detail: video.summary,
+      kind: 'render'
+    }
+  }
+  if (canPackSidecars(project)) {
+    return {
+      label: 'Download the words',
+      detail: opts.audioOnly
+        ? 'M4A needs a recording on disk and the desktop app. This saves the words and chapters.'
+        : 'MP4 needs a recording on disk and the desktop app. This saves captions and the transcript.',
+      kind: 'pack'
+    }
+  }
+  return {
+    label: opts.audioOnly ? 'Audio · M4A' : 'Video · MP4',
+    detail: video.summary,
+    kind: 'blocked'
+  }
 }
 
 export function videoExportCopy(
@@ -217,7 +291,7 @@ export function videoExportCopy(
   }
 }
 
-export async function exportContentPackage(onToast: ToastFn): Promise<void> {
+export async function exportContentPackage(onToast: ToastFn, note?: string): Promise<void> {
   const project = useEditor.getState().project
   const ready = SIDECARS.filter((item) => item.group === 'common' && item.ready(project))
   if (!ready.length) {
@@ -239,9 +313,10 @@ export async function exportContentPackage(onToast: ToastFn): Promise<void> {
     return
   }
   onToast(
-    isElectron
-      ? `Saved ${saved} files · captions, transcript, chapters`
-      : `Downloaded ${saved} files · captions, transcript, chapters`
+    note ??
+      (isElectron
+        ? `Saved ${saved} files · captions, transcript, chapters`
+        : `Downloaded ${saved} files · captions, transcript, chapters`)
   )
 }
 
@@ -253,13 +328,17 @@ export async function exportSidecar(id: SidecarId, onToast: ToastFn): Promise<vo
     return
   }
   const body = spec.body(project)
-  const copied = copyToastForSidecar(id)
-  if (copied) {
+  const copiedToast = copyToastForSidecar(id, project)
+  let copied = false
+  if (copiedToast) {
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(body)
-        onToast(copied)
-        return
+        copied = true
+        if (!sidecarAlsoSaves(id)) {
+          onToast(copiedToast)
+          return
+        }
       }
     } catch {
       /* fall through to a file they can open */
@@ -268,8 +347,11 @@ export async function exportSidecar(id: SidecarId, onToast: ToastFn): Promise<vo
   const filename = `${project.name}${spec.ext}`
   try {
     const path = await saveTextExport(filename, body)
-    if (!path) return
-    onToast(isElectron ? `Saved ${filename}` : `Downloaded ${filename}`)
+    if (!path) {
+      if (copied && copiedToast) onToast(copiedToast)
+      return
+    }
+    onToast(copied && copiedToast ? copiedToast : fileToastForSidecar(id, filename))
   } catch (err) {
     onToast(err instanceof Error ? err.message : 'Export failed.')
   }
@@ -287,20 +369,18 @@ export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts 
     return
   }
   const info = videoExportCopy(editor.project, opts)
-  if (!info.ready) {
-    onToast(info.problem ?? 'Open media to export a program.')
+  const primary = exportPrimaryCopy(editor.project, opts)
+  if (primary.kind === 'pack') {
+    await exportContentPackage(
+      onToast,
+      opts.audioOnly
+        ? 'Downloaded the words. M4A needs the desktop app and a linked recording.'
+        : 'Downloaded captions and the transcript. MP4 needs the desktop app and a linked recording.'
+    )
     return
   }
-  if (!isElectron) {
-    onToast(
-      opts.audioOnly
-        ? opts.markedOnly
-          ? 'Audio export needs the desktop app. Captions still download here. Clear marks for the next clip.'
-          : 'Audio export needs the desktop app. Captions and transcripts still download here.'
-        : opts.markedOnly
-          ? 'Video export needs the desktop app. Captions still download here. Clear marks for the next clip.'
-          : 'Video export needs the desktop app. Captions and transcripts still download here.'
-    )
+  if (!info.ready) {
+    onToast(info.problem ?? 'Open media to export a program.')
     return
   }
   const job = buildExportJob(editor.project, '', opts)

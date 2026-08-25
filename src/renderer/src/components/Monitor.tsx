@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type CSSProperties } from 'react'
 import { mediaUrl } from '../host'
 import { programFrame } from '../../../shared/mediaOrient'
 import { playbackPath, previewUnsafeCodec } from '../../../shared/proxy'
@@ -13,10 +13,25 @@ import { primaryAssetAt, primaryTakes } from '../lib/takes'
 import { formatTimecode } from '../lib/time'
 import { ingestDroppedFile } from '../lib/fileActions'
 import { REVIEW_RATES, describeReviewRate } from '../lib/reviewRate'
+import { isZoomClip, ZOOM_SCALES } from '../lib/zoom'
+import { isRedactionClip, REDACT_SCALES } from '../lib/redaction'
+import { isVerticalFrame, PICTURE_PANS } from '../lib/canvas'
 import { copyStillFromContext } from '../lib/still'
+import { applyCaptionStyleToAllFromContext, canApplyCaptionStyleAll, styleSourceClip } from '../lib/captionStyle'
+import { captionDefaults } from '../lib/theme'
+import { clearMarksFromContext } from '../lib/marks'
 import { useEditor, usePlayback } from '../store'
+import { OverflowMenu } from './OverflowMenu'
 import { useEngine } from '../useEngine'
 import type { Crop } from '../types'
+import {
+  commitPictureText,
+  EDIT_PICTURE_TEXT_EVENT,
+  pictureTextDraft,
+  pictureTextPlaceholder,
+  startPictureTextEdit
+} from '../lib/pictureText'
+import type { GraphLayer } from '../lib/exportGraph'
 
 export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -55,10 +70,28 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   const [proxyFailed, setProxyFailed] = useState(false)
   const [previewFailed, setPreviewFailed] = useState(false)
   const [dropHover, setDropHover] = useState(false)
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null)
+  const textCard = Boolean(
+    selectedClip?.text && !selectedClip.assetId && selectedClip.text !== 'ZOOM' && selectedClip.text !== 'REDACT'
+  )
+  const redactOn = isRedactionClip(selectedClip)
   useEffect(() => {
     setProxyFailed(false)
     setPreviewFailed(false)
   }, [asset?.id, asset?.path, asset?.proxyPath])
+  useEffect(() => {
+    const onEdit = (event: Event) => {
+      const id = (event as CustomEvent<{ clipId?: string }>).detail?.clipId
+      if (id) setEditingLayerId(id)
+    }
+    window.addEventListener(EDIT_PICTURE_TEXT_EVENT, onEdit)
+    return () => window.removeEventListener(EDIT_PICTURE_TEXT_EVENT, onEdit)
+  }, [])
+  useEffect(() => {
+    if (!editingLayerId) return
+    const visible = look.layers.some((row) => row.layer.id === editingLayerId)
+    if (!visible) setEditingLayerId(null)
+  }, [look, editingLayerId])
   const src = asset?.path ? mediaUrl(playbackPath(asset, { proxyExists: !proxyFailed })) : ''
   const outgoingAsset =
     (look.outgoingInput
@@ -155,6 +188,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
             )}
             <video
               ref={videoRef}
+              data-monitor-video
               src={src}
               muted={incomingGain <= 0.0001}
               playsInline
@@ -194,17 +228,79 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
           </p>
           </>
         )}
+        {isVerticalFrame(project) && !editingLayerId && !redactOn && (
+          <div
+            className="picture-pan"
+            data-picture-pan
+            title="Drag to pick the face"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              const origin = {
+                x: event.clientX,
+                y: event.clientY,
+                tx: project.picture.x,
+                ty: project.picture.y
+              }
+              const move = (ev: PointerEvent) => {
+                dispatch({
+                  type: 'setPicture',
+                  transform: {
+                    x: origin.tx + (ev.clientX - origin.x),
+                    y: origin.ty + (ev.clientY - origin.y)
+                  }
+                })
+              }
+              const up = () => {
+                window.removeEventListener('pointermove', move)
+                window.removeEventListener('pointerup', up)
+              }
+              window.addEventListener('pointermove', move)
+              window.addEventListener('pointerup', up)
+            }}
+          />
+        )}
         {overlays.map(({ layer, opacity }) => {
           if (layer.kind === 'blur') {
+            const on = Boolean(layer.id && selectedClipId === layer.id)
             return (
               <div
                 key={layer.id ?? `${layer.start}-blur`}
                 className="redact"
+                data-on={on || undefined}
+                title={on ? 'Drag over what should stay hidden' : undefined}
                 style={{
                   transform: `translate(${sx(layer.x)}, ${sy(layer.y)}) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
                   opacity,
                   width: `${Math.max(12, layer.scale * 100)}%`
                 }}
+                onPointerDown={
+                  on && layer.id
+                    ? (event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        const stage = (event.currentTarget as HTMLElement).closest('.program-stage')
+                        if (!stage) return
+                        const box = stage.getBoundingClientRect()
+                        const origin = { x: event.clientX, y: event.clientY, tx: layer.x, ty: layer.y }
+                        const clipId = layer.id!
+                        const move = (ev: PointerEvent) => {
+                          const dx = ((ev.clientX - origin.x) / Math.max(1, box.width)) * frame.width
+                          const dy = ((ev.clientY - origin.y) / Math.max(1, box.height)) * frame.height
+                          dispatch({
+                            type: 'setTransform',
+                            clipId,
+                            transform: { x: origin.tx + dx, y: origin.ty + dy }
+                          })
+                        }
+                        const up = () => {
+                          window.removeEventListener('pointermove', move)
+                          window.removeEventListener('pointerup', up)
+                        }
+                        window.addEventListener('pointermove', move)
+                        window.addEventListener('pointerup', up)
+                      }
+                    : undefined
+                }
               />
             )
           }
@@ -234,44 +330,54 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
           }
           if (!layer.text) return null
           return (
-            <div
+            <PictureTextLayer
               key={layer.id ?? `${layer.start}-ov`}
+              layer={layer}
               className="overlay-card"
+              opacity={opacity}
+              editing={Boolean(layer.id && editingLayerId === layer.id)}
               style={{
                 transform: `translate(${sx(layer.x)}, ${sy(layer.y)}) scale(${layer.scale}) rotate(${layer.rotation ?? 0}deg)`,
-                opacity,
                 fontSize: sfont(layer.fontSize),
                 color: layer.fill,
                 WebkitTextStrokeColor: layer.stroke
               }}
-            >
-              {layer.text}
-            </div>
+              onToast={onToast}
+              onClose={(mode) => {
+                setEditingLayerId(null)
+                if (mode !== 'keep') useEditor.getState().clearSelection()
+              }}
+              onAdvance={(clipId) => {
+                setEditingLayerId(clipId)
+                startPictureTextEdit(clipId)
+              }}
+              onStart={() => layer.id && startPictureTextEdit(layer.id)}
+            />
           )
         })}
         {captions.map(({ layer, opacity }) =>
           layer.text ? (
-            <div
+            <PictureTextLayer
               key={layer.id ?? `${layer.start}-cap`}
+              layer={layer}
               className="caption-burn"
-              data-pos={layer.position ?? 'lower'}
-              data-align={layer.align ?? 'center'}
+              opacity={opacity}
+              editing={Boolean(layer.id && editingLayerId === layer.id)}
               style={{
                 fontSize: sfont(layer.fontSize),
                 textAlign: layer.align,
                 color: layer.fill,
-                WebkitTextStrokeColor: layer.stroke,
-                opacity
+                WebkitTextStrokeColor: layer.stroke
               }}
-            >
-              {layer.text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-                part.startsWith('**') && part.endsWith('**') ? (
-                  <strong key={i}>{part.slice(2, -2)}</strong>
-                ) : (
-                  <span key={i}>{part}</span>
-                )
-              )}
-            </div>
+              onToast={onToast}
+              onClose={() => {
+                setEditingLayerId(null)
+                if (layer.position === 'center' || (layer.fontSize ?? 0) >= 56) {
+                  useEditor.getState().clearSelection()
+                }
+              }}
+              onStart={() => layer.id && startPictureTextEdit(layer.id)}
+            />
           ) : null
         )}
         {look.incoming?.kind === 'slug' && (
@@ -279,11 +385,11 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
             <span>Hold</span>
           </div>
         )}
-        {(showSafeZone || selectedClip) && (
+        {(showSafeZone || (selectedClip && !textCard && !redactOn && !editingLayerId)) && (
           <CropSafeOverlay
             crop={selectedClip?.transform.crop ?? picture.crop}
             showSafe={showSafeZone}
-            showCrop={Boolean(selectedClip)}
+            showCrop={Boolean(selectedClip) && !textCard && !editingLayerId}
             onCrop={(next) => {
               if (selectedClip) dispatch({ type: 'setTransform', clipId: selectedClip.id, transform: { crop: next } })
               else dispatch({ type: 'setPicture', transform: { crop: next } })
@@ -300,72 +406,92 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
         <button className="play" onClick={onPlayClick} aria-label={playing ? 'Pause' : 'Play'}>
           {playing ? '❙❙' : '▶'}
         </button>
-        <span className="timecode">
+        <span
+          className="timecode"
+          title={`Source ${formatTimecode(sourceTime, project.fps)}`}
+        >
           {formatTimecode(programTime, project.fps)}
           <small>/ {formatTimecode(duration, project.fps)}</small>
         </span>
-        <span>src {formatTimecode(sourceTime, project.fps)}</span>
-        <span className="vol-readout">
-          vol {Math.round(volume * 100)}
+        <span className="vol-readout" title={`Volume ${Math.round(volume * 100)}`}>
           <span className="audio-meter" title="Program voice level">
             <i style={{ height: `${Math.min(100, Math.max(4, volume * 100))}%` }} data-hot={volume > 0.95 || undefined} />
           </span>
         </span>
-        <button
-          className="chip"
-          data-active={showSafeZone}
-          title="Title-safe and action-safe boxes. Keep captions inside the inner box."
-          onClick={() => setShowSafeZone(!showSafeZone)}
-        >
-          {showSafeZone ? 'Safe on' : 'Safe'}
-        </button>
-        <button
-          className="chip"
-          title="Find this frame in the script (match frame)"
-          onClick={() => {
-            const hit = currentWord(project.transcript.words, sourceTime)
-            if (hit) {
-              useEditor.getState().selectWords([hit.id])
-              useEditor.getState().setFollowPlayhead(true)
-            }
-            onToast?.(
-              hit
-                ? `Match · “${hit.text}” at source ${formatTimecode(sourceTime, project.fps)}`
-                : `Match · source ${formatTimecode(sourceTime, project.fps)}`
-            )
-          }}
-        >
-          Match
-        </button>
-        <button
-          className="chip"
-          title="Copy this frame with the line. Paste into a ticket or Slack."
-          onClick={() => void copyStillFromContext(videoRef.current).then((result) => onToast?.(result.toast))}
-        >
-          Copy frame
-        </button>
         {ducked && (
           <span className="duck-flag" title="Voice is ducked under B-roll">
             duck −{Math.round(duckAmount * 100)}
           </span>
         )}
         <RateButtons />
+        <ZoomScaleButtons />
+        <RedactScaleButtons />
+        <TitleLookButtons onToast={onToast} />
+        <PicturePanButtons />
         <LoopButton />
-        <FullScreenButton />
-        <button
-          className="chip"
-          title={
-            hasMarks
-              ? 'Play from In to Out (P)'
-              : selectedWordIds.length
-                ? 'Play the selected words (P)'
-                : 'Set In and Out, or select words, then play (P)'
-          }
-          onClick={() => usePlayback.getState().playSelectionOrMarks()}
-        >
-          {playRangeLabel}
-        </button>
+        {(hasMarks || selectedWordIds.length > 0) && (
+          <button
+            className="chip"
+            title={
+              hasMarks
+                ? 'Play from In to Out (P)'
+                : 'Play the selected words (P)'
+            }
+            onClick={() => usePlayback.getState().playSelectionOrMarks()}
+          >
+            {playRangeLabel}
+          </button>
+        )}
         <MarkButtons />
+        {(project.markIn != null || project.markOut != null) && (
+          <button
+            className="chip"
+            type="button"
+            title="Clear In and Out"
+            onClick={() => onToast?.(clearMarksFromContext().toast)}
+          >
+            Clear
+          </button>
+        )}
+        <OverflowMenu tone="chip" label="More" title="Safe, match frame, copy, full screen">
+          <button
+            className="overflow-item"
+            type="button"
+            data-active={showSafeZone}
+            title="Title-safe and action-safe boxes. Keep captions inside the inner box."
+            onClick={() => setShowSafeZone(!showSafeZone)}
+          >
+            {showSafeZone ? 'Safe on' : 'Safe'}
+          </button>
+          <button
+            className="overflow-item"
+            type="button"
+            title="Find this frame in the script (match frame)"
+            onClick={() => {
+              const hit = currentWord(project.transcript.words, sourceTime)
+              if (hit) {
+                useEditor.getState().selectWords([hit.id])
+                useEditor.getState().setFollowPlayhead(true)
+              }
+              onToast?.(
+                hit
+                  ? `Match · “${hit.text}” at source ${formatTimecode(sourceTime, project.fps)}`
+                  : `Match · source ${formatTimecode(sourceTime, project.fps)}`
+              )
+            }}
+          >
+            Match
+          </button>
+          <button
+            className="overflow-item"
+            type="button"
+            title="Copy this picture with the line. Words or a chapter park the frame first."
+            onClick={() => void copyStillFromContext(videoRef.current).then((result) => onToast?.(result.toast))}
+          >
+            Copy frame
+          </button>
+          <FullScreenButton inMenu />
+        </OverflowMenu>
         <div className="beds" hidden>
           {(job.beds ?? []).map((bed) => (
             <audio key={bed.id ?? bed.path} data-bed={bed.id ?? bed.path} src={mediaUrl(bed.path)} preload="auto" />
@@ -376,11 +502,146 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   )
 }
 
+function PicturePanButtons() {
+  const project = useEditor((s) => s.project)
+  const dispatch = useEditor((s) => s.dispatch)
+  if (!isVerticalFrame(project)) return null
+  const x = project.picture.x
+  const labels = ['Left', 'Center', 'Right'] as const
+  return (
+    <span className="rate-chips" data-picture-pan-chips>
+      {PICTURE_PANS.map((pan, index) => (
+        <button
+          key={pan}
+          className="chip"
+          data-picture-pan={labels[index]}
+          data-active={Math.abs(x - pan) < 8 || undefined}
+          title={labels[index] === 'Center' ? 'Center the picture' : `Slide the picture ${labels[index].toLowerCase()}`}
+          onClick={() => dispatch({ type: 'setPicture', transform: { x: pan, y: 0 } })}
+        >
+          {labels[index]}
+        </button>
+      ))}
+    </span>
+  )
+}
+
+function RedactScaleButtons() {
+  const selectedClipId = useEditor((s) => s.selectedClipId)
+  const project = useEditor((s) => s.project)
+  const dispatch = useEditor((s) => s.dispatch)
+  const clip = project.tracks.flatMap((track) => track.clips).find((row) => row.id === selectedClipId)
+  if (!clip || !isRedactionClip(clip)) return null
+  const scale = clip.transform.scale
+  return (
+    <span className="rate-chips" data-redact-scale>
+      {REDACT_SCALES.map((rate) => (
+        <button
+          key={rate}
+          className="chip"
+          data-active={Math.abs(scale - rate) < 0.01 || undefined}
+          title={rate < 0.26 ? 'Smaller blur' : rate > 0.4 ? 'Larger blur' : 'Default blur'}
+          onClick={() => dispatch({ type: 'setTransform', clipId: clip.id, transform: { scale: rate } })}
+        >
+          {rate < 0.26 ? 'Small' : rate > 0.4 ? 'Large' : 'Med'}
+        </button>
+      ))}
+    </span>
+  )
+}
+
+function lookSwatch(value: string, fallback: string): string {
+  const raw = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw
+  if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+    return `#${raw
+      .slice(1)
+      .split('')
+      .map((part) => part + part)
+      .join('')}`
+  }
+  return fallback
+}
+
+function TitleLookButtons({ onToast }: { onToast?: (msg: string) => void }) {
+  const project = useEditor((s) => s.project)
+  const selectedClipId = useEditor((s) => s.selectedClipId)
+  const programTime = usePlayback((s) => s.programTime)
+  const dispatch = useEditor((s) => s.dispatch)
+  const clip = styleSourceClip(project, selectedClipId, programTime)
+  if (!clip) return null
+  const onCard = programTime >= clip.start && programTime < clip.start + clip.duration
+  if (!onCard && selectedClipId !== clip.id) return null
+  const fill = clip.style?.fill ?? captionDefaults().fill
+  const stroke = clip.style?.stroke ?? captionDefaults().stroke
+  const canApply = canApplyCaptionStyleAll(project, clip.id, programTime)
+  return (
+    <span className="rate-chips" data-title-look>
+      <label className="look-swatch" title="Fill on this card">
+        <input
+          type="color"
+          aria-label="Fill"
+          value={lookSwatch(fill, captionDefaults().fill)}
+          onChange={(event) =>
+            dispatch({ type: 'setCaptionStyle', clipId: clip.id, style: { fill: event.target.value } })
+          }
+        />
+        Fill
+      </label>
+      <label className="look-swatch" title="Stroke on this card">
+        <input
+          type="color"
+          aria-label="Stroke"
+          value={lookSwatch(stroke, captionDefaults().stroke)}
+          onChange={(event) =>
+            dispatch({ type: 'setCaptionStyle', clipId: clip.id, style: { stroke: event.target.value } })
+          }
+        />
+        Stroke
+      </label>
+      {canApply ? (
+        <button
+          type="button"
+          className="chip"
+          title="Copy this card’s fill, stroke, and size onto every title. The next card plays."
+          onClick={() => onToast?.(applyCaptionStyleToAllFromContext().toast)}
+        >
+          Apply style
+        </button>
+      ) : null}
+    </span>
+  )
+}
+
+function ZoomScaleButtons() {
+  const selectedClipId = useEditor((s) => s.selectedClipId)
+  const project = useEditor((s) => s.project)
+  const dispatch = useEditor((s) => s.dispatch)
+  const clip = project.tracks.flatMap((track) => track.clips).find((row) => row.id === selectedClipId)
+  if (!clip || !isZoomClip(clip)) return null
+  const scale = clip.transform.scale
+  return (
+    <span className="rate-chips" data-zoom-scale>
+      {ZOOM_SCALES.map((rate) => (
+        <button
+          key={rate}
+          className="chip"
+          data-active={Math.abs(scale - rate) < 0.01 || undefined}
+          title={`Punch in at ${rate}×`}
+          onClick={() => dispatch({ type: 'setTransform', clipId: clip.id, transform: { scale: rate } })}
+        >
+          {rate}×
+        </button>
+      ))}
+    </span>
+  )
+}
+
 function RateButtons() {
   const reviewRate = usePlayback((s) => s.reviewRate)
   const setReviewRate = usePlayback((s) => s.setReviewRate)
   return (
-    <span className="marks">
+    <span className="rate-chips">
       {REVIEW_RATES.map((rate) => (
         <button
           key={rate}
@@ -396,7 +657,7 @@ function RateButtons() {
   )
 }
 
-function FullScreenButton() {
+function FullScreenButton({ inMenu = false }: { inMenu?: boolean }) {
   const [full, setFull] = useState(false)
   useEffect(() => {
     const panel = document.querySelector('.monitor')
@@ -418,7 +679,7 @@ function FullScreenButton() {
   }, [full])
   return (
     <button
-      className="chip"
+      className={inMenu ? 'overflow-item' : 'chip'}
       data-active={full}
       title="Fill the window with the program (F)"
       onClick={() => setFull((on) => !on)}
@@ -439,6 +700,110 @@ function LoopButton() {
     >
       {loop ? 'Loop on' : 'Loop'}
     </button>
+  )
+}
+
+function PictureTextLayer({
+  layer,
+  className,
+  opacity,
+  editing,
+  style,
+  onToast,
+  onClose,
+  onAdvance,
+  onStart
+}: {
+  layer: GraphLayer
+  className: string
+  opacity: number
+  editing: boolean
+  style: CSSProperties
+  onToast?: (msg: string) => void
+  onClose: (mode?: 'keep') => void
+  onAdvance?: (clipId: string) => void
+  onStart: () => void
+}) {
+  const cancelRef = useRef(false)
+  const placeholder = pictureTextPlaceholder({
+    text: layer.text,
+    style: { position: layer.position, fontSize: layer.fontSize }
+  })
+
+  function finish(draft: string) {
+    if (layer.id && !cancelRef.current) {
+      const result = commitPictureText(layer.id, draft)
+      if (result.toast) onToast?.(result.toast)
+      cancelRef.current = false
+      if (result.nextClipId) {
+        onAdvance?.(result.nextClipId)
+        return
+      }
+      onClose('keep')
+      return
+    }
+    cancelRef.current = false
+    onClose()
+  }
+
+  return (
+    <div
+      className={className}
+      data-clip-id={layer.id}
+      data-pos={layer.position ?? (className === 'caption-burn' ? 'lower' : undefined)}
+      data-align={layer.align ?? (className === 'caption-burn' ? 'center' : undefined)}
+      data-editing={editing || undefined}
+      style={{ ...style, opacity }}
+      title={
+        layer.id
+          ? className === 'overlay-card'
+            ? 'Click to type · right-click for Type…'
+            : 'Double-click to type · right-click for Type…'
+          : undefined
+      }
+      onClick={(event) => {
+        if (className !== 'overlay-card' || !layer.id || editing) return
+        event.preventDefault()
+        event.stopPropagation()
+        onStart()
+      }}
+      onDoubleClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (layer.id) onStart()
+      }}
+    >
+      {editing && layer.id ? (
+        <input
+          className="picture-text-edit"
+          data-clip-id={layer.id}
+          autoFocus
+          defaultValue={pictureTextDraft(layer.text)}
+          placeholder={placeholder}
+          aria-label={placeholder}
+          onMouseDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onFocus={(event) => event.currentTarget.select()}
+          onBlur={(event) => finish(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              cancelRef.current = true
+              onClose()
+            }
+          }}
+        />
+      ) : (
+        layer.text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+          part.startsWith('**') && part.endsWith('**') ? (
+            <strong key={i}>{part.slice(2, -2)}</strong>
+          ) : (
+            <span key={i}>{part}</span>
+          )
+        )
+      )}
+    </div>
   )
 }
 

@@ -9,11 +9,17 @@ import {
   looksSafeSpans,
   safeEditCandidates,
   startLeftoverReview,
+  startBreathReview,
   startRetakeReview,
   findRetakesAndReview,
-  describeRetakeReview
+  describeRetakeReview,
+  describeBreathReview,
+  describeTakeDecision,
+  openReviewFromContext,
+  takeDoneNext
 } from './firstEdit'
-import { suggestionsFromLoudness, suggestionsFromStatic } from './analysis'
+import { commandForScene } from './sceneAnalysis'
+import { leftoverHearQueue, suggestionsFromLoudness, suggestionsFromStatic } from './analysis'
 import { ffmpegImportBusy } from './mediaJobs'
 import { hasUncollapsedRetakes, retakeSceneDropped } from './sceneAnalysis'
 import { importMediaFromPath } from './fileActions'
@@ -828,7 +834,7 @@ describe('safe first edit', () => {
     expect(useEditor.getState().selectedSuggestionId).toBe(screen.id)
   })
 
-  test('dismissLeftoverBreaths also clears talking-over-static and pace notes', () => {
+  test('dismissLeftoverBreaths keeps leftover breaths and clears talking-over-static and pace notes', () => {
     const [talking] = suggestionsFromStatic(
       [{ start: 2, end: 6 }],
       [{ id: 'w1', text: 'hello', start: 2.2, end: 2.6, speaker: 'S1', deleted: false }]
@@ -873,12 +879,23 @@ describe('safe first edit', () => {
       },
       { clean: true }
     )
-    expect(dismissLeftoverBreaths()).toBe(3)
+    expect(dismissLeftoverBreaths()).toBe(2)
     const left = useEditor.getState().project.suggestions.map((s) => s.id)
     expect(left).toContain('hot-1')
-    expect(left).not.toContain('b1')
+    expect(left).toContain('b1')
     expect(left).not.toContain('p1')
     expect(left).not.toContain(talking.id)
+  })
+
+  test('startBreathReview hears the leftover demo breath', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    const found = startBreathReview()
+    expect(found && found.id).toBe('sug_breath')
+    expect(useEditor.getState().reviewing).toBe(true)
+    expect(useEditor.getState().selectedSuggestionId).toBe('sug_breath')
+    expect(usePlayback.getState().playing).toBe(true)
+    expect(describeBreathReview(1)).toMatch(/1 breath stayed/)
+    expect(describeBreathReview(2)).toMatch(/2 breaths stayed/)
   })
 
   test('startRetakeReview hears the first live retake', () => {
@@ -908,6 +925,42 @@ describe('safe first edit', () => {
     expect(toast).toMatch(/Found \d+ retake|Dropped \d+ false take/)
     expect(useEditor.getState().reviewing).toBe(true)
     expect(useEditor.getState().project.scenes.some((s) => s.kind === 'retake')).toBe(true)
+  })
+
+  test('openReviewFromContext after leftovers hears the take and names the pick', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    for (const row of leftoverHearQueue(useEditor.getState().project)) {
+      useEditor.getState().dispatch({ type: 'resolveSuggestion', suggestionId: row.id, resolution: 'cut' })
+    }
+    const { toast, job } = openReviewFromContext()
+    expect(job).toBe('retake')
+    expect(toast).toMatch(/Use later take|Put back/)
+    expect(useEditor.getState().reviewing).toBe(true)
+    expect(useEditor.getState().selectedSceneId).toBe('sc_false')
+    expect(usePlayback.getState().playing).toBe(true)
+    expect(usePlayback.getState().loopFrom).not.toBeNull()
+  })
+
+  test('describeTakeDecision names the next job after the last take', () => {
+    const demo = createDemoProject()
+    expect(describeTakeDecision(demo, undefined)).toMatch(/is next\.$/)
+    expect(describeTakeDecision(demo, demo.scenes.find((scene) => scene.id === 'sc_false'))).toMatch(
+      /Use later take|Put back/
+    )
+  })
+
+  test('last take names Clean, not Review the take you just dropped', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    for (const row of leftoverHearQueue(useEditor.getState().project)) {
+      useEditor.getState().dispatch({ type: 'resolveSuggestion', suggestionId: row.id, resolution: 'cut' })
+    }
+    const scene = useEditor.getState().project.scenes.find((row) => row.id === 'sc_false')
+    expect(scene).toBeTruthy()
+    useEditor.getState().dispatch(commandForScene(useEditor.getState().project, scene!, 'apply'))
+    const toast = describeTakeDecision(useEditor.getState().project, undefined)
+    expect(toast).toMatch(/Take decided/)
+    expect(toast).not.toMatch(/Review/)
+    expect(takeDoneNext(useEditor.getState().project)).toMatch(/Apply \d+ safe is next|Cut \d+ fillers is next|Watch/)
   })
 
   test('findRetakesAndReview says so when the transcript has no retakes', () => {

@@ -71,6 +71,10 @@ describe('zoom placement', () => {
     const { placement, toast } = applyZoomFromContext()
     expect(placement.basis).toBe('scene')
     expect(toast).toMatch(/chapter/)
+    expect(toast).toMatch(/on the picture/)
+    expect(toast).not.toMatch(/Transform/)
+    expect(usePlayback.getState().playing).toBe(true)
+    expect(usePlayback.getState().loopFrom).not.toBeNull()
     const project = useEditor.getState().project
     const zoom = project.tracks.flatMap((track) => track.clips).find((clip) => clip.text === 'ZOOM' && clip.start > 20)
     expect(zoom?.transform.scale).toBe(DEFAULT_ZOOM_SCALE)

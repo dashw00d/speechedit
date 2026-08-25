@@ -207,6 +207,16 @@ describe('review-not-blind detectors', () => {
     expect(hit.action).toBe('review')
   })
 
+  test('a leftover breath is found on the gap between takes', () => {
+    const demo = createDemoProject()
+    const leftover = leftoverForSpan(demo, 31.7, 32.1)
+    expect(leftover?.id).toBe('sug_breath')
+    const review = reviewGap(demo, 31.7, 32.1)
+    expect(review.kind).toBe('breath')
+    expect(review.chip).toMatch(/breath/)
+    expect(review.title).toMatch(/hear/i)
+  })
+
   test('a leftover click-through is found on the tiny gap before the next word', () => {
     const demo = createDemoProject()
     const leftover = leftoverForSpan(demo, 22.4, 22.72)

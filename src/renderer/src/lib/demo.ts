@@ -274,6 +274,16 @@ export function createDemoProject(): Project {
         safe: false,
         applied: false
       },
+      {
+        id: 'sug_breath',
+        type: 'silence',
+        start: 31.82,
+        end: 31.98,
+        action: 'cut',
+        label: 'Breath 0.4s · 120ms pad',
+        safe: false,
+        applied: false
+      },
       ...detectRepeats(words)
     ],
     tracks: project.tracks.map((track) => {

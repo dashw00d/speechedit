@@ -19,7 +19,8 @@ describe('scene headings', () => {
     expect(sceneKindLabel(demo, takeFamily(project.scenes, demo.id))).toBe('Silent demo')
     expect(sceneKindLabel(retake, takeFamily(project.scenes, retake.id))).toBe('Take 1 of 2')
     expect(sceneClockLabel(demo)).toBe('6.5s')
-    expect(SCENE_CHIP_ACTION_IDS.has('zoom')).toBe(true)
+    expect(SCENE_CHIP_ACTION_IDS.has('use-final')).toBe(true)
+    expect(SCENE_CHIP_ACTION_IDS.has('zoom')).toBe(false)
   })
 
   test('silent demo scene still anchors in the script before the next spoken word', () => {

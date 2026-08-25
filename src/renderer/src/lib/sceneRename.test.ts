@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { applyCommand } from './commands'
 import { projectToChapters } from './captions'
 import { createDemoProject } from './demo'
-import { startSceneRename, toastForSceneRename } from './sceneRename'
+import { nextTalkChapter, startSceneRename, toastForSceneRename } from './sceneRename'
 import { useEditor } from '../store'
 
 describe('chapter rename', () => {
@@ -10,6 +10,17 @@ describe('chapter rename', () => {
     expect(toastForSceneRename('Thesis', 'Cut speech like text')).toMatch(/YouTube timestamps/)
     expect(toastForSceneRename('Thesis', 'Thesis')).toBeNull()
     expect(toastForSceneRename('Thesis', '  ')).toBeNull()
+  })
+
+  test('Enter on a heading names the next chapter even if the title stayed', () => {
+    const demo = createDemoProject()
+    const next = nextTalkChapter(demo, 'sc_intro')
+    expect(next?.title).toBe('Walk the editor')
+    expect(toastForSceneRename('Thesis', 'Thesis', next?.title)).toBe('“Walk the editor” is next — type it.')
+    expect(toastForSceneRename('Thesis', 'The pitch', next?.title)).toBe(
+      'Chapter renamed. “Walk the editor” is next — type it.'
+    )
+    expect(nextTalkChapter(demo, 'sc_end')).toBeUndefined()
   })
 
   test('renaming a heading updates the YouTube chapter list', () => {

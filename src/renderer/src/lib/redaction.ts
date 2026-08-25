@@ -3,6 +3,12 @@ import { useEditor, usePlayback } from '../store'
 import { zoomPlacement, type ZoomBasis } from './zoom'
 
 export const FALLBACK_REDACT_DURATION = 4
+export const REDACT_LABEL = 'REDACT'
+export const REDACT_SCALES = [0.2, 0.32, 0.5] as const
+
+export function isRedactionClip(clip: { text?: string; effect?: string; assetId?: string } | undefined): boolean {
+  return Boolean(clip && !clip.assetId && (clip.effect === 'blur' || clip.text === REDACT_LABEL))
+}
 
 export type RedactionPlacement = {
   start: number
@@ -46,5 +52,6 @@ export function applyRedactionFromContext(): { toast: string; placement: Redacti
     editor.selectedSceneId
   )
   editor.dispatch(redactionCommand(placement))
+  usePlayback.getState().playLoop(placement.start, placement.start + placement.duration)
   return { toast: describeRedaction(placement), placement }
 }

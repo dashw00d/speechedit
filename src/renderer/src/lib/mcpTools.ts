@@ -59,6 +59,7 @@ export const COMMAND_BUS: Command['type'][] = [
   'setSpeaker',
   'addSpeaker',
   'renameSpeaker',
+  'removeSpeaker',
   'renameScene'
 ]
 
@@ -275,7 +276,7 @@ export const MCP_TOOLS: ToolSpec[] = [
   },
   {
     name: 'add_tag',
-    description: 'Protect a source range (keep / silent demo / note). Auto Edit skips it. Keep and demo also put back overlapping auto-edits.',
+    description: 'Protect a source range (keep / silent demo / note). Hook and CTA become typed notes. Auto Edit skips keep and demo. Notes are comments.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -353,6 +354,15 @@ export const MCP_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: { speakerId: { type: 'string' }, name: { type: 'string' } },
       required: ['speakerId', 'name']
+    }
+  },
+  {
+    name: 'remove_speaker',
+    description: 'Remove a speaker. Words they owned move to the first remaining speaker.',
+    inputSchema: {
+      type: 'object',
+      properties: { speakerId: { type: 'string' } },
+      required: ['speakerId']
     }
   },
   {
@@ -656,7 +666,7 @@ export async function runTool(
       return apply({ type: 'restoreRange', start: span.start, end: span.end }, `Restored “${args.phrase}”.`)
     }
     case 'cut_sentence':
-      return apply({ type: 'cutSentence', wordId: String(args.wordId) }, 'Cut sentence.')
+      return apply({ type: 'cutSentence', wordId: String(args.wordId) }, 'Cut this sentence — saved the time. Hear the join.')
     case 'cut_previous_sentence':
       return apply({ type: 'cutPreviousSentence', wordId: String(args.wordId) }, 'Cut previous sentence.')
     case 'tighten':
@@ -686,17 +696,28 @@ export async function runTool(
       )
     case 'revert_at':
       return apply({ type: 'revertAt', start: num(args.start), end: num(args.end) }, 'Reverted span.')
-    case 'add_tag':
+    case 'add_tag': {
+      const asked = String(args.kind)
+      const kind: TagKind = asked === 'hook' || asked === 'cta' ? 'note' : (asked as TagKind)
+      const label =
+        args.label != null
+          ? String(args.label)
+          : asked === 'hook'
+            ? 'hook'
+            : asked === 'cta'
+              ? 'ask'
+              : undefined
       return apply(
         {
           type: 'addTag',
           start: num(args.start),
           end: num(args.end),
-          kind: String(args.kind) as TagKind,
-          label: args.label ? String(args.label) : undefined
+          kind,
+          label
         },
-        `Tagged ${args.kind}.`
+        kind === 'note' ? 'Note on the tape. Type what it is for.' : `Tagged ${kind}.`
       )
+    }
     case 'erase_tag':
       return apply(
         {
@@ -743,6 +764,8 @@ export async function runTool(
         { type: 'renameSpeaker', speakerId: String(args.speakerId), name: String(args.name ?? '') },
         'Renamed speaker.'
       )
+    case 'remove_speaker':
+      return apply({ type: 'removeSpeaker', speakerId: String(args.speakerId) }, 'Removed speaker.')
     case 'rename_scene':
       return apply(
         {
@@ -781,7 +804,7 @@ export async function runTool(
         'Generated captions.'
       )
     case 'add_lower_thirds':
-      return apply({ type: 'addLowerThirds' }, 'Chapter names on the tape. Edit any one, then Apply style to all titles.')
+      return apply({ type: 'addLowerThirds' }, 'Type this name — Enter keeps it and opens the next. Fill is on the tape.')
     case 'add_title':
       return apply(
         {

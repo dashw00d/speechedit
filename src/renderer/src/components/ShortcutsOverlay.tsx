@@ -15,6 +15,8 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
     title: 'Cut',
     rows: [
       { keys: 'Delete', does: 'Cut the selection. Ripple off leaves a hold.' },
+      { keys: '.', does: 'Cut this sentence and hear the join.' },
+      { keys: ',', does: 'Cut the previous sentence. On a restart, that is Cut previous.' },
       { keys: 'Gap', does: 'Insert a 1s hold at the playhead' },
       { keys: 'Q / W', does: 'Trim the start / end up to the playhead' },
       { keys: 'S', does: 'Split at the playhead' },
@@ -29,7 +31,7 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
       { keys: '⌘C / ⌘V', does: 'Copy quote (words) or clip · paste at the playhead' },
       { keys: '⌘⇧C / ⌘⇧V', does: 'Copy look · paste look onto the selection' },
       { keys: 'E', does: 'Extend the clip to the playhead' },
-      { keys: 'N / ⇧N', does: 'Next / previous note' },
+      { keys: 'N / ⇧N', does: 'Next / previous note. Toast names Mark clip or the next mark.' },
       { keys: 'Alt-drag', does: 'Slip media inside the clip' },
       { keys: 'Shift-drag', does: 'Slide the clip. Shift-drag a handle to roll.' }
     ]
@@ -38,11 +40,11 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
     title: 'Words',
     rows: [
       { keys: ', / .', does: 'Cut the previous sentence / this sentence' },
-      { keys: 'A', does: 'Select the paragraph, then Delete removes it' },
+      { keys: 'A', does: 'Select the paragraph, then Remove paragraph hears the join' },
       { keys: '⌘F', does: 'Find in the transcript' },
       { keys: 'Enter', does: 'Next match · Shift+Enter previous' },
       { keys: '[ / ]', does: 'Fewer / more words, or previous / next chapter' },
-      { keys: 'F2', does: 'Rename the selected chapter or speaker' },
+      { keys: 'F2', does: 'Rename the selected chapter or speaker. Enter opens the next.' },
       { keys: 'Follow', does: 'Keep the current word in view. Scroll to pause it.' }
     ]
   },

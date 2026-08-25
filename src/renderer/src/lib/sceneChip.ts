@@ -1,14 +1,11 @@
 import type { EditorialScene } from '../types'
 
-/** Action ids that belong on the scene heading, not only in the inspector. */
+/** Take picks stay on the heading. Shape tools wait on right-click. */
 export const SCENE_CHIP_ACTION_IDS = new Set([
   'use-final',
   'keep-take',
   'keep-all',
-  'cut-scene',
-  'restore-scene',
-  'zoom',
-  'redact'
+  'restore-scene'
 ])
 
 export function sceneKindLabel(scene: EditorialScene, family: EditorialScene[]): string {

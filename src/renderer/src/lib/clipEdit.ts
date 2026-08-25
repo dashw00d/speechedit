@@ -145,10 +145,22 @@ export function extendedClip(clip: Clip, time: number, assetDuration?: number): 
   return null
 }
 
+export function isTapeNote(kind: string | undefined): boolean {
+  return kind === 'note' || kind === 'hook' || kind === 'cta'
+}
+
+export function noteDraft(label: string | undefined): string {
+  if (!label || /^(Note|Hook|CTA)$/i.test(label.trim())) return ''
+  return label
+}
+
 export function notesSorted(project: Project): RangeTag[] {
-  return (project.tags ?? [])
-    .filter((tag) => tag.kind === 'note' || tag.kind === 'hook' || tag.kind === 'cta')
-    .sort((a, b) => a.start - b.start)
+  return (project.tags ?? []).filter((tag) => isTapeNote(tag.kind)).sort((a, b) => a.start - b.start)
+}
+
+export function coveringNote(project: Project, start: number, end: number): RangeTag | undefined {
+  const mid = (start + end) / 2
+  return notesSorted(project).find((note) => mid >= note.start - 0.05 && mid <= note.end + 0.05)
 }
 
 export function hopNote(project: Project, sourceTime: number, dir: 1 | -1): RangeTag | undefined {

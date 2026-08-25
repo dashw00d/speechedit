@@ -23,6 +23,14 @@ export function sentenceRange(words: Word[], wordId: string): Interval | null {
   return wordRange(words, sentenceIds(words, index))
 }
 
+/** Sentence around the caret that still has live words. */
+export function liveSentenceRange(words: Word[], wordId: string): Interval | null {
+  const span = sentenceRange(words, wordId)
+  if (!span) return null
+  const live = words.some((word) => !word.deleted && word.end > span.start && word.start < span.end)
+  return live ? span : null
+}
+
 export function previousSentenceRange(words: Word[], wordId: string): Interval | null {
   const index = words.findIndex((w) => w.id === wordId)
   if (index < 0) return null

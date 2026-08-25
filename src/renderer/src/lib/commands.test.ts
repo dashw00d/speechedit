@@ -395,6 +395,22 @@ describe('production edit tools', () => {
     expect(pieces[1].start).toBeCloseTo(4, 1)
   })
 
+  test('a note can be rewritten after you drop it', () => {
+    const tagged = applyCommand(createDemoProject(), {
+      type: 'addTag',
+      start: 1,
+      end: 2,
+      kind: 'note',
+      label: 'Note'
+    })
+    const note = tagged.tags.find((tag) => tag.kind === 'note')
+    expect(note?.label).toBe('Note')
+    const named = applyCommand(tagged, { type: 'setTagLabel', tagId: note!.id, label: '  check the price  ' })
+    expect(named.tags.find((tag) => tag.id === note!.id)?.label).toBe('check the price')
+    const cleared = applyCommand(named, { type: 'setTagLabel', tagId: note!.id, label: '   ' })
+    expect(cleared.tags.find((tag) => tag.id === note!.id)?.label).toBe('Note')
+  })
+
   test('keep/demo tags punch holes in auto-edit and can be reverted one-by-one', () => {
     const demo = createDemoProject()
     const tagged = applyCommand(demo, {

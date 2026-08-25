@@ -5,6 +5,12 @@ import { useEditor, usePlayback } from '../store'
 
 export const DEFAULT_ZOOM_SCALE = 1.45
 export const FALLBACK_ZOOM_DURATION = 3
+export const ZOOM_SCALES = [1.2, 1.45, 2] as const
+export const ZOOM_LABEL = 'ZOOM'
+
+export function isZoomClip(clip: { text?: string; assetId?: string } | undefined): boolean {
+  return Boolean(clip && clip.text === ZOOM_LABEL && !clip.assetId)
+}
 
 export type ZoomBasis = 'words' | 'scene' | 'playhead'
 
@@ -86,13 +92,14 @@ export function zoomCommand(placement: ZoomPlacement): Command {
 }
 
 export function describeZoom(placement: ZoomPlacement): string {
+  const scale = '1.2×, 1.45×, or 2× on the picture.'
   if (placement.basis === 'words') {
-    return `Zoom on these words — ${placement.duration.toFixed(1)} seconds. Scale is in Transform.`
+    return `Zoom on these words — ${placement.duration.toFixed(1)} seconds. ${scale}`
   }
   if (placement.basis === 'scene') {
-    return `Zoom on this chapter — ${placement.duration.toFixed(1)} seconds. Scale is in Transform.`
+    return `Zoom on this chapter — ${placement.duration.toFixed(1)} seconds. ${scale}`
   }
-  return 'Zoom on the picture — 3 seconds from here. Scale is in Transform.'
+  return `Zoom on the picture — 3 seconds from here. ${scale}`
 }
 
 export function applyZoomFromContext(): { toast: string; placement: ZoomPlacement } {
@@ -104,5 +111,6 @@ export function applyZoomFromContext(): { toast: string; placement: ZoomPlacemen
     editor.selectedSceneId
   )
   editor.dispatch(zoomCommand(placement))
+  usePlayback.getState().playLoop(placement.start, placement.start + placement.duration)
   return { toast: describeZoom(placement), placement }
 }

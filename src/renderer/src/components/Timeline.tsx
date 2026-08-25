@@ -1,15 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { isPrimaryLane, primarySegments, programLength } from '../lib/commands'
-import { currentWord, wordsInRange } from '../lib/edl'
+import { wordsInRange } from '../lib/edl'
 import { programToSourceOf, snapSourceTime, snapTime, sourceToProgramOf } from '../lib/resolver'
 import { stitchPrimaryThumbs, stitchPrimaryWaveform } from '../lib/takes'
 import { buildEditBlocks, editBlockCounts, filterEditBlocks, type EditBlock, type EditBlockFilter } from '../lib/timelineEdits'
-import { hopNote } from '../lib/clipEdit'
+import { coveringNote, hopNote, isTapeNote } from '../lib/clipEdit'
+import { addNoteFromContext, startNoteEdit } from '../lib/noteEdit'
 import { clearMarksFromContext } from '../lib/marks'
-import { findRevealableStackTrack, trackLaneName } from '../lib/timelineTracks'
+import { findRevealableStackTrack, hiddenLaneTracks, trackLaneName } from '../lib/timelineTracks'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { Asset, Clip, TagKind, Track, Word } from '../types'
+import { IconHide, IconLock, IconMute, IconSelectAll, IconSolo } from './Icons'
 
 const PPS_MIN = 18
 const PPS_MAX = 280
@@ -60,6 +62,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   const showEditFilters = editBlocks.length > 0
   const showEditSummary = editBlocks.length > 10
   const visibleTracks = useMemo(() => project.tracks.filter((track) => !track.hidden), [project.tracks])
+  const hiddenLanes = useMemo(() => hiddenLaneTracks(project.tracks), [project.tracks])
 
   const ticks = useMemo(() => {
     const step = pps > 100 ? 1 : pps > 50 ? 2 : pps > 24 ? 5 : 10
@@ -145,7 +148,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
 
   function startPaint(clientX: number, opts: { erase: boolean; shift: boolean }) {
     const t0 = timeAt(clientX)
-    const kind: TagKind = opts.shift ? 'demo' : guardKind
+    const kind: TagKind = opts.shift ? 'demo' : guardKind === 'hook' || guardKind === 'cta' ? 'note' : guardKind
     setStroke({ start: t0, end: t0, erase: opts.erase, kind })
     const move = (ev: MouseEvent) => {
       setStroke((s) => (s ? { ...s, end: timeAt(ev.clientX) } : s))
@@ -159,7 +162,14 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
       const start = programToSourceOf(project, a)
       const end = programToSourceOf(project, b)
       if (opts.erase) dispatch({ type: 'eraseTag', start, end, kind })
-      else dispatch({ type: 'addTag', start, end, kind })
+      else {
+        dispatch({ type: 'addTag', start, end, kind })
+        if (kind === 'note') {
+          const note = coveringNote(useEditor.getState().project, start, end)
+          if (note) startNoteEdit(note.id)
+          onToast?.('Type the note — hook, ask, or why you parked.')
+        }
+      }
       setStroke(null)
     }
     window.addEventListener('mousemove', move)
@@ -276,22 +286,12 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           <button
             className="timeline-btn"
             type="button"
-            title="Drop a note at the playhead. Auto Edit ignores notes."
-            onClick={() => {
-              const source = programToSourceOf(project, programTime)
-              const word = currentWord(project.transcript.words, source)
-              dispatch({
-                type: 'addTag',
-                start: word?.start ?? source,
-                end: word?.end ?? source + 1,
-                kind: 'note',
-                label: 'Note'
-              })
-            }}
+            title="Drop a note at the playhead. Type hook, ask, or why you parked."
+            onClick={() => onToast?.(addNoteFromContext().toast)}
           >
             Note
           </button>
-          {project.tags.some((tag) => tag.kind === 'note') && (
+          {project.tags.some((tag) => isTapeNote(tag.kind)) && (
             <>
               <button
                 className="timeline-btn"
@@ -355,24 +355,6 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
               >
                 Note
               </button>
-              <button
-                className="timeline-btn"
-                type="button"
-                data-active={guardKind === 'hook'}
-                title="Mark the opening hook."
-                onClick={() => setGuardKind('hook')}
-              >
-                Hook
-              </button>
-              <button
-                className="timeline-btn"
-                type="button"
-                data-active={guardKind === 'cta'}
-                title="Mark the call to action."
-                onClick={() => setGuardKind('cta')}
-              >
-                CTA
-              </button>
             </>
           )}
         </div>
@@ -424,7 +406,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           <button
             className="timeline-btn"
             type="button"
-            title="Show or add a graphics / title lane above the picture"
+            title="Show a hidden overlay lane, or add one"
             onClick={() => revealOrAddTrack('overlay')}
           >
             + Overlay
@@ -440,11 +422,22 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           <button
             className="timeline-btn"
             type="button"
-            title="Show or add a captions lane"
+            title="Show a hidden captions lane, or add one"
             onClick={() => revealOrAddTrack('caption')}
           >
             + Captions
           </button>
+          {hiddenLanes.map((track) => (
+            <button
+              key={track.id}
+              className="timeline-btn"
+              type="button"
+              title={`Show ${trackLaneName(track)} on the timeline`}
+              onClick={() => dispatch({ type: 'setTrackFlag', trackId: track.id, patch: { hidden: false } })}
+            >
+              Show {trackLaneName(track)}
+            </button>
+          ))}
           {io && (
             <>
               <button
@@ -716,7 +709,7 @@ function TrackLabel({
           aria-label="Select all clips on track"
           onClick={onSelectAll}
         >
-          All
+          <IconSelectAll />
         </button>
         <button
           className="track-flag"
@@ -726,7 +719,7 @@ function TrackLabel({
           aria-label={track.solo ? 'Unsolo track' : 'Solo track'}
           onClick={() => onFlag({ solo: !track.solo })}
         >
-          Solo
+          <IconSolo />
         </button>
         <button
           className="track-flag"
@@ -736,7 +729,7 @@ function TrackLabel({
           aria-label={track.muted ? 'Unmute track' : 'Mute track'}
           onClick={() => onFlag({ muted: !track.muted })}
         >
-          Mute
+          <IconMute />
         </button>
         <button
           className="track-flag"
@@ -746,7 +739,7 @@ function TrackLabel({
           aria-label={track.hidden ? 'Show track' : 'Hide track'}
           onClick={() => onFlag({ hidden: !track.hidden })}
         >
-          Hide
+          <IconHide />
         </button>
         <button
           className="track-flag"
@@ -756,7 +749,7 @@ function TrackLabel({
           aria-label={track.locked ? 'Unlock track' : 'Lock track'}
           onClick={() => onFlag({ locked: !track.locked })}
         >
-          Lock
+          <IconLock />
         </button>
         {canRemove && (
           <button className="track-flag track-remove" type="button" title="Remove empty track" onClick={onRemove}>

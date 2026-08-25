@@ -10,11 +10,22 @@ import {
 import { programLength, primarySegments } from './commands'
 import { takeFamily } from './sceneAnalysis'
 import { programToSourceOf, sourceToProgramOf } from './resolver'
-import { paragraphIds, sentenceIds } from './transcriptEdit'
+import { sentenceIds } from './transcriptEdit'
+import { cutParagraphFromContext, selectParagraphFromContext } from './scriptActions'
+import { cutPreviousFromContext } from './cutPrevious'
+import { cutThisFromContext } from './cutSentence'
 import { ffmpegImportBusy } from './mediaJobs'
 import { copySelectedClip, pasteClipboard } from './clipClipboard'
 import { copyQuoteFromContext } from './quote'
 import { useEditor, usePlayback } from '../store'
+import { removeSpeakerFromContext, speakerContextActions, startSpeakerRename } from './speakerRename'
+import { noteContextActions, removeNoteFromContext, startNoteEdit } from './noteEdit'
+import { chapterMergeTarget, mergeChapterFromContext, splitChapterFromContext } from './chapterShape'
+import { markClipFromContext } from './marks'
+import { startSceneRename } from './sceneRename'
+import { startPictureTextEdit } from './pictureText'
+import { protectRange } from './protect'
+import { tagAt } from './transcriptEdit'
 import type { EditBlock } from './timelineEdits'
 
 export interface ContextMenuItem {
@@ -39,7 +50,21 @@ function fromCommands(
     id: c.id,
     label: c.label,
     hint: c.consequence,
-    run: () => useEditor.getState().dispatch(c.command)
+    run: () => {
+      if (c.id === 'cut-prev') {
+        toast(cutPreviousFromContext().toast)
+        return
+      }
+      if (c.id === 'cut-sentence') {
+        toast(cutThisFromContext().toast)
+        return
+      }
+      if (c.id === 'cut-paragraph') {
+        toast(cutParagraphFromContext().toast)
+        return
+      }
+      useEditor.getState().dispatch(c.command)
+    }
   }))
 }
 
@@ -101,9 +126,10 @@ function wordMenu(wordId: string): ContextMenuSpec {
   items.push({
     id: 'select-paragraph',
     label: 'Select paragraph',
+    shortcut: 'A',
     run: () => {
-      const idx = project.transcript.words.findIndex((w) => w.id === wordId)
-      if (idx >= 0) editor.selectWords(paragraphIds(project.transcript.words, idx))
+      editor.selectWords([wordId])
+      toast(selectParagraphFromContext().toast)
     }
   })
   items.push({ id: 'sep-play', label: '', separator: true })
@@ -132,13 +158,69 @@ function gapMenu(start: number, end: number): ContextMenuSpec {
   return { title: detail.headline, items: fromInspectorActions(detail.actions) }
 }
 
+function toast(message: string) {
+  if (message) window.dispatchEvent(new CustomEvent('speechedit:toast', { detail: message }))
+}
+
 function sceneMenu(sceneId: string): ContextMenuSpec {
   const editor = useEditor.getState()
   const playback = usePlayback.getState()
   editor.selectScene(sceneId)
+  const scene = (editor.project.scenes ?? []).find((row) => row.id === sceneId)
   const detail = sceneInspectorDetail(editor.project, sceneId)
-  if (!detail) return { items: [] }
-  const items = fromInspectorActions(detail.actions.filter((a) => a.command))
+  if (!detail || !scene) return { items: [] }
+  const prev = chapterMergeTarget(editor.project, playback.programTime, editor.selectedWordIds, sceneId, -1)
+  const next = chapterMergeTarget(editor.project, playback.programTime, editor.selectedWordIds, sceneId, 1)
+  const covered = tagAt(editor.project.tags, (scene.start + scene.end) / 2)
+  const items: ContextMenuItem[] = [
+    {
+      id: 'rename',
+      label: 'Rename',
+      hint: 'Change the YouTube chapter title',
+      run: () => {
+        startSceneRename(sceneId)
+      }
+    },
+    {
+      id: 'mark',
+      label: 'Mark clip',
+      hint: 'In–Out around this chapter',
+      run: () => toast(markClipFromContext().toast)
+    },
+    {
+      id: 'split',
+      label: 'Split',
+      hint: 'Split at the playhead or selected words',
+      run: () => toast(splitChapterFromContext(sceneId).toast)
+    }
+  ]
+  if (prev) {
+    items.push({
+      id: 'merge-prev',
+      label: `Merge ${prev.other.title}`,
+      hint: `Join “${prev.other.title}”. The joined chapter plays.`,
+      run: () => toast(mergeChapterFromContext(-1, sceneId).toast)
+    })
+  }
+  if (next) {
+    items.push({
+      id: 'merge-next',
+      label: `Merge ${next.other.title}`,
+      hint: `Join “${next.other.title}”. The joined chapter plays.`,
+      run: () => toast(mergeChapterFromContext(1, sceneId).toast)
+    })
+  }
+  items.push({
+    id: covered ? 'unprotect' : 'protect',
+    label: covered ? 'Unprotect' : 'Protect',
+    hint: covered ? 'Auto Edit can cut here again' : 'Auto Edit will skip this chapter',
+    run: () => {
+      if (covered) editor.dispatch({ type: 'removeTag', tagId: covered.id })
+      else toast(protectRange(scene.start, scene.end, 'keep', scene.title).toast)
+    }
+  })
+  items.push({ id: 'sep-edit', label: '', separator: true })
+  items.push(...fromInspectorActions(detail.actions.filter((a) => a.command)))
   if (detail.actions.some((a) => a.navigate === 'compare-takes')) {
     items.push({
       id: 'compare',
@@ -244,6 +326,14 @@ function clipMenu(clipId: string): ContextMenuSpec {
       run: () => copyText(clip.text ?? '')
     })
   }
+  if (clip.text && !clip.assetId) {
+    items.unshift({
+      id: 'type',
+      label: 'Type…',
+      hint: 'Write it on the picture',
+      run: () => startPictureTextEdit(clip.id)
+    })
+  }
 
   return { title: clip.text || 'Clip', items }
 }
@@ -318,6 +408,51 @@ function trackMenu(trackId: string): ContextMenuSpec {
   }
 
   return { title: track.name, items }
+}
+
+function noteMenu(tagId: string): ContextMenuSpec {
+  const tag = useEditor.getState().project.tags.find((row) => row.id === tagId)
+  if (!tag || tag.kind !== 'note') return { items: [] }
+  return {
+    title: tag.label && tag.label !== 'Note' ? tag.label : 'Note',
+    items: noteContextActions().map((action) => ({
+      ...action,
+      run:
+        action.id === 'type'
+          ? () => {
+              startNoteEdit(tagId)
+            }
+          : () => {
+              const result = removeNoteFromContext(tagId)
+              if (result.toast) {
+                window.dispatchEvent(new CustomEvent('speechedit:toast', { detail: result.toast }))
+              }
+            }
+    }))
+  }
+}
+
+function speakerMenu(speakerId: string): ContextMenuSpec {
+  const editor = useEditor.getState()
+  const speaker = editor.project.transcript.speakers.find((row) => row.id === speakerId)
+  if (!speaker) return { items: [] }
+  return {
+    title: speaker.name,
+    items: speakerContextActions(editor.project.transcript.speakers, speakerId).map((action) => ({
+      ...action,
+      run:
+        action.id === 'rename'
+          ? () => {
+              startSpeakerRename(speakerId)
+            }
+          : () => {
+              const result = removeSpeakerFromContext(speakerId)
+              if (result.toast) {
+                window.dispatchEvent(new CustomEvent('speechedit:toast', { detail: result.toast }))
+              }
+            }
+    }))
+  }
 }
 
 function transcriptPaneMenu(): ContextMenuSpec {
@@ -472,6 +607,15 @@ export function resolveContextMenu(target: EventTarget | null): ContextMenuSpec 
 
   const trackId = target.closest('[data-track-id]')?.getAttribute('data-track-id')
   if (trackId) return trackMenu(trackId)
+
+  const speakerId = target.closest('[data-speaker-id]')?.getAttribute('data-speaker-id')
+  if (speakerId) return speakerMenu(speakerId)
+
+  const noteChip = target.closest(
+    '.guard-chip[data-kind="note"], .guard-chip[data-kind="hook"], .guard-chip[data-kind="cta"], .guard-chip-edit[data-kind="note"]'
+  ) as HTMLElement | null
+  const noteId = noteChip?.getAttribute('data-tag-id')
+  if (noteId) return noteMenu(noteId)
 
   if (target.closest('.transcript, .script, .transcript-toolbar, .transcript-marquee')) return transcriptPaneMenu()
   if (target.closest('.timeline-body, .timeline-toolbar')) return timelinePaneMenu()

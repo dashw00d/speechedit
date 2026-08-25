@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { suggestionsFromLoudness, suggestionsFromSilence, suggestionsFromStatic } from './analysis'
 import { createDemoProject } from './demo'
 import { buildEditBlocks, editBlockCounts, filterEditBlocks } from './timelineEdits'
-import { autoHideEmptyStackTrack, findRevealableStackTrack, trackLaneName } from './timelineTracks'
+import {
+  autoHideEmptyStackTrack,
+  findRevealableStackTrack,
+  hiddenLaneTracks,
+  trackLaneName
+} from './timelineTracks'
 
 describe('timeline edits filters', () => {
   test('filters blocks by kind when the lane is crowded', () => {
@@ -66,6 +71,47 @@ describe('timeline stack tracks', () => {
     })
     expect(emptied.hidden).toBe(true)
     expect(project.tracks.find((t) => t.id === 'v2')?.hidden).toBe(false)
+  })
+
+  test('a hidden overlay with clips comes back before the empty default lane', () => {
+    const hidden = findRevealableStackTrack(
+      [
+        { id: 'v2', type: 'overlay', name: 'V2 Overlay', locked: false, muted: false, hidden: true, clips: [] },
+        {
+          id: 'v4',
+          type: 'overlay',
+          name: 'V4 Cards',
+          locked: false,
+          muted: false,
+          hidden: true,
+          clips: [{ id: 'ov1' } as never]
+        }
+      ],
+      'overlay'
+    )
+    expect(hidden?.id).toBe('v4')
+  })
+
+  test('hidden Picture or Voice lanes are the ones the toolbar must name', () => {
+    const picture = {
+      id: 'v1',
+      type: 'video' as const,
+      name: 'V1 Picture',
+      locked: false,
+      muted: false,
+      hidden: true,
+      clips: []
+    }
+    const overlay = {
+      id: 'v2',
+      type: 'overlay' as const,
+      name: 'V2 Overlay',
+      locked: false,
+      muted: false,
+      hidden: true,
+      clips: []
+    }
+    expect(hiddenLaneTracks([picture, overlay]).map((track) => track.id)).toEqual(['v1'])
   })
 
   test('lane names drop V1/A1 prefixes', () => {

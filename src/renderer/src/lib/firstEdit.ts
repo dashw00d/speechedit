@@ -1,5 +1,5 @@
 import type { EditSuggestion, EditorialScene, Interval, Project } from '../types'
-import { leftoverItems, leftoverKind, leftoverReviewQueue } from './analysis'
+import { leftoverHearQueue, leftoverItems, leftoverKind, leftoverReviewQueue } from './analysis'
 import { captionClipsOf, shouldAutoCaption } from './captions'
 import { overlap } from './edl'
 import { sourceToProgramOf } from './resolver'
@@ -10,6 +10,8 @@ import {
   retakeReviewQueue,
   uncollapsedRetakeCount
 } from './sceneAnalysis'
+import { takeDoneNext } from './leftoverDecide'
+import { reviewDrawerCopy, reviewJob } from './reviewDrawer'
 
 function countLabel(n: number, unit: string): string {
   return `${n} ${unit}${n === 1 ? '' : 's'}`
@@ -197,11 +199,10 @@ export function applyAutoCaptions(session: CaptionAutoSession): boolean {
   return session.captionCount > 0
 }
 
-/** Keep leftover breaths, talking-over-static, and pace notes in the picture. One undo. */
+/** Dismiss talking-over-static and pace notes so Review stays on leftovers you can hear. Breaths stay. */
 export function dismissLeftoverBreaths(): number {
   const project = useEditor.getState().project
   const ids = [
-    ...leftoverItems(project, 'breath'),
     ...leftoverItems(project, 'low-motion'),
     ...project.suggestions.filter(
       (suggestion) => !suggestion.applied && !suggestion.blockedBy && suggestion.type === 'pace'
@@ -222,8 +223,30 @@ export function startLeftoverReview(): 'activity' | 'still' | 'static' | 'loud' 
   const editor = useEditor.getState()
   editor.setReviewing(true)
   editor.selectSuggestion(next.id)
+  usePlayback.getState().playLoop(sourceToProgramOf(editor.project, next.start), sourceToProgramOf(editor.project, next.end))
   const kind = leftoverKind(next)
   return kind === 'activity' || kind === 'still' || kind === 'static' || kind === 'loud' ? kind : false
+}
+
+export function describeBreathReview(count: number): string {
+  if (count <= 0) return 'No leftover breaths in this reel.'
+  return `${count} breath${count === 1 ? '' : 's'} stayed in the reel. Hear this one — Cut if it hisses, Keep if it should stay.`
+}
+
+/** Open review on the first leftover breath and loop it. */
+export function startBreathReview(): EditSuggestion | false {
+  const project = useEditor.getState().project
+  const next = leftoverItems(project, 'breath')[0]
+  if (!next) return false
+  const editor = useEditor.getState()
+  editor.setReviewing(true)
+  editor.selectSuggestion(next.id)
+  usePlayback.getState().playLoop(sourceToProgramOf(project, next.start), sourceToProgramOf(project, next.end))
+  return next
+}
+
+export function nextLeftoverToHear(project: Project): EditSuggestion | undefined {
+  return leftoverHearQueue(project)[0]
 }
 
 export function describeRetakeReview(
@@ -249,6 +272,37 @@ export function startRetakeReview(): EditorialScene | false {
   editor.selectScene(next.id)
   usePlayback.getState().playLoop(sourceToProgramOf(project, next.start), sourceToProgramOf(project, next.end))
   return next
+}
+
+/** Open the review job the bar already named, hear it, and say the next pick. */
+export function openReviewFromContext(): { toast: string; job: ReturnType<typeof reviewJob> } {
+  const project = useEditor.getState().project
+  const job = reviewJob(project)
+  if (job === 'leftover') {
+    const kind = startLeftoverReview()
+    if (kind) {
+      return { toast: `Hearing this leftover. ${reviewDrawerCopy(useEditor.getState().project).detail}`, job }
+    }
+  }
+  if (job === 'retake') {
+    const scene = startRetakeReview()
+    if (!scene) return { toast: 'No retakes in this transcript.', job }
+    return { toast: reviewDrawerCopy(useEditor.getState().project).detail, job }
+  }
+  if (job === 'breath') {
+    startBreathReview()
+    return { toast: describeBreathReview(leftoverItems(useEditor.getState().project, 'breath').length), job }
+  }
+  useEditor.getState().setReviewing(true)
+  return { toast: reviewDrawerCopy(project).detail, job }
+}
+
+export { takeDoneNext }
+
+export function describeTakeDecision(project: Project, next: EditorialScene | undefined): string {
+  if (!next) return `Take decided. ${takeDoneNext(project)}`
+  const n = retakeReviewQueue(project).length
+  return n === 1 ? 'Hear this one, then Use later take or Put back.' : `${n} takes. Hear one, then pick.`
 }
 
 /** Infer scenes, then hear the first take that still needs a decision. */

@@ -54,7 +54,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Hour-scale looks: analyze starts before thumbs so silence is not stuck behind a full-file decode. At most two look ffmpeg at once (proxy / Whisper stay off that lane). Waveform / silence / loudness use `-vn`. Long or HD scene detect is 5 fps / 320px. Recordings ≥90s seek ~20 thumbs and seek ~1800 short peak windows instead of decoding every frame or the whole soundtrack. Silence and loudness share one audio look pass; recordings ≥90s resample that pass to 8 kHz so first-edit does not wait on two native-rate decodes. Analysis cache is v2.
 - Playback and export share one cached resolved program per project snapshot. After first-edit (hundreds of silence cuts) the monitor does not rebuild `normalize` + `resolveSegments` every animation frame; source↔program mapping is log-time so snap and the playhead stay cheap.
 - Program time is the master clock. A decoder walking into a deleted hole no longer stalls the playhead or flashes cut material; the engine hard-seeks to the next keep. Preview proxies use a 15-frame GOP so those seeks can land. A cached proxy with a long GOP (ffmpeg default 250) remakes on import and reopen so those seeks stay possible. Dissolve underlay uses the outgoing take’s file, not the incoming `src`.
-- First edit is staged: safe pauses apply when looks land (export allowed while Whisper runs). Finished ASR chunks stream onto `setTranscript` via `attachTakeIntel` and apply new fillers immediately. Retake collapse waits for the merged cue list. Undo after looks or after streamed fillers is not re-applied when later chunks finish. The first filler batch is one undo; later chunks do not stack history. Real words also build caption clips on V3 (revealed) so the monitor and a burned MP4 match the SRT. Placeholder islands do not. Undo or an edit locks auto refresh. Leftover breaths, talking-over-static, and pace notes are dismissed (kept). Silent stills open Review as Cut / Keep. Quiet static screens follow as Speed / Keep. Hot spikes follow as Quiet / Keep via `setRangeVolume` on the same command bus. Talking-over-static stays Keep-only so speech is not sped.
+- First edit is staged: safe pauses apply when looks land (export allowed while Whisper runs). Finished ASR chunks stream onto `setTranscript` via `attachTakeIntel` and apply new fillers immediately. Retake collapse waits for the merged cue list. Undo after looks or after streamed fillers is not re-applied when later chunks finish. The first filler batch is one undo; later chunks do not stack history. Real words also build caption clips on V3 (revealed) so the monitor and a burned MP4 match the SRT. Placeholder islands do not. Undo or an edit locks auto refresh. Talking-over-static and pace notes are dismissed (kept). Leftover breaths stay in Review and appear on the bar after picture leftovers — Hear, then Cut or Keep. Silent stills open Review as Cut / Keep. Quiet static screens follow as Speed / Keep. Hot spikes follow as Quiet / Keep via `setRangeVolume` on the same command bus. Talking-over-static stays Keep-only so speech is not sped.
 - Export parks lingering Whisper (SIGSTOP / low priority on Windows) instead of aborting it, then resumes. whisper.cpp cannot resume a kill, so a first-cut encode no longer fights ASR or throws away progress.
 - Hour-scale ASR splits recordings ≥180s into overlapping 90s windows and caches each chunk. A cancel, crash, or retry resumes finished windows instead of throwing away the whole transcript. Each saved or newly finished window emits merged-so-far cues on transcribe progress so the reel can show words before the last chunk. Short files stay one pass. The merged cue list is still the v1 ASR cache first-edit already reads.
 - Interchange B-roll / music restore the slipped `inPoint` (OTIO, FCPXML, MLT, Kdenlive, Premiere). `addBroll` / `addAudio` accept `inPoint` on the command bus.
@@ -80,11 +80,11 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
-| Export captions SRT | Export sheet (common); palette | ✅ | **Descript** — export subtitles (functional). **Rev** — SRT deliverable (functional). |
+| Export captions SRT | Suggest bar **Export SRT** after **Caption remaining** fills the tape (next to Export); transcript toolbar; Sequence; Export sheet; palette | ✅ | **Descript** — export subtitles (functional). **Rev** — SRT deliverable (functional). Caption remaining holds that slot until the tape is filled. Then Export SRT copies the SRT and downloads the file. Toast points at uploading it next to the MP4. Same `exportSidecar('srt')`. |
 | Export captions VTT | Export sheet (common); palette | ✅ | **YouTube Studio** — VTT upload path (functional). **Kapwing** — WebVTT export (UI: one click). |
-| Export transcript Markdown | Transcript **Copy notes**; Export sheet **Transcript · Markdown** copies; palette. File download if clipboard is blocked. | ✅ | **Otter** — export MD notes (functional). **Notion** — clean MD export (UI). Speaker headings come from the chips. |
+| Export transcript Markdown | Suggest bar **Copy notes** on the finish row after leftovers; transcript toolbar; Sequence; Export sheet **Transcript · Markdown**; palette. File download if clipboard is blocked. | ✅ | **Otter** — export MD notes (functional). **Notion** — clean MD export (UI). Chapter headings (`###`) then speaker turns (`##`). Typed tape notes land as `>` quotes where you dropped them. Empty “Note” placeholders stay out. Retakes stay out. Toast says to paste. Same `exportSidecar('md')`. |
 | Export transcript plain text | Export sheet (common); palette | ✅ | **Trint** — TXT export for editors (functional). |
-| Export YouTube chapters (from scenes) | Export sheet **Chapters · YouTube** copies description timestamps; content package writes `.chapters.txt` | ✅ | **Descript** — YouTube chapter markers copy (functional). First line is `0:00`. Headings closer than 10s are skipped so YouTube accepts the paste. Retakes stay out. |
+| Export YouTube chapters (from scenes) | Suggest bar **Copy chapters** on the finish row after leftovers; transcript / chapter inspector; Sequence; Export sheet **Chapters · YouTube**; content package writes `.chapters.txt` | ✅ | **Descript** — YouTube chapter markers copy (functional). First line is `0:00`. Headings closer than 10s are skipped so YouTube accepts the paste. Retakes stay out. Toast names how many lines. Same `exportSidecar('chapters')`. |
 | Export OpenTimelineIO | Export sheet → More; palette | ✅ | **Resolve** — OTIO roundtrip (functional). **OTIO tools** — pipeline interchange (functional). B-roll and music beds emit ExternalReference. Slipped in-points round-trip. Lifted holds and insert-gaps emit `Gap.1` and restore as `inserts`. |
 | Export Final Cut Pro XML | Export sheet → More; palette | ✅ | **Final Cut** — XML import target (functional). Connected `asset-clip` refs point at B-roll / music files. Spine `<gap>` holds round-trip. |
 | Export Adobe Premiere XML | Export sheet → More; palette | ✅ | **Premiere** — XML handoff (functional). Extra video/audio tracks carry overlay and bed files. Hold clipitems restore as program inserts. |
@@ -101,7 +101,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 **What we shipped:**
 - **Export** (button, File menu, palette, context menu) opens a sheet: Video · MP4, then SRT / VTT / transcript / chapters. **More** holds OTIO, FCPXML, Premiere, Auto-Editor, Shotcut, Kdenlive.
 - Empty reel disables everything with “Open a recording first.” Demo disables MP4 with “No media file on disk” and still lets captions download.
-- Sidecar export toasts `Downloaded …` / `Saved …`. Palette commands share that path. **Chapters · YouTube** and **Transcript · Markdown** copy first; a file is the fallback. Transcript **Copy notes** is the same Markdown.
+- Sidecar export toasts `Downloaded …` / `Saved …`. Palette commands share that path. **Copy chapters** / **Chapters · YouTube** and **Transcript · Markdown** copy first; a file is the fallback. Transcript **Copy notes** is the same Markdown. **Export SRT** copies and still saves the file so YouTube or an LMS can upload it.
 - Web: captions still work; MP4 explains the desktop app. Encode progress and cancel unchanged.
 - Lifted holds and insert-gaps survive OTIO / FCPXML / MLT / Kdenlive / Premiere round-trip. Native `Gap` / `<gap>` / `<blank>` / Hold clipitems restore as `Project.inserts`.
 - Export parks lingering Whisper instead of competing with it. The proxy is still aborted and remade; ASR resumes after the encode.
@@ -156,13 +156,13 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Park playhead at clip start (context menu) | Right-click clip → Go to clip start | ✅ | **Final Cut** — snap playhead to clip (UI). |
 | Set mark In at playhead | Monitor **In**; I key; I with word selection uses span start | ✅ | **Premiere** — I key (functional standard). |
 | Set mark Out at playhead | Monitor **Out**; O key | ✅ | **Premiere** — O key (functional standard). |
-| Set both marks to selected words | Find **Mark clip**; heading **Mark clip**; word popover; palette; **M** when Find is not focused | ✅ | **Premiere** — mark clip (functional). M does nothing while you type in Find — the bar button is the hunt. Toast points at Cut marked, Export marked range, or Clear marks. |
-| Clear marks (keyboard) | **M** with no word selection when In or Out exist | ✅ | **Premiere** — clear in/out (functional). Focuses Find for the next hunt. |
+| Set both marks to selected words | Suggest bar **Mark clip** on a heading or words; Find **Hit**; heading menu; word popover; palette; **M** when Find is not focused | ✅ | **Premiere** — mark clip (functional). M does nothing while you type in Find — the bar button is the hunt. Marks loop the clip. The row becomes Export marked range / Clear marks. |
+| Clear marks (keyboard) | **M** with no word selection when In or Out exist | ✅ | **Premiere** — clear in/out (functional). Same helper: next Find hit if a phrase is open, otherwise focuses Find. |
 | Watch from beginning (suggest bar) | Suggest bar “Watch edited reel” / “Watch full reel” | ✅ | **Descript** — preview full edit (functional). After edits, Watch starts at 1.5× (the skim). 0.5× or 2× already picked stays. Toast says how to drop to 1×. |
 | Export from suggest bar | Suggest bar **Export** after a first edit | ✅ | **Descript** — share/export after preview (UI). Opens the same Export sheet. Captions burn in unless unchecked. |
-| Cut marked range from suggest bar | Suggest bar **Cut marked** (or **Lift marked**) when In–Out exist | ✅ | **Premiere** — ripple delete in/out (functional). Same helper as the tape / Edit / palette. Toast + Undo. |
+| Cut marked range from suggest bar | Suggest bar **Cut marked** (or **Lift marked**) when In–Out exist | ✅ | **Premiere** — ripple delete in/out (functional). Same helper as the tape / Edit / palette. The join plays. Toast names **Mark clip** for the next stretch. Marks and the word highlight clear so the marked row can stand down. |
 | Export marked range from suggest bar | Suggest bar **Export marked range** when In–Out exist | ✅ | **Audacity** — export selection (UI). Sits next to Cut marked while marks are set. |
-| Clear marks from suggest bar | Suggest bar **Clear marks** next to Cut / Export marked | ✅ | **Premiere** — clear in/out (UI). Same helper as timeline / Edit / palette / **M**. |
+| Clear marks from suggest bar | Suggest bar **Clear marks** next to Cut / Export marked | ✅ | **Premiere** — clear in/out (UI). Same helper as timeline / Edit / palette / **M**. If Find still has a phrase, jumps to the next hit and hears it — Mark clip is next. Last hit focuses Find so you can type another line. |
 | Drive playhead from picture clock | Automatic while primary video is ready | ✅ | **Premiere** — program time is master; picture may nudge inside a keep. A decoder in a cut hole does not stall or flash deleted frames. Audio-only / slugs still use rAF. |
 
 ### Audit notes — §4 (2026-08-25)
@@ -170,9 +170,9 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 **What a headache user hit:** Transport said **Play I/O** and **I — / O —**. Premiere users get it; everyone else swears. J-K-L, Space, Home/End, and word-click audition already match Descript/Premiere.
 
 **What we shipped:**
-- **Play marked** when In/Out exist, **Play selection** when words are selected, otherwise **Play marked** with a tooltip that says set marks or select words (P).
-- Mark buttons read **In** / **Out** with the timecode and a one-line tooltip. Loop tooltip says “marked range.”
-- Suggest-bar watch already says **Watch edited reel** / **Watch full reel** — left that, dropped the 🔶.
+- **Play marked** / **Play selection** only appear when marks or words exist. Safe, Match, Copy frame, and Full screen sit in transport **More** so the row does not spill.
+- Mark buttons read **In** / **Out**. **Clear** appears once a mark is set. Hover the clock for source time.
+- The suggest bar shows one job (clean, leftover, leftover-decide, retake, selection, marked, or finish). Everything else is **More**. **Clear** deselects. Hear leftover is first when leftovers exist — even before Clean. After you hear one, decide actions take the row. After the last picture leftover, the next leftover is a breath — the bar says **Hear breath** / **N breaths**, then **Cut breath** / **Keep breath**. Cutting the last leftover names the next job (Clean / Collapse retakes / Review) and clears the leftover so that row can take over.
 
 ---
 
@@ -184,16 +184,16 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Extend selection to click (range) | Shift+click word | ✅ | **Google Docs** — shift-click range (UI). |
 | Toggle word in/out of selection | Ctrl/Cmd+click word | ✅ | **Figma** — additive selection (UI). |
 | Select sentence containing word | Double-click word; Alt+click word | ✅ | **Descript** — double-click sentence (UI). **Google Docs** — double-click is a select, never a delete (UI). |
-| Select paragraph (triple-click) | Triple-click word | ✅ | **Google Docs** — triple-click paragraph (UI). Loops the stretch. Toast: Delete removes it. |
-| Select paragraph (keyboard/menu) | A key; Edit → Select paragraph; palette | ✅ | **Descript** — paragraph as edit unit (functional). Same helper: select, hear, toast. |
+| Select paragraph (triple-click) | Triple-click word | ✅ | **Google Docs** — triple-click paragraph (UI). Loops the stretch. Toast names **Remove paragraph** on the bar. |
+| Select paragraph (keyboard/menu) | A key; Edit → Select paragraph; palette; right-click | ✅ | **Descript** — paragraph as edit unit (functional). Same helper: select, hear, then Remove paragraph. |
 | Drag-select word range | Mouse down + drag across words | ✅ | **Descript** — drag in script (UI). |
 | Marquee box-select words | Drag on empty script background | ✅ | **Figma** — marquee select (UI). |
 | Additive marquee / drag | Shift/Ctrl during marquee or drag | ✅ | **Photoshop** — shift-add selection (UI). |
 | Select all words | Transcript toolbar “Select all”; ⌘A in script | ✅ | **Google Docs** — select all (UI). |
 | Grow selection one word | `]`; toolbar **More** when words are selected | ✅ | **VS Code** — expand selection (functional). |
 | Shrink selection one word | `[`; toolbar **Fewer** when words are selected | ✅ | **VS Code** — shrink selection (functional). `[` used to grow backward. |
-| Find phrase (live, one match at a time) | Transcript search; ⌘F; **Hear** / Enter loops the sentence; › next; Shift+Enter / ‹ prev | ✅ | **Descript** — search then play the hit (functional). **VS Code** — next/prev. Typing parks on the first match without restarting audio. |
-| Select all matching words | Find → **All N** | ✅ | **Descript** — search highlights every hit for a batch cut (functional). |
+| Find phrase (live, one match at a time) | Transcript search; ⌘F; **Hear** / Enter loops the sentence; › next; Shift+Enter / ‹ prev. **Hit** holds Copy quote, Copy frame, Mark clip, All, Replace. | ✅ | **Descript** — search then play the hit (functional). **VS Code** — next/prev. Typing parks on the first match without restarting audio. The row stays Hear + step; shipping the hit waits in **Hit**. |
+| Select all matching words | Find → **Hit** → **All N** | ✅ | **Descript** — search highlights every hit for a batch cut (functional). |
 | Clear find query | Escape in search field | ✅ | **VS Code** — clear search (UI). |
 | Select all words spoken by one speaker | Click speaker chip (no word selection) | ✅ | **Descript** — filter by speaker (functional). |
 
@@ -205,10 +205,10 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 
 **What we shipped:**
 - Double-click a live word selects the sentence and plays it. Double-click a cut word still puts it back.
-- ⌘F focuses find. Typing jumps to the first hit and highlights the rest. ‹ › / Enter / Shift+Enter step. **All N** selects every match for a batch Remove.
+- ⌘F focuses find. Typing jumps to the first hit and highlights the rest. ‹ › / Enter / Shift+Enter step. **Hear** stays on the row. **Hit** holds Copy quote, Copy frame, Mark clip, All, and Replace so the hunt bar does not spray. **Copy quote** expands a hit to the spoken line, then names paste or **Mark clip**.
 - **Fewer** / **More** appear on a selection; `[` now truly shrinks.
 - Hint: “Click a word to hear it. Double-click a sentence. Triple-click a paragraph. Delete removes it from the video.”
-- Triple-click / **A** selects the paragraph, loops it, and says Delete removes it. The popover becomes **Remove paragraph**.
+- Triple-click / **A** selects the paragraph, loops it, and names **Remove paragraph** on the bar (or Delete). The join plays after the cut.
 
 ---
 
@@ -216,16 +216,19 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
-| Cut selected live word(s) (ripple) | Delete/Backspace; X; popover **Remove** / **Remove paragraph**; palette “Cut selection” | ✅ | **Descript** — delete word cuts media (functional defining feature). A full paragraph toast says Undo. |
+| Cut selected live word(s) (ripple) | Delete/Backspace; X; popover **Remove** / **Remove paragraph**; palette “Cut selection” | ✅ | **Descript** — delete word cuts media (functional defining feature). A full paragraph uses the same helper as the bar. |
+| Remove paragraph | Suggest bar **Remove paragraph** after A / triple-click; Delete / X; popover; inspector; palette; Edit menu | ✅ | **Descript** — delete paragraph (functional). Names the time saved and plays the join. **Cut sentence** stays off that row so the whole stretch goes. |
 | Restore cut word(s) | U; popover “Put back”; double-click cut word | ✅ | **Descript** — restore strikethrough (UI). |
-| Cut sentence at caret word | `.` or `>` key; palette “Cut this sentence” | ✅ | **Descript** — delete sentence (functional). |
-| Cut previous sentence | `,` or `<` key; popover / inspector “Cut previous sentence” when the prior line is short and still live; palette | ✅ | **Descript** — trim false starts (functional). Toast + Undo. `.` / `,` listed under Words shortcuts. |
+| Cut sentence at caret word | Suggest bar **Cut sentence** on a selected line (not a restart); `.` or `>`; palette; popover | ✅ | **Descript** — delete sentence (functional). Cuts the spoken line around the caret, names the time saved, and plays the join. **Cut previous** takes that slot on a restart. |
+| Cut previous sentence | Suggest bar **Cut previous** on a restart line; `,` or `<`; popover / inspector; palette | ✅ | **Descript** — trim false starts (functional). The join plays. Toast names the saved time. Long previous chapters stay on the key only. |
 | Tighten interior gaps in selection | T key; popover “Make shorter”; palette “Make selection shorter” | ✅ | **Auto-Editor** — margin tighten (functional). **Descript** — shorten gaps (UI). |
 | Edit word text (correct typo) | Right-click → Edit text…; inline blur; inspector Text field; find/replace | ✅ | **Descript** — correct transcript without cutting (functional). Auto caption cards that cover the word follow in the same undo. Hand-edited cards and title cards stay. Toast: “Captions follow the word.” |
-| Copy selected words as a quote | Find **Copy quote**; word popover; inspector; ⌘C; right-click; palette | ✅ | **Otter** — copy quote with speaker (functional). Pastes `Name (1:24): words`. Toast points at Slack or a deck. |
-| Assign selected words to speaker | Click speaker chip while words selected | ✅ | **Descript** — drag speaker label (UI is drag; functional same). |
-| Rename speaker | Selected speaker **Rename**; F2 when no chapter is selected; double-click the chip; inspector Name; palette **Rename speaker** | ✅ | **Descript** — rename speaker in sidebar (UI). Toast points at Export → transcript. |
+| Copy selected words as a quote | Suggest bar **Copy quote** on a live selection; Find **Hit → Copy quote**; word popover; inspector; ⌘C; Sequence; palette | ✅ | **Otter** — copy quote with speaker (functional). A find hit or one word expands to the spoken line. Pastes `Name (1:24): the line`. Toast names paste or **Mark clip**. |
+| Clear selection | Suggest bar **Clear**; transcript **Clear**; inspector **Clear**; click the selected chapter again; Esc | ✅ | **Every editor** — Escape deselects (UI). Visible Clear where a selection has no other way out. |
+| Assign selected words to speaker | Click speaker chip while words selected; inspector Speaker | ✅ | **Descript** — drag speaker label (UI is drag; functional same). The stretch plays. Toast names **Copy notes**. A no-op click stays quiet so a second click can still rename. |
+| Rename speaker | Right-click speaker → **Rename**; F2; double-click the chip; inspector Name; palette **Rename speaker** | ✅ | **Descript** — rename speaker in sidebar (UI). **Enter** keeps the name and opens the next voice. The last voice names **Copy notes**. |
 | Add new speaker | + speaker button; palette “Add speaker”; Project Advanced | ✅ | **Descript** — add speaker track (functional). |
+| Remove speaker | Right-click speaker → **Remove**; palette **Remove speaker**; Project Advanced | ✅ | **Descript** — delete speaker (functional). Words they owned move to the remaining voice. Last speaker stays. Toast says who has the words now. |
 | Apply first contextual choice from popover | Click chip on last selected word | ✅ | **Superhuman** — inline action on selection (UI). |
 | Contextual choices (dynamic, up to 4) | Popover chips: Remove, Put back, Make shorter, Keep, Use later take, Keep this take, Cut previous sentence, All fillers, etc. | ✅ | **Superhuman** — consequence + action (UI). **Descript** — selection toolbar (UI). |
 
@@ -233,7 +236,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 
 **What a headache user hit:** Double-click deleted the take. Speaker rename opened a browser prompt over the editor. `,` cut a false start but only from the keyboard — walking the script hid the move.
 
-**What we shipped:** Cutting is Delete / X / **Remove** on the word. Double-click is select (live) or restore (cut). Speaker chips show **Rename** when that voice is the selection (always, on a one-speaker reel). F2 / double-click / inspector Name do the same, and the toast points at **Copy notes**. A word selection **Copy quote** (find bar, popover, ⌘C) pastes `Name (1:24): words`. A short live line before the caret offers **Cut previous sentence** (same as `,`) with a duration consequence. Long previous chapters stay on the key only.
+**What we shipped:** Cutting is Delete / X / **Remove** on the word. Double-click is select (live) or restore (cut). Speaker chips show **Rename** when that voice is the selection (always, on a one-speaker reel). F2 / double-click / inspector Name do the same. **Enter** opens the next voice; the last name points at **Copy notes**. Paint words and click a chip to assign — the stretch plays and the toast names **Copy notes**. A word selection **Copy quote** (find **Hit**, popover, ⌘C) pastes `Name (1:24): the spoken line` — a find hit expands past the search word. Toast names paste or **Mark clip**. A short live line before the caret offers **Cut previous** on the bar (same as `,`). The join plays. Toast names the saved time. Long previous chapters stay on the key only.
 
 ---
 
@@ -242,7 +245,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
 | Select pause between words | Click gap chip (>0.45s, or a leftover that starts in the gap) | ✅ | **Descript** — gap as object (functional). |
-| Select linked leftover / silence via gap | Click leftover or pending silence chip | ✅ | **Descript** — AI suggestion on gap (UI). Leftover activity/still opens the same Silent demo / Speed / Cut inspector as Review. |
+| Select linked leftover / silence via gap | Click leftover or pending silence chip | ✅ | **Descript** — AI suggestion on gap (UI). Leftover activity/still opens the same Silent demo / Speed / Cut inspector as Review. A leftover breath chip hears that breath. |
 | Cut leftover or live pause | Double-click uncut leftover / live gap | ✅ | **Descript** — remove silence (functional). Leftover uses `resolveSuggestion` cut so Review stays in sync. Toast + Undo. |
 | Restore cut pause | Double-click a mostly-cut gap (first-edit pads no longer look live) | ✅ | **Descript** — restore silence (functional). |
 | Revert applied suggestion on gap | Double-click gap with applied suggestion | ✅ | **Descript** — undo single AI edit (functional). |
@@ -263,8 +266,8 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Select editorial scene | Click scene heading in transcript | ✅ | **Descript** — chapter heading in the script (UI). |
 | Hear the scene | Click heading from outside (loops that chapter). Click while already inside only selects. | ✅ | **Descript** — click a scene to watch it (functional). |
 | See silent / wordless scenes in the script | Heading appears before the next spoken word | ✅ | **Descript** — chapters exist even without speech (functional). |
-| Rename scene | Selected heading **Rename**; F2; double-click the name; inspector Name; palette **Rename chapter** | ✅ | **Descript** — rename chapter inline (UI). Double-click no longer starts a hear loop. Toast points at Export → Chapters. |
-| Remove / put back a scene | Selected heading **Remove scene** / **Delete**; inspector; palette | ✅ | **Descript** — delete a scene from the script (functional). Cuts the whole chapter (words and air). Toast says chapter, not pause. The next heading loops. Delete on a dropped chapter puts it back. |
+| Rename scene | Right-click heading → **Rename**; F2; double-click the name; inspector Name; palette **Rename chapter** | ✅ | **Descript** — rename chapter inline (UI). Double-click no longer starts a hear loop. **Enter** keeps the title and opens the next heading. The last heading names **Copy chapters**. |
+| Remove / put back a scene | Suggest bar **Remove scene** on a heading or words; inspector; Sequence; palette | ✅ | **Descript** — delete a scene from the script (functional). Uses the selected heading, selected words, or the playhead. Cuts the whole chapter (words and air). Toast names the next chapter. Retake neighbors are skipped. A silent walkthrough can come back. A dropped heading offers **Put chapter back**. |
 | Jump to previous / next scene | ‹ › on the selected heading; `[` `]` while a scene is selected | ✅ | **Premiere** — previous/next marker (functional). |
 | Use a retake from the heading | **Use later take** on a retake heading | ✅ | **Descript** — keep this take on the take card (UI). |
 
@@ -278,7 +281,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Headings show kind · duration, title, and summary. Silent walkthroughs land before the next spoken word.
 - Click from outside hears the chapter (loop). Click while already parked inside only selects — Split and Rename keep your place. Selected heading highlights the words as a chapter, not a cut selection — no word **Remove** popover.
 - **Rename** on the selected heading, F2, or double-click the name. A double-click cancels any pending hear so you can type. Inspector Name / Summary still work. A rename toast points at YouTube chapter copy.
-- Selected heading also has **Split** (playhead must be inside, or a mid-chapter word) and **Merge prev/next**. Split opens the new heading so you can name Q&A. Merge toast points at YouTube chapters.
+- Right-click a heading for **Split** (playhead must be inside, or a mid-chapter word) and **Merge {neighbor}**. The bar names the other card on a heading or words. Split opens the new heading so you can name Q&A. Merge plays the joined chapter and names **Copy chapters**.
 - Selected heading: Remove scene / retake actions, plus ‹ ›. `[` `]` step scenes while a scene is selected.
 - Retake headings keep **Use later take** on the object.
 
@@ -296,7 +299,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | See existing protection in the script | **Protected** / **Silent demo** chip on the range | ✅ | **Descript** — ignore region is visible on the object (UI). |
 | Remove a painted guard | Double-click the protection chip; selected heading **Unprotect** | ✅ | **Auto-Editor** — clear manual range (functional). |
 | Protect a whole scene | Selected heading **Protect** | ✅ | **Descript** — ignore this chapter (functional). |
-| Tag selection as Keep | B key; palette “Protect selection”; popover **Protect**; cut-pause inspector **Protect** | ✅ | **Descript** — ignore region (conceptual). After a too-eager clean, Protect on a cut pause puts the air back and blocks the next Auto Edit. |
+| Tag selection as Keep | Click a **pause · cut** chip — **Protect pause** on the bar; **More → Protect pause** for the longest cut if you have not parked; B key; palette; popover **Protect**; cut-pause inspector | ✅ | **Descript** — ignore region (conceptual). After a too-eager clean, park on the cut — Protect pause puts the think-aloud back, loops it, and blocks the next Auto Edit. It stays off the Watch / Export row until you click a cut. |
 | Tag selection as Silent demo | Shift+B; palette “Tag selection as silent demo”; popover | ✅ | **Screen Studio** — protect demo sections (functional intent). |
 | Tag I/O range as Keep | Auto Edit → Tag I/O as keep | ✅ | **Premiere** — protect range (functional). |
 | Tag I/O range as Silent demo | Auto Edit → Tag I/O as silent demo | ✅ | **Same** — demo-specific guard (functional). |
@@ -312,7 +315,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Timeline button is **Protect**. Esc leaves the brush.
 - Painting toasts `Protected 2.4 seconds — Auto Edit will skip this.`
 - Protected ranges get a chip in the script. Double-click removes it. A keep/demo on a wordless pause (think-aloud after Clean) sits on the pause chip, not only on a word.
-- Selected scene heading has **Protect** / **Unprotect**.
+- Selected scene heading **Protect** / **Unprotect** lives on right-click with Rename, Split, and Merge. The chip row only keeps take picks (Use later take / Keep / Put back).
 
 ---
 
@@ -354,9 +357,9 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Add new overlay track | Toolbar + Overlay (if none empty); Sequence → Add overlay track; palette | ✅ | **Premiere** — add video track (functional). |
 | Add new audio/music track | Toolbar + Audio; palette “Add music track” | ✅ | **Premiere** — add audio track (functional). |
 | Reveal/add captions track | Toolbar + Captions | ✅ | **Descript** — captions lane (functional). |
-| Mute track | Track **Mute**; right-click track → Mute/Unmute | ✅ | **Every NLE** — mute on the track header (UI standard). |
-| Hide track from timeline | Track **Hide**; right-click | ✅ | **Premiere** — eye icon hide track (UI). |
-| Lock track (prevent clip moves/trims) | Track **Lock**; right-click | ✅ | **Premiere** — lock track (functional). |
+| Mute track | Track mute icon; right-click track → Mute/Unmute | ✅ | **Every NLE** — mute on the track header (UI standard). |
+| Hide track from timeline | Track eye-off icon; right-click | ✅ | **Premiere** — eye icon hide track (UI). Hide collapses the lane. **+ Overlay** / **+ Captions** bring that kind of lane back (a filled hide first). **Show Picture** / **Show Voice** appear on the timeline toolbar if you hid those. Undo also works. |
+| Lock track (prevent clip moves/trims) | Track lock icon; right-click | ✅ | **Premiere** — lock track (functional). |
 | Rename track | Double-click track name; edit; Enter | ✅ | **Reaper** — rename tracks inline (UI). |
 | Remove empty non-primary track | Track × button; right-click → Remove empty track | ✅ | **Premiere** — delete empty track (functional). |
 | Hide empty V2/V3 by default | Automatic — empty overlay/caption lanes stay collapsed; + Overlay / + Captions reveals | ✅ | **Final Cut** — collapses unused lanes (UI). |
@@ -369,7 +372,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 
 **What we shipped:**
 - Lane names drop the V1/A1 prefix: Picture, Voice, Overlay, Captions.
-- Flags read **Mute / Hide / Lock** with a wider rail so they fit.
+- Flags are compact icons (select all, solo, mute, hide, lock) with the word in the tooltip.
 - + Overlay / + Audio / + Captions have one-line tooltips. Empty stacks still auto-hide when the last clip leaves.
 
 ---
@@ -438,7 +441,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
 | Ripple delete between In and Out | See §12 | ✅ | **Premiere** — three-point editing (functional). |
-| Tighten gaps inside I/O | Timeline **Tighten marked**; Auto Edit → Tighten pauses in marked range; palette | ✅ | **Auto-Editor** — batch tighten range (functional). |
+| Tighten gaps inside I/O | Suggest bar **Tighten marked** next to Cut marked; Timeline; Auto Edit; palette | ✅ | **Auto-Editor** — batch tighten range (functional). In–Out shrinks with the saved time so Hear and Export stay on the clip. Toast names **Cut marked** or **Export marked range**. Protected demo stays. |
 | Clear In and Out | Suggest bar **Clear marks** after a marked clip; Timeline **Clear marks**; Edit → Clear In and Out; palette; **M** with no word selection | ✅ | **Premiere** — clear in/out (UI). After export, the next hunt starts on the same bar. |
 
 ### Audit notes — §14 (2026-08-25)
@@ -450,7 +453,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 **What we shipped:**
 - **Tighten marked** appears next to **Cut marked** as soon as In and Out exist.
 - **Clear marks** drops In/Out without cutting. Suggest bar (next to **Export marked range**), timeline, Edit menu, palette, and **M** with no selection all run the same helper. Find focuses for the next hunt.
-- T toast: “Tightened pauses. Protected demo stayed.”
+- T toast: “Tightened the marked pauses. Saved N seconds. Protected demo stayed.”
 
 ---
 
@@ -462,11 +465,12 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Set pause margin preset Balanced (0.12s) | Suggest bar Balanced chip | ✅ | **Descript** — Balanced/Tight tiers (UI). |
 | Set pause margin preset Tight (0.04s) | Suggest bar Tight chip | ✅ | **Descript** — aggressive tighten (UI). |
 | Apply all safe pending suggestions | Automatic after Open media / Add take / transcript; suggest bar (“Clean N pauses”, “Apply N safe”) | ✅ | **Descript** — apply all fillers/silence (functional). **Cleanvoice** — one-shot process (UI). Same `applySafeSuggestions` command; Undo or Put back silence restores. Breaths are dismissed (kept in the picture) after first-edit. Silent stills stay in Review as Cut / Keep. |
-| Open review drawer | Suggest bar Review N; primary when no safe | ✅ | **Gmail** — review bulk action (UI). |
-| Close review drawer | Suggest bar Hide review | ✅ | **GitHub** — collapse review panel (UI). |
+| Open review drawer | Suggest bar Review N; primary when no safe; Sequence → Review suggestions | ✅ | **Gmail** — review bulk action (UI). Opens the job the bar already named, hears it, and toasts the next pick. After leftovers that is the take. |
+| Close review drawer | Drawer **×**; click the dimmed outside; Esc | ✅ | **Linear** — overlay drawer (UI). Same `setReviewing(false)`. The footer only opens Review. |
 | Run local scene/retake detection | Suggest bar / palette Find retakes | ✅ | **Descript** — find retakes (functional). Infers scenes, opens Review, and loops the first live or dropped take. Toast says found / none. Hidden once a retake scene is on the reel. |
 | Collapse all superseded retakes | Automatic after first edit (second undo); suggest bar Collapse retakes | ✅ | **Descript** — delete previous takes (functional). Same `collapseRetakes` command. Then Review hears the first dropped take so Put back is one listen away. Undo puts retakes back without restoring silence. Keep/demo tags still punch holes. |
-| Review dropped takes after leftovers | Suggest bar Review N takes | ✅ | **Descript** — take card after auto-collapse (UI). After leftover stills/activity are gone, the bar offers the dropped takes. Review / first-edit with no leftovers opens on the first take and loops it. |
+| Review leftover breaths after picture leftovers | Suggest bar **Hear breath** / **N breaths**, then **Cut breath** / **Keep breath**; Sequence / palette Review leftover breaths; leftover breath gap chip | ✅ | **Descript** — keep room tone (functional). First-edit no longer dismisses breaths. After quiet picture leftovers, the leftover row names the breath. Cut if it hisses, Keep if the line should breathe. Review → Keep all breaths leaves them in the reel. |
+| Review dropped takes after leftovers | Suggest bar Review N retake | ✅ | **Descript** — take card after auto-collapse (UI). After leftover stills/activity/breaths are gone, the bar offers the take. Review hears it, toasts Use later take or Put back, and shows only the take family — leftover leftover stays out. A take pick loops the next take, or closes, deselects the chapter, and names Clean / fillers / Watch so that job can take the row. |
 | Open review drawer from project inspector | Project → Open review | ✅ | **Descript** — suggestions list (UI). |
 
 ---
@@ -481,7 +485,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Keep this take, cut siblings | Scene row → Keep this take | ✅ | **Descript** — compare takes workflow (functional). |
 | Park on pending suggestion | Suggestion row → Park | ✅ | **Descript** — scrub to suggestion (UI). |
 | Apply pending suggestion | Suggestion row → Apply / Cut / Speed N× / Quiet / Normalize | ✅ | **Descript** — accept AI edit (functional). Silent stills use `applySuggestion` (a review-action cut) so a confirmed still is a normal ripple delete, not a no-op. Quiet static screens use `setSpeed`, which ripples later captions and overlays. Hot spikes use `setRangeVolume` toward −16 LUFS without changing length. |
-| Decide a quiet picture leftover | Review row / inspector → Silent demo / Speed 4× / Cut / Keep | ✅ | **Screen Studio** — protect a silent walkthrough (functional). Same `resolveSuggestion` command: demo tags + dismisses, speed compresses, cut ripples, keep tags + dismisses so Auto Edit skips it. First-edit no longer treats silence-with-scene-changes as safe dead air. |
+| Decide a quiet picture leftover | Suggest bar **Hear leftover**, then **Silent demo** / **Speed 4×** / **Cut leftover** / **Keep leftover** / **Quiet leftover** on the bar; leftover chip; Review; Sequence; palette | ✅ | **Screen Studio** — protect a silent walkthrough (functional). Hear leftover is first on a fresh reel (even before Clean). It loops the current leftover and is the only leftover button until you are on one. Decide actions then take the row. Same leftover decision helper: demo tags + dismisses, speed compresses, cut ripples, keep tags + dismisses so Auto Edit skips it. Quiet applies a volume leftover. First-edit no longer treats silence-with-scene-changes as safe dead air. |
 | Dismiss / keep pending suggestion | Suggestion row → Keep or Skip (if blocked) | ✅ | **Gmail** — reject suggestion (UI). |
 | Revert one applied suggestion | Applied row → Put back one | ✅ | **Descript** — undo single AI change (functional). |
 | Revert all applied of type (silence, filler, …) | Applied group → Put back silence / fillers / … | ✅ | **Descript** — bulk undo by category (functional). |
@@ -499,7 +503,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 | Put back all silence cuts | Auto Edit / palette | ✅ | **Descript** — restore silence (functional). |
 | Put back all filler cuts | Auto Edit / palette | ✅ | **Descript** — restore fillers (functional). |
 | Put back all retake/repeat cuts | Auto Edit / palette | ✅ | **Descript** — restore retakes (functional). |
-| Enable master normalize −16 LUFS (one-shot menu) | Suggest bar **Normalize** after the first edit; Export sheet **Normalize -16 LUFS**; Auto Edit / palette | ✅ | **Auphonic** — loudness target (functional). **Descript** — normalize toggle (UI). Clean pauses arms it; the bar stays on so you can leave the recording as-is. |
+| Enable master normalize −16 LUFS (one-shot menu) | Suggest bar **Normalize** on the finish row next to Export after the first edit; Export sheet **Normalize -16 LUFS**; Auto Edit / palette | ✅ | **Auphonic** — loudness target (functional). **Descript** — normalize toggle (UI). Clean pauses arms it and lights the chip. Click it off to leave the recording as-is. The Export sheet stays the last inspectable step. |
 
 ### Audit notes — §15–17 (2026-08-25)
 
@@ -513,7 +517,7 @@ Every **discrete action** a user can take to accomplish something in SpeechEdit 
 - Blocked rows say **protected**. Group totals say “N protected.”
 - Pace chip tooltips: leave more air / typical cleanup / cut most silence.
 - Collapse retakes tooltip: you can put them back from Review.
-- Silent stills are no longer Keep-only. Cut applies `applySuggestion` (ripple delete). Keep dismisses. Breaths, talking-over-static, and pace notes leave Review via `dismissSuggestions` after first-edit. Review opens on the first still so the next decision is a listen, then quiet static screens as **Speed N×** / Keep / **Speed all**, then hot audio as **Quiet** / Keep / **Quiet all**. Talking-over-static stays Keep-only.
+- Silent stills are no longer Keep-only. Cut applies `applySuggestion` (ripple delete). Keep dismisses. Talking-over-static and pace notes leave Review via `dismissSuggestions` after first-edit. Leftover breaths stay — after picture leftovers the leftover row says **Hear breath** / **Cut breath** / **Keep breath**. Review opens on the first still so the next decision is a listen, then quiet static screens as **Speed N×** / Keep / **Speed all**, then hot audio as **Quiet** / Keep / **Quiet all**. Talking-over-static stays Keep-only.
 - Quiet click-throughs (silence + scene change) are leftovers, not safe cuts. Review opens on those first. Each leftover still or activity is **Silent demo** / **Speed 4×** / **Cut** / **Keep** via `resolveSuggestion` (one undo). Demo and Keep tag the span so a later rebuild skips it.
 - After leftovers, the bar offers dropped takes. **Find retakes** / **Collapse retakes** / Review open the first take and loop it. Inspector and transcript chips say **Use later take** / **Put back**, same as Review.
 
@@ -540,7 +544,7 @@ These appear based on selection. Each row is one button label the user may see.
 | Mark demo (pause) | Unguarded gap | ✅ | **Screen Studio** — protect demo (functional). |
 | Protect (pause) | Unguarded gap | ✅ | **Auto-Editor** — keep (functional). |
 | Apply (suggestion) | Safe pending suggestion | ✅ | **Descript** — apply AI edit (UI). |
-| Speed N× (suggestion) | Static/low-motion suggestion | ✅ | **Auto-Editor** — speed up static (functional). |
+| Speed N× (suggestion) | Suggest bar **Speed 4×** on a leftover wait; leftover chip; Review; Sequence; palette | ✅ | **Auto-Editor** — speed up static (functional). Speeds the selected leftover, or the first wait in Review. The next leftover loops. Same `resolveSuggestion` speed. |
 | Normalize (suggestion) | Loud suggestion | ✅ | **Descript** — normalize clip (functional). |
 | Keep (dismiss suggestion) | Review suggestion | ✅ | **Gmail** — dismiss (UI). |
 | Skip (blocked suggestion) | Guard-blocked suggestion | ✅ | **GitHub** — skip failing check (UI). |
@@ -622,21 +626,21 @@ These appear based on selection. Each row is one button label the user may see.
 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
-| Generate captions from live words | Suggest bar **Caption remaining** after a first edit; Caption tab; Sequence; palette | ✅ | **CapCut** — auto captions one tap (UI leader). **Descript** — from transcript (functional). Open media and Open transcript build caption clips from live words (program time, one undo). Speech islands do not caption. Handmade titles and edited cards stay; remaining words fill around them. Fixing a transcript word patches the auto card that covers it — no caption project. |
-| Add scene lower thirds | Suggest bar **Chapter names** after first edit; Caption tab; Sequence; palette | ✅ | **Descript** — chapter titles (functional). Same `addLowerThirds` as Sequence. Toast points at Apply style to all titles. |
+| Generate captions from live words | Suggest bar **Caption remaining** after a first edit; Caption tab; Sequence; palette | ✅ | **CapCut** — auto captions one tap (UI leader). **Descript** — from transcript (functional). Open media and Open transcript build caption clips from live words (program time, one undo). Speech islands do not caption. Handmade titles and edited cards stay; remaining words fill around them. Caption remaining parks the first new block on the picture without selecting it, so Watch / Export stay on the row. Fixing a transcript word patches the auto card that covers it — no caption project. |
+| Add scene lower thirds | Suggest bar **Chapter names** after first edit; Caption tab; Sequence; palette | ✅ | **Descript** — chapter titles (functional). Same `addLowerThirds` as Sequence. Opens the first name on the picture to type. **Enter** keeps the heading and opens the next card. The last name stays selected so Fill / Apply style stay on the tape. Escape cancels. |
 | Edit selected caption text | Caption textarea | ✅ | **Kapwing** — inline caption edit (UI). |
 | Change caption font size | Size slider | ✅ | **CapCut** — style size preset (UI). |
 | Change caption align (left/center/right) | Align dropdown | ✅ | **Kapwing** — alignment control (UI). |
 | Change caption screen position (lower/center/upper) | Position dropdown | ✅ | **CapCut** — position templates (UI). |
 | Change caption fill color | Fill swatch + hex | ✅ | **Kapwing** — color picker (UI). |
 | Change caption stroke color | Stroke swatch + hex | ✅ | **Kapwing** — outline color (UI). |
-| Apply caption style to all title clips | Caption tab **Apply style to all titles**; palette | ✅ | **CapCut** — apply to all captions (UI). Same `setCaptionStyleAll`. Toast: this look is on every title. |
+| Apply caption style to all title clips | Fill / Stroke / **Apply style** on the tape with the card; suggest bar when a title is selected; Caption tab; Sequence; palette | ✅ | **CapCut** — apply to all captions (UI). Copies fill, stroke, and size only — a title does not smash a lower third. The next card plays. Toast names the count and Export. Zoom and redaction stay out. |
 
 ### Audit notes — §22 (2026-08-25)
 
 **What a headache user hit:** Fill and Stroke were hex strings. Kapwing and CapCut show a swatch you click.
 
-**What we shipped:** Fill and Stroke are a color picker plus the hex field. Hear plays the selected title.
+**What we shipped:** Fill and Stroke are a color picker plus the hex field on the card (inspector keeps hex). **Apply style** copies look, not seat. The next card plays. Hear plays the selected title.
 
 ---
 
@@ -644,15 +648,15 @@ These appear based on selection. Each row is one button label the user may see.
 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
-| Add title clip (3s default) | Suggest bar Add title after leftovers; Sequence → Add title; palette | ✅ | **Final Cut** — titles browser (UI). First title is a card at 0. Another follows the playhead. Same `addTitle` command. Type in the inspector. |
-| Add zoom region (1.45×) | Suggest bar Add zoom after leftovers; Sequence → Add zoom; palette; inspector / word chips | ✅ | **Screen Studio** — auto zoom (functional). **Tella** — zoom blocks (UI). Covers selected words or the selected chapter; otherwise 3s at the playhead. Same `addZoom` command. |
-| Add lower third (3s) | Suggest bar **Add lower third** after leftovers; Sequence → Add lower third; palette | ✅ | **Premiere** — lower third MOGRT (functional). Same `addTitle` + `lower-third` preset as title. First name follows an opening title if the playhead is still on that card; otherwise 3s from the playhead. Type **Name** in the inspector. |
-| Add blur redaction | Suggest bar **Add redaction** after leftovers; selected heading; Sequence → Add redaction; palette; inspector | ✅ | **Descript** — blur face (functional). **YouTube Studio** — face blur (UI). Covers selected words or the selected chapter; otherwise 4s at the playhead. Toast says to drag the box. |
+| Add title clip (3s default) | Suggest bar **Add title** on the finish row until one exists; Sequence; palette | ✅ | **Final Cut** — titles browser (UI). First title is a card at 0. Another follows the playhead. Same `addTitle` command. Type on the picture. After the subject, Watch / Export return. |
+| Add zoom region (1.45×) | Suggest bar **Add zoom** on a selected chapter or words; Sequence; palette; word chips | ✅ | **Screen Studio** — auto zoom (functional). **Tella** — zoom blocks (UI). Covers selected words or the selected chapter; otherwise 3s at the playhead. Loops the punch-in. Scale is **1.2× / 1.45× / 2×** on the monitor, not Transform. A zoom clip is not a title — Apply style stays off. |
+| Add lower third (3s) | Suggest bar **Add lower third** on the finish row until one exists; selected words / chapter; Sequence; palette | ✅ | **Premiere** — lower third MOGRT (functional). Same `addTitle` + `lower-third` preset as title. Covers selected words or chapter. First name follows an opening title if the playhead is still on that card; otherwise 3s from the playhead. Prefills the speaker. Type it, then Fill. |
+| Add blur redaction | Suggest bar **Add redaction** on a selected chapter or words; Sequence; palette; inspector | ✅ | **Descript** — blur face (functional). **YouTube Studio** — face blur (UI). Covers selected words or the selected chapter; otherwise 4s at the playhead. Loops the stretch. The box is on the picture — drag it; Small / Med / Large sizes it. A redaction is not a title. |
 | Add cross-dissolve at playhead (0.4s) | Sequence → Dissolve at playhead; palette | ✅ | **Final Cut** — default cross dissolve (UI). |
 | Fade in selected clip 0.4s | Palette (clip selected) | ✅ | **Audacity** — fade in (functional). |
 | Fade out selected clip 0.4s | Palette (clip selected) | ✅ | **Audacity** — fade out (functional). |
 | Import B-roll still/video at playhead | Suggest bar **Add B-roll**; Sequence; palette | ✅ | **Descript** — B-roll lane insert (functional). Same `addBroll`. Face cam / still lands silent (volume 0) in the lower-right (same Bottom right look as Picture) so it does not cover the walkthrough or duck the voice. Covers selected words or chapter, or 6s from the playhead. |
-| Import music bed at playhead | Sequence → Add music bed… | ✅ | **Descript** — music under voice (functional). |
+| Import music bed at playhead | Suggest bar **Add music**; Sequence; palette | ✅ | **Descript** — music under voice (functional). Same `addAudio`. Covers selected words or chapter, or from the playhead to the end (capped by the file). Fades 0.4s. Volume 0.35. Toast points at clip volume. |
 
 ### Audit notes — §23 (2026-08-25)
 
@@ -663,10 +667,10 @@ These appear based on selection. Each row is one button label the user may see.
 **What we shipped:**
 - Menu says **3s at playhead** for a title. A toast names what landed.
 - Adding a title, zoom, lower third, captions, B-roll, music, or redaction selects the new clip and opens Caption or Picture.
-- A new title card focuses the Text field with “Title” selected, so the first keystroke is the subject line. The inspector says Title, not Caption.
-- **Add zoom** uses the selected words or chapter when those are the context, so a client-demo punch-in is not a 3s guess at the playhead. After leftover review the suggest bar offers it next to Watch.
-- **Add lower third** is on that same bar. A name card is not a title: it does not steal the opening-title slot. After **Add title** at 0, the first name lands at 3s if you are still on the card.
-- Clicking Add zoom on the suggest bar no longer clears the chapter. A selected retake heading does not steal the punch-in. Playhead inside a silent demo covers that walkthrough. The selected chapter also shows **Add zoom** and **Add redaction** on the heading. Redaction uses the same span as zoom (words / chapter / 4s playhead) and tells you to drag the box.
+- Adding a title seeks to the card and opens a field on the picture. The first keystroke is the subject. Double-click or right-click → Type… to edit again. The inspector Text field is still there. **Add title** sits on the finish row (Watch / Export) until an opening title exists — not only in More.
+- **Add zoom** uses the selected words or chapter when those are the context, so a client-demo punch-in is not a 3s guess at the playhead. On a selected chapter it sits on the row. The punch-in loops; **1.2× / 1.45× / 2×** are on the monitor.
+- **Add lower third** sits on the finish row until one name exists — same as Add title. A name card is not a title: it does not steal the opening-title slot. After **Add title** at 0, the first name lands at 3s if you are still on the card. Selected words or a chapter cover that beat. The speaker name is already on the card; type the product over it, then Fill.
+- Clicking Add zoom on the suggest bar no longer clears the chapter. A selected retake heading does not steal the punch-in. Playhead inside a silent demo covers that walkthrough. The selected chapter also shows **Add zoom** and **Add redaction** on the heading. Redaction uses the same span as zoom (words / chapter / 4s playhead), loops the stretch, and puts the box on the picture — drag it; **Small / Med / Large** size it. A redaction is not a title.
 
 ---
 
@@ -751,10 +755,12 @@ These appear based on selection. Each row is one button label the user may see.
 |---------|---------|--------|---------------------|
 | Word | Dynamic edit choices, Edit text, Copy, Select sentence, Select paragraph, Go here | ✅ | **Descript** — right-click script (UI). **macOS** — contextual menu (UI). |
 | Gap / pause | Same as gap inspector actions | ✅ | **Descript** — gap menu (functional). |
-| Scene | Scene inspector actions + Compare takes | ✅ | **Descript** — scene context (functional). |
-| Clip | Copy caption text (if any), Trim start/end to here, Split, Go to clip start, Mute clip | ✅ | **Premiere** — clip context menu (UI standard). |
+| Scene | Rename, Mark clip, Split, Merge, Protect; then take/remove/zoom/redact; Compare takes | ✅ | **Descript** — scene context (functional). Shape tools are not sprayed on the heading. |
+| Clip | Type… on a title/caption/name (writes on the picture); Copy caption text (if any), Trim start/end to here, Split, Go to clip start, Mute clip | ✅ | **Premiere** — clip context menu (UI standard). **CapCut** — tap text on the preview (UI). |
 | Edit block | Go here; Hear; suggestion actions; Remove protection; scene menu | ✅ | **GitHub** — timeline event menu (UI). |
 | Track | Mute/Unmute, Hide/Show, Lock/Unlock, Remove empty | ✅ | **Premiere** — track header menu (functional). |
+| Speaker chip | Rename; Remove (disabled on the last voice) | ✅ | **Descript** — speaker context (functional). Words they owned move to the remaining voice. |
+| Note chip | Type…; Remove | ✅ | **Premiere** — marker comment (functional). Same `setTagLabel` as the inspector. |
 | Transcript empty area | Clear selection, Select all, Command palette | ✅ | **Standard** — pane context menu (UI). |
 | Timeline empty area | Fit timeline, Split at playhead, Snap toggle, Protect words, Command palette | ✅ | **Premiere** — timeline menu (functional). |
 | App chrome | Undo, Redo, Command palette, Export/Cancel export | ✅ | **macOS** — universal backstop (UI). |
@@ -885,7 +891,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Attach silence / loudness after the reel is open | `setAnalysis` + rebuild; Open media replays this | ✅ | **Descript** — analysis lands on an already-editable composition (functional). |
 | Fill one take’s words / analysis after it is already on the reel | `attachTakeIntel`; Open media and Add take replay this | ✅ | **Descript** — a second take’s transcript lands without wiping the first (functional). Growing ASR replaces in-span words when the new list is longer; a dropped or edited transcript is not overwritten by a same-span attach. |
 | Relink asset by id+path (command) | Missing banner / inspector Relink…; MCP `relinkAsset` | ✅ | **Premiere** — relink (UI). |
-| Paint Note guard tag | Timeline **Note**; Protect → Note paint; Edit → Note at playhead | ✅ | **Premiere** — marker comments (UI). |
+| Paint Note guard tag | **Note** on the word/heading row; Timeline **Note**; Protect → Note paint; Edit → Note at playhead; palette | ✅ | **Premiere** — marker comments (UI). Click the line — **Note** on the bar drops the chip and focuses **hook, ask, or why you parked**. A heading highlight parks on the playhead word, not the whole chapter. Silent headings get the chip on the chapter. Double-click or right-click → **Type…**. Right-click → **Remove**. Save toast names **N** to hop back; `hook` also names **Mark clip**. **N** / **Shift+N** hops and names the next mark. Inspector **Note** field is the same label. |
 | Toggle ripple vs insert mode | Timeline **Ripple on** / **Lift** — Delete follows the mode | ✅ | **Premiere** — ripple/insert toggle (UI). |
 | Read source↔program cut mapping | MCP `get_mapping` | ✅ | **WeftCut** — EDL introspection (functional). |
 | Read cuts with program times | MCP `get_cuts` | ✅ | **Auto-Editor** — cut list (functional). |
@@ -922,7 +928,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Slide edit (move cut point) | Shift-drag the clip body (neighbors absorb) | ✅ | **Premiere** — slide tool (functional). |
 | Roll trim (shared boundary) | Shift-drag a clip handle | ✅ | **Premiere** — roll tool (functional). |
 | Lift extract (leave gap vs ripple) | **Lift marked**; Delete with **Lift** mode; gap inspector **Lift pause** | ✅ | **Premiere** — lift vs extract (functional). |
-| Select all clips on track | Track rail **All**; palette | ✅ | **Premiere** — select track (UI). |
+| Select all clips on track | Track rail select-all icon; palette | ✅ | **Premiere** — select track (UI). |
 | Link / unlink audio-video | Derived V1/A1 stay linked | 📋 | **Premiere** — chain icon (UI). |
 | Nest selection into compound clip | Not in live app | 📋 | **Final Cut** — compound clip (functional). |
 | Copy/paste clip attributes | ⌘⇧C / ⌘⇧V; inspector **Paste look** | ✅ | **Final Cut** — paste attributes (UI). |
@@ -933,11 +939,11 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Delete gap / close gap manually | Select a hold → inspector **Close gap**; pause chip still ripples | ✅ | **Premiere** — delete ripple gap (functional). |
 | Extend edit to playhead (E key) | **E**; inspector **Extend to playhead** (overlay / bed / caption) | ✅ | **Premiere** — extend edit (functional). |
 | Match frame / open clip in source | Monitor **Match**; palette “Match frame” — selects the word at this source frame | ✅ | **Premiere** — match frame (UI). One program monitor; Match finds the script line. |
-| Copy current frame | Monitor **Copy frame**; palette | ✅ | **QuickTime** — copy frame (functional). PNG of the picture (or an audio card) with the line under it. Clipboard first; a file if copy is blocked. Toast points at the ticket. |
+| Copy current frame | Suggest bar **Copy frame** on a selected chapter or words; monitor **More**; Sequence; palette; inspector / Find **Hit** | ✅ | **QuickTime** — copy frame (functional). Parks on the selected words or chapter first. A chapter card names the step (not the reel). Clipboard first; a PNG if copy is blocked — toast says to paste or drop the file. |
 | Source monitor separate from program | One program monitor | 📋 | **Premiere** — dual monitor (UI). |
 | Scrub audio while dragging playhead | Playhead seeks; no shuttle scrub | 📋 | **Pro Tools** — scrub (functional). |
 | Snapping toggle with audible/visual tick | Timeline **Snap on** | ✅ | **Final Cut** — snap feedback (UI). |
-| Markers generic (not just I/O) | Timeline **Note**; Protect → Note paint | ✅ | **Premiere** — markers panel (UI). |
+| Markers generic (not just I/O) | **Note** on the word/heading row; Timeline **Note**; Protect → Note paint | ✅ | **Premiere** — markers panel (UI). |
 | Clear In / Clear Out / Clear both marks | **Clear marks** — see §14 | ✅ | **Premiere** — clear in/out (UI). |
 | Go to next / previous marker | **N** / **Shift+N**; timeline **Note › / ‹ Note**; Edit menu; palette | ✅ | **Premiere** — shift+M (functional). |
 | Replace timeline clip media | Overlay / bed inspector **Replace footage** | ✅ | **Premiere** — replace footage (UI). |
@@ -947,7 +953,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Volume keyframes on clip | Clip volume slider only | 📋 | **Audacity** — envelope (UI). |
 | Pan / stereo balance | Clip inspector **Pan** (−1…1); export `stereotools` | ✅ | **Logic** — pan knob (UI). |
 | Mute clip button in inspector | Mute clip checkbox + right-click | ✅ | **Premiere** — mute clip (UI). |
-| Solo track / solo clip | Track rail **Solo** (radio; export respects it) | ✅ | **Reaper** — solo (UI). |
+| Solo track / solo clip | Track rail headphone icon (radio; export respects it) | ✅ | **Reaper** — solo (UI). |
 | Transition browser (crossfade, wipe) | Dissolve at playhead only | 📋 | **Final Cut** — transition browser (UI). |
 | Drag transition onto cut | Not in live app | 📋 | **Final Cut** — drag transition (UI). |
 | Adjustment layer / grade track | Master picture sliders (whole reel) | 🔶 | **Premiere** — adjustment layer (UI). |
@@ -964,8 +970,8 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Playback speed control (0.5×, 1×, 1.5×, 2×) | Monitor **0.5× / 1× / 1.5× / 2×** | ✅ | **YouTube** — speed control (UI). 1.5× is the client-demo skim. |
 | Audio meters / loudness monitor | Meter next to **vol** on the transport | ✅ | **Premiere** — audio meters (UI). |
 | Export queue (multiple jobs) | One export at a time | 📋 | **HandBrake** — queue (UI). |
-| Export preset picker (YouTube 1080p, etc.) | Export → **YouTube 1080** / **Vertical 9:16** / **Podcast audio**; suggest bar **9:16** when a clip is marked; Picture / palette | ✅ | **Descript** — export presets (UI). **CapCut** — 9:16 canvas (UI). Vertical is a centered cover-crop of the 16:9 picture, not a left-aligned letterbox. Toast: drag to pick the face. Safe turns on. |
-| Export audio-only (MP3/WAV) | Suggest bar **Export audio** when the reel has no video; Export sheet **Audio only · M4A** / **Podcast audio** | ✅ | **Descript** — audio export (functional). An audio-only reel opens the sheet with M4A already selected. |
+| Export preset picker (YouTube 1080p, etc.) | Export → **YouTube 1080** / **Vertical 9:16** / **Podcast audio**; suggest bar **9:16** when a clip is marked; Picture / palette | ✅ | **Descript** — export presets (UI). **CapCut** — 9:16 canvas (UI). Vertical is a centered cover-crop of the 16:9 picture, not a left-aligned letterbox. **Left / Center / Right** sit on the monitor; drag pans. Safe turns on. Marks loop so you see the clip tall. |
+| Export audio-only (MP3/WAV) | Suggest bar **Export audio** when the reel has no video; Export sheet **Audio only · M4A** / **Podcast audio** | ✅ | **Descript** — audio export (functional). An audio-only reel opens the sheet with M4A already selected. A reel with no file on disk (studio demo / web) ships **Download the words** — captions, transcript, chapters — and says M4A needs the desktop app and a linked recording. |
 | Export selected range only | Find **Mark clip** or **I/O** / **M**; suggest bar **Export marked range** then **Clear marks**; Export sheet **Marked range only** (checked when marks exist) | ✅ | **Audacity** — export selection (functional). Opening Export with In–Out set does not default to the whole reel. After a marked export, the same bar offers the next hunt. |
 | Burn-in toggle for captions on export | Export → **Burn captions into the picture** | ✅ | **Premiere** — export captions setting (UI). The checkbox appears when the lane has titles or when live words can synthesize them. A burned MP4 uses the same clips as the monitor; if the lane is still empty, export builds the same word captions SRT already used. |
 | Recent projects list | File → Open recent | ✅ | **VS Code** — recent (UI). |
@@ -979,11 +985,11 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 
 **What a headache user hit:** Split lived only on S. Review was always 1×. Export was “whole reel, video, captions burned.” Solo and notes did not exist. Clips could move, but slip/roll/copy/nudge were invisible.
 
-**What we shipped:** Split on the tape, Note, Solo, 0.5×/1.5×/2×, full screen, duplicate clip, export range / audio / burn toggle, keyboard overlay. Ripple is named, not faked. **Watch edited reel** starts at 1.5× after a first edit so the client-demo skim is one tap. After I/O or **M**, the bar offers **Cut marked**, **Export marked range**, and **Clear marks**. The sheet opens with Marked range only already on. Clear focuses Find for the next clip.
+**What we shipped:** Split on the tape, Note, Solo, 0.5×/1.5×/2×, full screen, duplicate clip, export range / audio / burn toggle, keyboard overlay. Ripple is named, not faked. **Watch edited reel** starts at 1.5× after a first edit so the client-demo skim is one tap. After I/O or **M**, the bar offers **Cut marked**, **Export marked range**, and **Clear marks**. The sheet opens with Marked range only already on. Clear jumps to the next Find hit when a phrase is still open, or focuses Find for a new hunt.
 
 **Second pass:** ← → nudge with inspector chips. ⌘C/V paste at the playhead. ⌘⇧V paste look. Shift-click multi-select. Track **All**. Alt-drag slip, Shift-drag slide, Shift-handle roll. **E** extend. **N** hops notes. **Safe** boxes + on-program crop handles. Transport voice meter. Export **YouTube 1080 / Vertical 9:16 / Podcast audio**.
 
-**Third pass (slugs):** Timeline **Ripple on** / **Lift** is a real mode. Lift leaves a black/silence hold; **Gap** inserts 1s; inspector **Close gap** extracts it. Export and interchange (OTIO / FCPXML / MLT / Premiere) emit and restore the hold. Monitor **Match** finds the script word. Overlay **Replace footage**, **Pan**, and PIP corner chips. Export **Content package**. Protect paint **Hook** / **CTA**. Freeze / reverse / volume envelopes still need media that HTML preview cannot fake.
+**Third pass (slugs):** Timeline **Ripple on** / **Lift** is a real mode. Lift leaves a black/silence hold; **Gap** inserts 1s; inspector **Close gap** extracts it. Export and interchange (OTIO / FCPXML / MLT / Premiere) emit and restore the hold. Monitor **Match** finds the script word. Overlay **Replace footage**, **Pan**, and PIP corner chips. Export **Content package**. Protect paint is Keep / Silent demo / Note. Freeze / reverse / volume envelopes still need media that HTML preview cannot fake.
 
 ---
 
@@ -995,7 +1001,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Live transcript during record | Not in live app | 📋 | **Descript** — live transcript (functional). |
 | Highlight transcript while playing (auto-scroll) | Transcript **Follow on** | ✅ | **Descript** — follow playhead (UI). |
 | Pause follow when user scrolls | Scroll the words → Follow off | ✅ | **Descript** — follow toggle (UI). |
-| Search & replace in transcript | Find bar **Replace** / **Replace all** (one undo) | ✅ | **Word** — find/replace (UI). |
+| Search & replace in transcript | Find → **Hit** → **Replace** / **Replace all** (one undo) | ✅ | **Word** — find/replace (UI). |
 | Find next / previous match | Enter / Shift+Enter · ‹ › | ✅ | **VS Code** — F3 (UI). |
 | Correct transcript and redistribute timing | Replace keeps leftover word times; no retime | 🔶 | **Descript** — text-based retime (functional). |
 | Delete silence only (not words) from selection | Tighten marked; gap double-click | ✅ | **Descript** — shorten word gaps (UI). |
@@ -1010,9 +1016,9 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | Detect crosstalk / overlap | Not in live app | 📋 | **Descript** — studio sound (functional). |
 | Studio Sound / noise reduction toggle | Not in live app | 📋 | **Descript** — studio sound (UI). |
 | Auto music ducking strength preview | Duck slider + duck flag on monitor | 🔶 | **Descript** — duck slider + preview (UI). |
-| Tag section as “chapter” for YouTube | Rename the scene heading; Export → **Chapters · YouTube** copies `0:00 Title` lines | ✅ | **Descript** — chapters (UI). |
-| Tag section as “hook” / “CTA” | Protect → **Hook** / **CTA** paint; N hops them with notes | ✅ | **Opus Clip** — highlight hooks (functional). |
-| Note marker on timeline (UI paint) | Timeline **Note**; Protect → Note | ✅ | **Premiere** — marker comments (UI). |
+| Tag section as “chapter” for YouTube | Rename the scene heading; **Copy chapters** on the bar or transcript copies `0:00 Title` lines | ✅ | **Descript** — chapters (UI). |
+| Tag section as “hook” / “CTA” | Type a note (`hook`, `ask`, …). N hops tape notes. Old Hook/CTA tags still hop and edit. | ✅ | **Premiere** — marker comment (functional). Not a separate paint kind — a note is the mark. |
+| Note marker on timeline (UI paint) | **Note** on the bar; Timeline **Note**; Protect → Note; type hook, ask, or why you parked | ✅ | **Premiere** — marker comments (UI). |
 | “Apply to similar pauses” from gap inspector | Clean N pauses | 🔶 | **ux_helper** — batch intelligence (UI). |
 | “Apply to similar fillers” | **Cut N fillers** | ✅ | **Cleanvoice** — global filler (UI). |
 | Compare takes side-by-side (split view) | Loop takes A ↔ B (one monitor) | 🔶 | **Descript** — compare (UI). |
@@ -1022,8 +1028,8 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 | “Use another take” from transcript search | Find scene + Use later take | 🔶 | **feature_explosion** — semantic (vision). |
 | Edit by transcript outline (sections tree) | Scene chips in the script | 🔶 | **Descript** — sidebar outline (UI). |
 | Drag scene boundaries | Drag handles on a chapter block in the Edits lane | ✅ | **Descript** — scene edges (UI). |
-| Merge scenes | Selected heading **Merge prev/next**; inspector; palette | ✅ | **Descript** — merge scenes (functional). Toast points at YouTube chapters. |
-| Split scene at playhead | Selected heading **Split**; inspector **Split chapter here**; palette | ✅ | **Descript** — split scene (UI). Parks must be inside the chapter. Clicking the heading keeps the playhead if you are already inside. The new half opens Rename. |
+| Merge scenes | Suggest bar **Merge {neighbor}** on a heading or words; right-click heading; inspector; Sequence; palette | ✅ | **Descript** — merge scenes (functional). The button names the other card. The joined chapter plays. Toast names **Copy chapters**. Skips retake neighbors. |
+| Split scene at playhead | Suggest bar **Split chapter** on a parked word; right-click heading → **Split**; inspector; Sequence; palette | ✅ | **Descript** — split scene (UI). A word is enough — no heading required. A heading highlight does not steal a playhead cut inside the chapter. The new half opens Rename. |
 | Generate episode title from content | Not in live app | 📋 | **Descript** — AI titles (functional). |
 | Summarize selection for description | Agent can; no one-click | 📋 | **ChatGPT** — summarize (functional). |
 | Detect and list “uncertain” edits only | Review drawer groups | 🔶 | **Gmail** — priority inbox (UI pattern). |
@@ -1055,7 +1061,7 @@ These exist in `applyCommand` or run automatically; users cannot trigger them fr
 
 **What a headache user hit:** Playing lost the word. Typos needed one-by-one edits. Fillers hid in Review. Chapters could not split.
 
-**What we shipped:** Follow (scroll pauses it), find/replace, Cut N fillers, Dismiss all, Note paint, Split/Merge chapter. Drag chapter edges on the Edits lane. Vertical 9:16 + Safe boxes for caption placement. **Hook** / **CTA** paint. Content package export. Remaining CV / record / translate items are still planned — no toy stubs.
+**What we shipped:** Follow (scroll pauses it), find/replace, Cut N fillers, Dismiss all, Note on the word row, Split/Merge chapter. Drag chapter edges on the Edits lane. Vertical 9:16 + Safe boxes for caption placement. Note (type hook, ask, or why you parked). Content package export. Remaining CV / record / translate items are still planned — no toy stubs.
 
 ---
 

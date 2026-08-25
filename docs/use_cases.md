@@ -455,13 +455,13 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 1. Client demo / progress videos — now
 
 1. Drop the screen recording. Let analysis land. Safe pauses still clean. Quiet click-throughs (picture changed, no talk) stay for review — they are not auto-cut.
-2. Review those leftovers: **Silent demo** keeps a walkthrough, **Speed 4×** compresses a wait, **Cut** drops fidgets, **Keep** protects a think-aloud or hold so Clean will not recut it. Paint **Silent demo** (`Shift+G`) only if a stretch was missed.
-3. Suggest bar: **Clean N pauses** (or Balanced/Tight) and **Cut N fillers**. First-edit already drops false takes. After leftovers, Review hears the dropped take — **Put back** if that line was the good one, or **Use later take** if a restart is still live. **Find retakes** only if the reel has no retake scenes yet.
-4. Walk the script. Click the restart line — **Cut previous sentence** on the words (or `,`) drops the short line before it. `.` cuts this sentence. Leftover quiet click-throughs show as a pause chip — click for **Silent demo / Speed / Cut / Keep**, double-click cuts. A pause first-edit already removed reads as cut — double-click puts it back. Double-click will not eat a silent demo in the same gap. Speed leftover stills from Review (**Speed N×**).
-5. Park on the important UI — click the silent-demo chapter (or pause on it). **Add zoom** on the heading or the suggest bar punches in on that walkthrough. A word selection punches in on those words. Otherwise 3s from the playhead. Scale is in Transform. Repeat on the next control. **Add title** puts a 3s card at the start and focuses the subject line — type it.
-6. Captions already land from the remaining words. Fix a wrong name in the transcript — the caption card follows. **Watch edited reel** starts at 1.5× so you can skim. Switch to 1× on the monitor to hear a line. **Export** on the suggest bar (or Export → Video · MP4). Captions burn into the picture unless you uncheck that.
+2. Review those leftovers on the bar: **Hear leftover** is the first job, even before Clean. It loops the current wait. Then the bar is only that leftover’s decisions — **Silent demo** keeps a walkthrough, **Speed 4×** compresses a wait, **Cut leftover** drops a fidget, **Keep leftover** protects a think-aloud. Each decision loops the next leftover. A leftover chip does the same hear-then-decide. Paint **Silent demo** (`Shift+G`) only if a stretch was missed.
+3. The last leftover names the next job: **Clean N pauses** (or **Apply N safe** if leftovers already landed) and **Cut N fillers**. First-edit already drops false takes. **Collapse retakes** / **Review N retake** is on the row after leftovers if takes still need a pick. **Review** hears that take immediately — leftover leftover is gone — then **Use later take** if a restart is still live, or **Put back** if that line was the good one. After the last take, the drawer closes and names Clean / fillers / Watch — not Review the take you just dropped. Close with **×**, a click outside, or Esc. **Find retakes** only if the reel has no retake scenes yet.
+4. Walk the script. Click the restart line — **Cut previous** on the bar (or `,`) drops the short line before it and plays the join. Click a bad line — **Cut sentence** on the bar (or `.`) drops that spoken line and plays the join. Leftover quiet click-throughs show as a pause chip — click for **Silent demo / Speed / Cut / Keep**, double-click cuts. A pause first-edit already removed reads as cut — double-click puts it back. Double-click will not eat a silent demo in the same gap. **Cut leftover** / **Keep leftover** / **Speed 4×** on the bar do the same without opening Review.
+5. Park on the important UI — click the silent-demo chapter (or pause on it). **Add zoom** on the bar punches in on that walkthrough. A word selection punches in on those words. Otherwise 3s from the playhead. The punch-in loops on the picture — **1.2× / 1.45× / 2×** are on the monitor. Repeat on the next control. **Add title** puts a 3s card at the start and opens the subject on the picture — type it.
+6. Captions already land from the remaining words. **Caption remaining** fills empty stretches and parks the first block on the picture — fix a wrong name in the transcript and the card follows, or type the line on the picture. **Export SRT** then takes that slot — upload it next to the MP4. **Watch edited reel** starts at 1.5× so you can skim. Switch to 1× on the monitor to hear a line. **Normalize** sits next to Export — Clean already turned it on; click it off to leave the recording as-is. **Export** on the suggest bar (or Export → Video · MP4). If the reel has no file on disk — the studio demo — **Download the words** saves captions, transcript, and chapters. M4A / MP4 need a linked recording and the desktop app. Captions burn into the picture unless you uncheck that. The sheet still shows **Normalize -16 LUFS**.
 
-**You live with:** messy cursor, no auto-zoom on the control they named, no “failed click” detector. Quiet click-throughs now land in Review (Silent demo / Speed / Cut / Keep) instead of disappearing in first-edit. Paint is only for what analysis missed.
+**You live with:** messy cursor, no auto-zoom on the control they named, no “failed click” detector. Quiet click-throughs land on the bar (Silent demo / Speed / Cut leftover / Keep leftover) instead of disappearing in first-edit. Paint is only for what analysis missed.
 
 ---
 
@@ -469,9 +469,9 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 1. Drop the VOD. This will take a while. Do not edit until the transcript exists.
 2. Clean pauses/fillers only if you want a watchable VOD later. For clips, skip the full tighten — you are mining, not polishing the night.
-3. Hunt: ⌘F for “clip that,” “oh my god,” names, boss names. **Hear** or Enter loops the sentence around the hit — typing does not restart audio. › is the next hit. **Copy quote** if you need the line in chat. Click scene headings to hear a chapter. There is no ranked kill/laugh card.
-4. When a moment is real: **Mark clip** on the find bar (or **M** if Find is not focused). I/O still works. **Caption remaining** on the bar fills words around any title you already placed. Then **Export marked range** — the sheet opens with Marked range only already on.
-5. **Clear marks** on the same bar (or **M** with no words selected). Find focuses so you can hunt the next line, then **Mark clip** again. Repeat. **9:16** on that bar (or Export → Vertical 9:16) is a centered tall frame — drag X/Y to pick the face. Safe turns on so captions stay inside.
+3. Hunt: ⌘F for “clip that,” “oh my god,” names, boss names. **Hear** or Enter loops the sentence around the hit — typing does not restart audio. › is the next hit. **Hit → Copy quote** pastes that whole line with speaker and time — not just the search word. Paste it, or **Hit → Mark clip**. Click scene headings to hear a chapter. There is no ranked kill/laugh card.
+4. When a moment is real: click the heading or the words — **Mark clip** on the bar (or **Hit → Mark clip**, or **M** if Find is not focused). I/O still works. The clip loops. Then **Export marked range** — the sheet opens with Marked range only already on.
+5. **Clear marks** on the same bar (or **M** with no words selected). If Find still has the phrase, the next hit plays — **Mark clip** again. The last hit focuses Find so you can type another line. Repeat. **9:16** on that bar (or Export → Vertical 9:16) is a tall frame — **Left / Center / Right** on the picture, or drag it. Safe turns on so captions stay inside.
 6. Upload each MP4 yourself. There is no clip pack.
 
 **You live with:** hours of searching, no chat/game-state score, no batch export. 9:16 is a centered punch-in, not face tracking. The transcript is the index.
@@ -482,10 +482,10 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 1. Drop the long-form master (or the raw A-roll).
 2. Clean fillers. Leave pace **Natural** so clips still breathe.
-3. Walk scene headings. A scene that is a complete thought is a candidate. ⌘F for the line you already know is the hook.
-4. **Mark clip** on the heading or the words (or **M**). Cut the throat-clearing inside the marks (delete words, or agent: cut the exact phrase).
-5. **9:16** on the bar after marks (or Export → Vertical 9:16 / Picture → Vertical 9:16). The tape becomes a tall frame, centered — drag X/Y if the face is off. Captions on. **Export marked range** — the sheet already has Marked range only checked.
-6. Save As if you want a second clip project, or **Clear marks** on the bar (or **M** with no selection) and hunt the next hook on the same reel.
+3. Walk scene headings. A scene that is a complete thought is a candidate. ⌘F for the line you already know is the hook. Click the line — **Note** on the bar — type `hook`. The toast names **N** to hop back, or **Mark clip** if that line should ship.
+4. **Mark clip** on the heading or the words (or **M**). The clip loops. Cut the throat-clearing inside the marks (delete words, or agent: cut the exact phrase).
+5. **9:16** on the bar after marks (or Export → Vertical 9:16 / Picture → Vertical 9:16). The tape becomes a tall frame — **Left / Center / Right** on the picture, or drag it if the face is off. Captions on. **Export marked range** — the sheet already has Marked range only checked.
+6. Save As if you want a second clip project, or **Clear marks** on the bar (or **M** with no selection). The next Find hit plays if the phrase is still open — **Mark clip** again.
 
 **You live with:** no hook scores, no self-contained-boundary detector, no face track, no 15/30/60 variants from one click. 9:16 is a centered frame you can drag.
 
@@ -494,11 +494,11 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 4. Software tutorials / coding videos — now
 
 1. Drop the recording. **Add B-roll** on the bar (or Sequence) for a face cam — it is not a synced second camera. The picture lands silent in the corner from the playhead (or on the selected words/chapter). Drag it. Raise clip volume only if it should duck the voice.
-2. Paint **Silent demo** on compile/install waits you want sped, not deleted — or leave them for Review **Speed N×** (static). Protect the first error you actually explain.
+2. Paint **Silent demo** on compile/install waits you want sped, not deleted — or leave them and tap **Speed 4×** on the bar. Protect the first error you actually explain.
 3. First-edit drops false takes. Review hears the dropped attempt — **Put back** if that error was the teaching point, or **Keep this take** / **Use later take** on a live restart. **Find retakes** only if none were marked.
 4. Script pass: delete “hold on, let me Google that,” repeated explanations, the failed path after the one you kept. Tighten remaining pauses.
-5. Manual **Add zoom** on unreadable code. Click a scene heading → **Rename** (or F2 / double-click the name) and type the YouTube chapter. **Caption remaining** on the bar (or Sequence → Caption remaining words) fills the tape. Titles stay.
-6. Export MP4 + SRT. **Chapters · YouTube** copies timestamps — paste them into the description. YouTube needs 0:00 first; we snap the opening chapter and skip headings closer than 10s.
+5. Manual **Add zoom** on unreadable code. Right-click a scene heading → **Rename** (or F2 / double-click the name) and type the YouTube chapter — **Enter** opens the next heading. **Caption remaining** on the bar (or Sequence → Caption remaining words) fills the tape. Titles stay.
+6. Export MP4. After **Caption remaining**, **Export SRT** is on that same finish row — it copies the captions and downloads the file. Upload it next to the MP4. **Copy chapters** pastes timestamps — drop them into the description. YouTube needs 0:00 first; we snap the opening chapter and skip headings closer than 10s.
 
 **You live with:** you decide which error is pedagogical. No OCR, no “compress all builds,” no zoom-to-this-line.
 
@@ -509,7 +509,7 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 1. Drop the screen recording.
 2. Silent-demo the click-throughs. Clean pauses and fillers. Collapse retakes.
 3. Watch once. Everywhere the cursor is lost or the UI is small, **Add zoom** at playhead. Tighten dead navigation by selecting those words/pauses and Remove / Make shorter.
-4. **Add title** on the bar, type the subject. **Add lower third** is next to it — type the product name. The name sits after the title if you are still on the card, or at the playhead if you are in the walkthrough. Change fill/stroke on one card, then **Apply style to all titles**. No brand kit — you set colors by hand.
+4. **Add title** on the bar after leftovers, type the subject on the picture. **Add lower third** is on that same finish row until one name exists — or on a selected chapter / words. The card covers that beat. The speaker name is already on it; type the product over it. **Fill** and **Stroke** sit on the tape. **Apply style** copies that look onto every title — not the seat (a title stays a title). The next card plays. Export when they match. No brand kit — you set colors by hand.
 5. **Normalize** on the bar after the first edit — Clean already turns it on; click it off to leave the recording as-is. Export 16:9 MP4 with burnt captions. The sheet shows **Normalize -16 LUFS** so the last step stays inspectable.
 
 **You live with:** Tella-ish only if you place every zoom. Cursor stays whatever they recorded.
@@ -518,11 +518,11 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 ### 6. Meetings → useful video recap — now
 
-1. Drop the Zoom/Meet file. Click a speaker chip → **Rename** (or F2 / double-click) and type the real name. The transcript export uses that name.
+1. Drop the Zoom/Meet file. Right-click a speaker chip → **Rename** (or F2 / double-click) and type the real name. **Enter** opens the next voice. The last name points at **Copy notes**. Paint the words that belong to a voice, then click that chip — the stretch plays and the toast names **Copy notes**. Right-click → **Remove** drops an extra voice; those words go to the remaining speaker.
 2. Clean pauses and fillers. Put back any pause that was someone thinking before a decision.
-3. There is no topic map. Skim scene headings and the script. Triple-click a tangent (or **A**) — it loops so you can hear it — then **Delete** or **Remove paragraph**. Or agent: **“remove the part about scheduling.”** Repeat per tangent.
+3. There is no topic map. Skim scene headings and the script. Triple-click a tangent (or **A**) — it loops so you can hear it — then **Remove paragraph** on the bar (or Delete). The join plays. Or agent: **“remove the part about scheduling.”** Repeat per tangent.
 4. For a short recap: keep going until only decisions remain — or mark I/O around each decision and export several marked ranges, then you’re assembling elsewhere.
-5. **Copy notes** on the transcript (or Export → Transcript · Markdown) — paste into Slack or Notion. That MD is the action-item doc; you copy owners out by hand. Export the MP4 if they also want the video.
+5. **Copy notes** on the bar after leftovers (or Transcript **Copy**) — paste into Slack or Notion. The MD has chapter headings, then speaker turns. Marks you typed on the tape land as quotes in that paste. You copy owners out by hand. Export the MP4 if they also want the video.
 
 **You live with:** no decisions/questions/actions extractor, no 5-minute recap button. Condensing is delete-by-paragraph.
 
@@ -530,10 +530,10 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 ### 7. Podcasts / video podcasts — now
 
-1. Drop the mixed file (or the best camera+mix). Click each speaker chip → **Rename** (host vs guest). Separate mics are not a multi-cam switcher — **Add take** only appends another A-roll, it does not cut between cameras.
-2. Clean pauses (Natural or Balanced). **Cut N fillers**. Review leftover breaths.
-3. Script pass for crosstalk and tangents (delete, or agent topic cut). **Rename** a heading (or F2). Park in the chapter and **Split** for Q&A / the next beat — type the new heading. **Merge prev/next** if two cards should be one.
-4. Captions. **Add lower third** on the bar for a guest name. After the first edit, **Chapter names** puts a lower third on every heading — edit any one, then **Apply style to all titles**. If the reel is audio, **Export audio** on the bar opens the sheet with **Audio only · M4A** already on. Otherwise Export MP4 + SRT + chapters.
+1. Drop the mixed file (or the best camera+mix). Right-click the first speaker chip → **Rename** (host vs guest). **Enter** opens the next voice. Paint a turn and click the chip to give those words to that voice — the stretch plays. **Remove** drops a leftover voice. Separate mics are not a multi-cam switcher — **Add take** only appends another A-roll, it does not cut between cameras.
+2. Clean pauses (Natural or Balanced). **Cut N fillers**. After picture leftovers, the next leftover is a breath — **Hear breath** (or **N breaths**) on the bar loops it. **Cut breath** if it hisses, **Keep breath** if the line should still breathe. Review → Keep all breaths still leaves them in the reel.
+3. Script pass for crosstalk and tangents (delete, or agent topic cut). Right-click a heading → **Rename** (or F2). Click the first question — **Split chapter** on the bar. Type the new heading. Park on a card that should join its neighbor — the bar names **Merge Thesis** (or the next heading). The joined chapter plays. **Copy chapters** if the timestamps should ship.
+4. Captions. After the first edit, **Chapter names** puts a lower third on every heading and opens the first name on the picture — type it, or **Enter** to keep the heading and open the next. Fill and Stroke are on the tape. After the last name, **Apply style** copies that look onto every card. **Add music** from **More** (or Sequence) lays a bed from the playhead under the voice — clip volume is in Picture. If the reel is audio, **Export audio** on the bar opens the sheet with **Audio only · M4A** already on. A reel with no file on disk downloads the words instead. Otherwise Export. **Copy chapters** is on that same finish row. After **Caption remaining**, **Export SRT** takes that slot.
 5. Clips: I/O around a quote, export marked range, repeat. Crop for social by hand.
 
 **You live with:** no auto camera switch, no crosstalk tool, no clip factory. Episode polish is strong; the clip pack is manual.
@@ -544,9 +544,9 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 1. Drop the employee recording.
 2. Silent-demo the actual clicking. Clean pauses. Collapse the “wait, wrong button” retakes. Delete the staging-URL wander.
-3. **Split** at each step if the recording ran on. **Rename** each heading (“1. Open billing,” “2. Add seat”). Those headings *are* the outline.
-4. **Add zoom** on the button they must hit. Park on the email or customer field — **Add redaction** on the heading or the bar covers that stretch. Drag the box over the text. Captions on.
-5. **Copy frame** on each step you need in the write-up. Export MP4 + chapters. **Copy notes** and rewrite the MD into an SOP in Notion. The video and the doc will drift the next time the UI changes.
+3. Click the start of the next step — **Split chapter** on the bar. Type the new heading (“1. Open billing,” “2. Add seat”). Those headings *are* the outline. **Merge** the neighbor’s name if two steps should stay one card — the joined chapter plays so you can hear the step.
+4. **Add zoom** on the button they must hit. Park on the email or customer field — **Add redaction** on the bar covers that stretch. The blur is on the picture — drag it over the text. Small / Med / Large changes the size. Captions on.
+5. Park on a step heading (or the words). **Copy frame** on the bar — the picture matches that step, with the chapter name and the line under it. Paste it, or drop the PNG if copy is blocked. **Note** on that same row drops a chip and focuses it — type the field they must fill. A silent heading still gets a chip on the chapter. Right-click the chip to rewrite or remove. **Copy notes** pastes those marks as quotes under the chapter. Export MP4. **Copy chapters** on the finish row pastes the outline. The video and the doc will drift the next time the UI changes.
 
 **You live with:** no step extractor, no button annotations, no SOP from the timeline.
 
@@ -556,9 +556,9 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 1. Drop the lecture.
 2. Clean pauses. Cut fillers. **Find retakes** if they restated the same sentence.
-3. Scene pass: **Rename** headings to lesson beats. Hear both explanations, then **Remove scene** or **Delete** on the weaker heading — that cuts the whole chapter, not just the words. The next heading loops so you can keep the winner.
+3. Scene pass: **Rename** headings to lesson beats — **Enter** keeps a title and opens the next heading. Click the weaker explanation — **Remove scene** on the bar. That cuts the whole chapter, not just the words. The next heading plays so you can keep the winner.
 4. For a shorter review cut: Save As, then keep deleting until it feels like a recap — two projects, not a branch.
-5. Captions. Export MP4 + SRT + chapters to the LMS.
+5. Captions. **Caption remaining** on the bar fills the tape. Export MP4. **Export SRT** takes that slot — copies the captions and downloads the file for the LMS. **Copy chapters** pastes the lesson timestamps.
 
 **You live with:** no repetition detector, no slide-aware cuts, no quiz markers, no “condensed sibling” from one source.
 
@@ -567,9 +567,9 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 10. Webinars / live presentations — now
 
 1. Drop the recording.
-2. Mark I/O on “we’ll start in two minutes” / mute chaos / screenshare fail. **Cut marked** on the bar removes it and closes the gap. Repeat until the talk starts.
-3. Clean pauses/fillers on what’s left. Park at the first question and **Split** the chapter — type **Q&A**. Delete dead questions from the script.
-4. Rename scenes for the replay chapters. Captions. Export the evergreen MP4 + chapters.
+2. Mark I/O on “we’ll start in two minutes” / mute chaos / screenshare fail — **Mark clip** on the heading or the words. **Cut marked** on the bar removes it and closes the gap. The join plays. **Mark clip** on the next stretch. **Tighten marked** shortens the waits but keeps the talk — In–Out shrinks with the clip, the result plays, then **Cut marked** or **Export marked range**. Protected demo stays. Repeat until the talk starts.
+3. Clean pauses/fillers on what’s left. Click the first question — **Split chapter** on the bar. Type **Q&A**. Delete dead questions from the script.
+4. **Rename** scenes for the replay chapters — **Enter** walks each heading. Captions. Export the evergreen MP4. **Copy chapters** pastes the replay timestamps.
 5. For reusable answers: I/O each good Q&A, export marked range.
 
 **You live with:** you classify housekeeping vs talk vs Q&A with your eyes. The recipe is a pile of Cut marked.
@@ -579,10 +579,10 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 11. Sales calls / product demos — now
 
 1. Drop the Gong/Zoom.
-2. Click each speaker chip → **Rename** (AE vs prospect). Light pause clean — don’t Tight-cut a discovery call to mush.
-3. ⌘F: price, competitor, “show me,” feature names. **Hear** (or Enter) the sentence around the hit. **Copy quote** on a keeper if the deck needs the line (speaker + time). Agent: **“remove the part about”** only if you are making one recap, not a library.
-4. **Mark clip** on each keeper (or I/O / **M**). **Caption remaining** if the monitor still has empty stretches. **Export marked range** on the bar.
-5. **Clear marks** (same bar, or **M** with no selection). Find focuses — hunt the next line and **Mark clip** again. Drop files into the enablement folder. Tag them in that folder’s naming scheme.
+2. Click the first speaker chip → **Rename** (AE vs prospect). **Enter** opens the next voice. Paint a turn and click the chip to give those words to that voice. Light pause clean — don’t Tight-cut a discovery call to mush.
+3. ⌘F: price, competitor, “show me,” feature names. **Hear** (or Enter) the sentence around the hit. **Hit → Copy quote** (or the word / suggest bar) pastes that line — speaker + time. Toast names **Mark clip** if the moment should ship. Agent: **“remove the part about”** only if you are making one recap, not a library.
+4. **Mark clip** on each keeper (or I/O / **M**) — it is on the bar when a heading or words are selected. The clip loops. **Export marked range** on the bar.
+5. **Clear marks** (same bar, or **M** with no selection). The next Find hit plays if the phrase is still open — **Mark clip** again. The last hit focuses Find so you can type another line. Drop files into the enablement folder. Tag them in that folder’s naming scheme.
 
 **You live with:** no objection/topic index. Search is words, not “every pricing pushback.”
 
@@ -591,10 +591,10 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 12. User research / interviews — now
 
 1. Drop **one** session (no corpus). Repeat the whole path per file.
-2. Don’t auto-cut think-aloud silence — paint **Protect** on long quiet clicking before Clean. If Clean already ate it, click the **pause · cut** chip → **Protect** (or **B**). That puts the air back and keeps Auto Edit from cutting it again. **Put back** alone only restores it until the next clean.
-3. ⌘F the symptom words (“checkout,” “confused,” “I expected”). **Hear** (or Enter / ›) loops the sentence around each hit — typing only parks. **Copy quote** pastes speaker + time. **Mark clip** on the same bar if it should be a clip — then export marked range. **Copy frame** if the deck needs the picture.
+2. Don’t auto-cut think-aloud silence — paint **Protect** on long quiet clicking before Clean. If Clean already ate it, click the **pause · cut** chip — **Protect pause** on the bar puts that air back, loops it, and keeps Auto Edit from cutting it again. **More → Protect pause** still takes the longest cut if you have not parked. **B** and the chip **Protect** are the same action. **Put back** alone only restores it until the next clean.
+3. ⌘F the symptom words (“checkout,” “confused,” “I expected”). **Hear** (or Enter / ›) loops the sentence around each hit — typing only parks. **Hit → Copy quote** pastes that whole line — speaker + time. **Hit → Copy frame** parks on the hit and copies the picture with the line. **Hit → Mark clip** if it should be a clip — then export marked range.
 4. Stitch a reel only by exporting clips and dropping them into a new reel as B-roll, in order — painful, but possible.
-5. **Copy notes** for the interview doc. Paste into Notion.
+5. **Copy notes** on the bar — the paste has chapter headings, speaker turns, and any marks you typed. Drop it into Notion.
 
 **You live with:** no “struggled with checkout” across speech + UI state, no session set, no evidence-reel assembler.
 
@@ -603,9 +603,9 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 13. Customer support / bug reproduction — now
 
 1. Drop the support Loom.
-2. Watch or scan the script for the error. Protect that span (click the cut pause → **Protect** if Clean already took it). Mark I/O on the wander before and after — **Cut marked** on the bar drops the dead ends.
+2. Watch or scan the script for the error. Click the **pause · cut** chip around the bug — **Protect pause** on the bar puts that think-aloud back and loops it. **More → Protect pause** if you want the longest cut without parking. **Mark clip** on the wander before and after — **Cut marked** on the bar drops the dead ends. The join plays so you can mark the next wander.
 3. Tighten remaining pauses. **Add zoom** on the error UI. **Add redaction** on the same bar or heading — drag the box over PII.
-4. **Copy frame** on the monitor — paste the picture (and the line) into the ticket. **Copy notes** for the script. Export the short MP4 if they also want the clip.
+4. **Copy frame** on the selected words or heading — paste the picture and the line into the ticket, or drop the PNG. **Copy notes** on the finish row pastes the script with chapter headings. Export the short MP4 if they also want the clip.
 
 **You live with:** no action/UI-state detector, no auto steps. The frame is a still of the player, not a tagged UI state.
 
@@ -615,8 +615,8 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 
 1. Drop the session. Commentary-heavy audio will still transcribe; game-only stretches are silent scenes — you can **Remove scene** or speed them from Review.
 2. Clean commentary fillers. Do **not** Collapse retakes blindly: a “retake” might be a death you need, or the win.
-3. Hear scene headings around the fight. **Remove scene** or **Delete** on wipes/inventory/travel — the whole chapter goes, then the next heading plays. Keep the successful attempt; delete earlier tries from the script.
-4. Speed leftover stills/loads if they landed as static suggestions. Captions on the talk. Rename scenes as encounter chapters.
+3. Hear scene headings around the fight. Click a wipe or inventory beat — **Remove scene** on the bar. The whole chapter goes; a retake next door is skipped. The next talk plays. Keep the successful attempt; delete earlier tries from the script.
+4. **Speed 4×** leftover stills/loads on the bar if they landed as static suggestions. Captions on the talk. Rename scenes as encounter chapters.
 5. Export 16:9 + chapters.
 
 **You live with:** no death/win/loading detector. You are the encounter editor.
@@ -626,8 +626,8 @@ Same 15 jobs. Same destination. More clicking. Some jobs stop at “good enough�
 ### 15. Recorded presentations / async updates — now
 
 1. Drop the Loom. Do not re-record.
-2. In the transcript, delete the bad sentence (`.` / **Remove**) or click the restart and **Cut previous sentence** (`,`). If they left a second take, first-edit already drops the false one. Review hears it — **Put back** if that was the good line. **Find retakes** → hear → **Use later take** only when no retake scenes exist yet.
-3. Review leftover quiet picture changes (**Silent demo** / **Speed** / **Cut**). **Clean N pauses**. Captions. Fix a name in the transcript — the card follows. One title if they want a subject line on screen.
+2. In the transcript, click the bad sentence — **Cut sentence** on the bar (or `.`) drops that line and plays the join. **Remove** still cuts only the words you painted. Click the restart — **Cut previous** on the bar (or `,`) drops the stumble and plays the join. If they left a second take, first-edit already drops the false one. **Review** hears that take — **Put back** if it was the good line — then **×** or Esc. **Find retakes** → hear → **Use later take** only when no retake scenes exist yet.
+3. Review leftover quiet picture changes. **Silent demo**, **Speed 4×**, **Cut leftover**, or **Keep leftover** on the bar. **Clean N pauses**. Captions. Fix a name in the transcript — the card follows. **Add title** if they want a subject on screen — type it on the picture. Park on a beat you still owe yourself — **Note** on the bar, type hook, ask, or why you parked. Right-click the chip to rewrite or remove.
 4. Play once. Export or send the MP4.
 
 **This is the use case we already serve.** Transcript edit + pause clean + captions is the product. Cursor/slide polish is still manual zoom or live with it.

@@ -16,7 +16,10 @@ import { findMovableClip, programLength } from './lib/commands'
 import { toastForCommand, toastForEdit } from './lib/contextActions'
 import { copySelectedClip, pasteClipboard } from './lib/clipClipboard'
 import { copyQuoteFromContext } from './lib/quote'
-import { hopNote, movableIds } from './lib/clipEdit'
+import { cutPreviousFromContext } from './lib/cutPrevious'
+import { cutThisFromContext } from './lib/cutSentence'
+import { hopNote, movableIds, notesSorted } from './lib/clipEdit'
+import { describeNoteHop } from './lib/noteEdit'
 import {
   discardRecovery,
   hydrateWorkspace,
@@ -30,7 +33,12 @@ import {
 } from './lib/documentIo'
 import { currentWord } from './lib/edl'
 import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
-import { bladeAtWord, playInOutOrSelection, selectParagraphFromContext } from './lib/scriptActions'
+import {
+  bladeAtWord,
+  cutParagraphFromContext,
+  playInOutOrSelection,
+  selectParagraphFromContext
+} from './lib/scriptActions'
 import { markClipFromContext } from './lib/marks'
 import { startSceneRename } from './lib/sceneRename'
 import { removeSceneFromContext } from './lib/sceneRemove'
@@ -39,9 +47,8 @@ import { protectFromContext } from './lib/protect'
 import { neighborScene } from './lib/sceneChip'
 import {
   extendSelection,
-  livePreviousSentence,
+  isParagraphSelection,
   sentenceIds,
-  sentenceRange,
   shrinkSelection,
   wordRange
 } from './lib/transcriptEdit'
@@ -117,11 +124,17 @@ export function App() {
   useEffect(() => {
     const onExportEvent = () => onExportClick()
     const onKeys = () => setKeysOpen(true)
+    const onToastEvent = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail
+      if (message) setToast(message)
+    }
     window.addEventListener('speechedit:export', onExportEvent)
     window.addEventListener('speechedit:shortcuts', onKeys)
+    window.addEventListener('speechedit:toast', onToastEvent)
     return () => {
       window.removeEventListener('speechedit:export', onExportEvent)
       window.removeEventListener('speechedit:shortcuts', onKeys)
+      window.removeEventListener('speechedit:toast', onToastEvent)
     }
   }, [])
 
@@ -340,7 +353,7 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         if (note) {
           e.preventDefault()
           playback.seekSource(note.start)
-          setToast(note.label || 'Note')
+          setToast(describeNoteHop(note.label, notesSorted(editor.project).length))
         }
         return
       }
@@ -416,16 +429,9 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         return
       }
       if ((e.key === '.' || e.key === '>') && !typing && !meta) {
-        const wordId =
-          editor.selectedWordIds[0] ??
-          currentWord(editor.project.transcript.words, programToSourceOf(editor.project, playback.programTime))?.id
-        if (wordId) {
-          e.preventDefault()
-          editor.dispatch({ type: 'cutSentence', wordId })
-          if (sentenceRange(editor.project.transcript.words, wordId)) {
-            setToast(toastForCommand({ type: 'cutSentence', wordId })!)
-          }
-        }
+        e.preventDefault()
+        const result = cutThisFromContext()
+        if (result.toast) setToast(result.toast)
         return
       }
       if ((e.key === ',' || e.key === '<') && !typing && !meta) {
@@ -434,9 +440,9 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
           currentWord(editor.project.transcript.words, programToSourceOf(editor.project, playback.programTime))?.id
         if (wordId) {
           e.preventDefault()
-          const hadLive = livePreviousSentence(editor.project.transcript.words, wordId)
-          editor.dispatch({ type: 'cutPreviousSentence', wordId })
-          if (hadLive) setToast(toastForCommand({ type: 'cutPreviousSentence', wordId })!)
+          if (!editor.selectedWordIds.length) editor.selectWords([wordId])
+          const result = cutPreviousFromContext()
+          if (result.toast) setToast(result.toast)
         }
         return
       }
@@ -483,6 +489,10 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
       }
       if ((e.key === 'x' || e.key === 'X') && !typing && !meta && editor.selectedWordIds.length) {
         e.preventDefault()
+        if (isParagraphSelection(editor.project.transcript.words, editor.selectedWordIds)) {
+          setToast(cutParagraphFromContext().toast)
+          return
+        }
         const cut = { type: 'toggleWords' as const, wordIds: editor.selectedWordIds, lift: !editor.ripple }
         const toast = toastForEdit(editor.project, cut)
         editor.dispatch(cut)
@@ -547,6 +557,10 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
         }
         if (editor.selectedWordIds.length) {
           e.preventDefault()
+          if (isParagraphSelection(editor.project.transcript.words, editor.selectedWordIds)) {
+            setToast(cutParagraphFromContext().toast)
+            return
+          }
           const cut = { type: 'toggleWords' as const, wordIds: editor.selectedWordIds, lift: !editor.ripple }
           const toast = toastForEdit(editor.project, cut)
           editor.dispatch(cut)

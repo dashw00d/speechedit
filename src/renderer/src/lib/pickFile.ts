@@ -100,6 +100,7 @@ export async function pickAudio(): Promise<Asset | null> {
         waveform: []
       })
     }
+    input.oncancel = () => resolve(null)
     input.click()
   })
 }

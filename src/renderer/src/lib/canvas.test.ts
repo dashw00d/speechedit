@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { createDemoProject } from './demo'
 import { coverCropOrigin } from './exportGraph'
 import { isVerticalFrame, setFrameFromContext, VERTICAL_FRAME, YOUTUBE_FRAME } from './canvas'
-import { useEditor } from '../store'
+import { useEditor, usePlayback } from '../store'
 
 describe('vertical 9:16 frame', () => {
   test('a tall canvas centers the cover crop so a 16:9 face is not left-aligned', () => {
@@ -24,6 +24,7 @@ describe('vertical 9:16 frame', () => {
     expect(isVerticalFrame(useEditor.getState().project)).toBe(false)
     const vertical = setFrameFromContext('vertical')
     expect(vertical.toast).toMatch(/9:16/)
+    expect(vertical.toast).toMatch(/Left, Center, or Right/)
     const editor = useEditor.getState()
     expect(editor.project.width).toBe(VERTICAL_FRAME.width)
     expect(editor.project.height).toBe(VERTICAL_FRAME.height)
@@ -31,5 +32,13 @@ describe('vertical 9:16 frame', () => {
     expect(isVerticalFrame(editor.project)).toBe(true)
     expect(setFrameFromContext('youtube').toast).toMatch(/16:9/)
     expect(useEditor.getState().project).toMatchObject(YOUTUBE_FRAME)
+  })
+
+  test('9:16 with marks loops the clip so you see it tall', () => {
+    useEditor.getState().loadProject(createDemoProject(), { clean: true })
+    useEditor.getState().dispatch({ type: 'setMarks', markIn: 0.42, markOut: 6.5 })
+    setFrameFromContext('vertical')
+    expect(usePlayback.getState().loopFrom).toBeCloseTo(0.42, 2)
+    expect(usePlayback.getState().playing).toBe(true)
   })
 })

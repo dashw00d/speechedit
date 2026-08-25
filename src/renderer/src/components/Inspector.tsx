@@ -27,13 +27,25 @@ import { applyCaptionStyleToAllFromContext } from '../lib/captionStyle'
 import { addSceneLowerThirdsFromContext, isLowerThirdCard, LOWER_THIRD_PLACEHOLDER } from '../lib/lowerThird'
 import { takeFamily } from '../lib/sceneAnalysis'
 import { neighborScene } from '../lib/sceneChip'
-import { toastForSceneRename } from '../lib/sceneRename'
-import { toastForSpeakerRename } from '../lib/speakerRename'
+import { describeNoteSaved } from '../lib/noteEdit'
+import { nextTalkChapter, startSceneRename, toastForSceneRename } from '../lib/sceneRename'
+import {
+  assignSpeakerFromContext,
+  nextSpeaker,
+  removeSpeakerFromContext,
+  startSpeakerRename,
+  toastForSpeakerRename
+} from '../lib/speakerRename'
 import { copyQuoteFromContext } from '../lib/quote'
+import { cutPreviousFromContext } from '../lib/cutPrevious'
+import { cutThisFromContext } from '../lib/cutSentence'
+import { cutParagraphFromContext } from '../lib/scriptActions'
+import { copyStillFromContext } from '../lib/still'
+import { exportSidecar, hasYouTubeChapters } from '../lib/exportActions'
 import { removeSceneFromContext } from '../lib/sceneRemove'
 import { protectFromContext } from '../lib/protect'
 import { describeRedaction, redactionCommand, redactionPlacement } from '../lib/redaction'
-import { mergeChapterFromContext, splitChapterFromContext } from '../lib/chapterShape'
+import { chapterMergeTarget, mergeChapterFromContext, splitChapterFromContext } from '../lib/chapterShape'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
   currentDocumentTitle,
@@ -74,6 +86,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const selectSuggestion = useEditor((s) => s.selectSuggestion)
   const selectScene = useEditor((s) => s.selectScene)
   const selectGap = useEditor((s) => s.selectGap)
+  const clearSelection = useEditor((s) => s.clearSelection)
   const setReviewing = useEditor((s) => s.setReviewing)
   const exporting = useEditor((s) => s.exporting)
   const analyzing = useEditor((s) => s.analyzing)
@@ -124,6 +137,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const sceneDetail = selectedSceneId ? sceneInspectorDetail(project, selectedSceneId) : null
   const scenePrev = selectedSceneId ? neighborScene(project.scenes ?? [], selectedSceneId, -1) : undefined
   const sceneNext = selectedSceneId ? neighborScene(project.scenes ?? [], selectedSceneId, 1) : undefined
+  const mergePrev = chapterMergeTarget(project, programTime, selectedWordIds, selectedSceneId, -1)
+  const mergeNext = chapterMergeTarget(project, programTime, selectedWordIds, selectedSceneId, 1)
   const selectedScene = selectedSceneId ? project.scenes.find((s) => s.id === selectedSceneId) : undefined
   const suggestionDetail = selectedSuggestionId
     ? suggestionInspectorDetail(project, selectedSuggestionId)
@@ -179,6 +194,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     if (overlayClip?.text !== TITLE_PLACEHOLDER && overlayClip?.text !== LOWER_THIRD_PLACEHOLDER) return
     const field = titleFieldRef.current
     if (!field) return
+    if (!field.closest('.inspector')?.contains(document.activeElement)) return
     field.focus()
     field.select()
   }, [overlayClip?.id, overlayClip?.text])
@@ -261,6 +277,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 if (!words.length) return
                 hearSource(Math.min(...words.map((w) => w.start)), Math.max(...words.map((w) => w.end)))
               }}
+              onClear={() => clearSelection()}
             />
             <p className="helper-excerpt">"{wordsDetail.excerpt}"</p>
             <HelperActions dispatch={dispatch} onToast={onToast} actions={wordsDetail.actions} onNavigate={compareTakes} />
@@ -273,6 +290,14 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               >
                 Copy quote
               </button>
+              <button
+                className="chip"
+                type="button"
+                title="Copy the picture and this line. Paste it into the write-up."
+                onClick={() => void copyStillFromContext().then((result) => onToast?.(result.toast))}
+              >
+                Copy frame
+              </button>
             </div>
             <HelperSection title="Adjust">
               {wordsDetail.speakerId != null && (
@@ -280,9 +305,10 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   <Field label="Speaker">
                     <select
                       value={wordsDetail.speakerId}
-                      onChange={(e) =>
-                        dispatch({ type: 'setSpeaker', wordIds: selectedWordIds, speakerId: e.target.value })
-                      }
+                      onChange={(e) => {
+                        const result = assignSpeakerFromContext(e.target.value)
+                        if (result.toast) onToast?.(result.toast)
+                      }}
                     >
                       {project.transcript.speakers.map((speaker) => (
                         <option key={speaker.id} value={speaker.id}>
@@ -302,11 +328,14 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                       onBlur={(e) => {
                         const speaker = project.transcript.speakers.find((row) => row.id === wordsDetail.speakerId)
                         if (!speaker) return
-                        const toast = toastForSpeakerRename(speaker.name, e.target.value)
-                        if (e.target.value.trim() && e.target.value.trim() !== speaker.name) {
-                          dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name: e.target.value.trim() })
+                        const name = e.target.value.trim()
+                        const follow = nextSpeaker(project, speaker.id)
+                        const toast = toastForSpeakerRename(speaker.name, name, follow?.name)
+                        if (name && name !== speaker.name) {
+                          dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name })
                         }
                         if (toast) onToast?.(toast)
+                        if (follow) startSpeakerRename(follow.id)
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -341,7 +370,25 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   {wordsDetail.scene.summary ? ` — ${wordsDetail.scene.summary}` : ''}
                 </p>
               )}
-              {wordsDetail.tag ? (
+              {wordsDetail.tag?.kind === 'note' ? (
+                <Field label="Note">
+                  <input
+                    key={wordsDetail.tag.id}
+                    type="text"
+                    defaultValue={wordsDetail.tag.label === 'Note' ? '' : wordsDetail.tag.label}
+                    placeholder="What should stay here?"
+                    autoFocus={wordsDetail.tag.label === 'Note'}
+                    onBlur={(e) => {
+                      dispatch({ type: 'setTagLabel', tagId: wordsDetail.tag!.id, label: e.target.value })
+                      const toast = describeNoteSaved(e.target.value)
+                      if (toast) onToast?.(toast)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                    }}
+                  />
+                </Field>
+              ) : wordsDetail.tag ? (
                 <p className="help" data-tag={wordsDetail.tag.kind}>
                   Protected · {wordsDetail.tag.label}. Auto Edit skips this.
                 </p>
@@ -402,6 +449,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               headline={sceneDetail.headline}
               detail={sceneDetail.clock}
               onHear={() => selectedScene && hearSource(selectedScene.start, selectedScene.end)}
+              onClear={() => clearSelection()}
             />
             <p className="help">{sceneDetail.explanation}</p>
             {sceneDetail.excerpt && <p className="helper-excerpt">"{sceneDetail.excerpt}"</p>}
@@ -415,9 +463,11 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   onBlur={(e) => {
                     const title = e.target.value.trim()
                     if (!title || !selectedSceneId) return
-                    const toast = toastForSceneRename(selectedScene?.title ?? '', title)
+                    const follow = nextTalkChapter(project, selectedSceneId)
+                    const toast = toastForSceneRename(selectedScene?.title ?? '', title, follow?.title)
                     dispatch({ type: 'renameScene', sceneId: selectedSceneId, title })
                     if (toast) onToast?.(toast)
+                    if (follow) startSceneRename(follow.id)
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -438,36 +488,54 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 />
               </Field>
               <div className="chips">
+                <button
+                  className="chip"
+                  type="button"
+                  title="Copy the picture and the line at the start of this chapter."
+                  onClick={() => void copyStillFromContext().then((result) => onToast?.(result.toast))}
+                >
+                  Copy frame
+                </button>
+                {hasYouTubeChapters(project) && (
+                  <button
+                    className="chip"
+                    type="button"
+                    title="Copy 0:00 timestamps. Paste into the YouTube description."
+                    onClick={() => void exportSidecar('chapters', onToast ?? (() => undefined))}
+                  >
+                    Copy chapters
+                  </button>
+                )}
                 {selectedScene &&
                   programToSourceOf(project, programTime) > selectedScene.start + 0.2 &&
                   programToSourceOf(project, programTime) < selectedScene.end - 0.2 && (
                     <button
                       className="chip"
                       type="button"
-                      title="Split this chapter at the playhead"
+                      title="Split this chapter at the selected words or the playhead"
                       onClick={() => onToast?.(splitChapterFromContext(selectedSceneId).toast)}
                     >
                       Split chapter here
                     </button>
                   )}
-                {scenePrev && (
+                {mergePrev && (
                   <button
                     className="chip"
                     type="button"
-                    title={`Join with ${scenePrev.title}`}
+                    title={`Join “${mergePrev.other.title}”. The joined chapter plays.`}
                     onClick={() => onToast?.(mergeChapterFromContext(-1, selectedSceneId).toast)}
                   >
-                    Merge with previous
+                    {`Merge ${mergePrev.other.title}`}
                   </button>
                 )}
-                {sceneNext && (
+                {mergeNext && (
                   <button
                     className="chip"
                     type="button"
-                    title={`Join with ${sceneNext.title}`}
+                    title={`Join “${mergeNext.other.title}”. The joined chapter plays.`}
                     onClick={() => onToast?.(mergeChapterFromContext(1, selectedSceneId).toast)}
                   >
-                    Merge with next
+                    {`Merge ${mergeNext.other.title}`}
                   </button>
                 )}
               </div>
@@ -509,13 +577,32 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               headline={gapDetail.headline}
               detail={gapDetail.clock}
               onHear={() => selectedGap && hearSource(selectedGap.start, selectedGap.end)}
+              onClear={() => clearSelection()}
             />
             <p className="help">{gapDetail.explanation}</p>
-            {gapDetail.tag && (
+            {gapDetail.tag?.kind === 'note' ? (
+              <Field label="Note">
+                <input
+                  key={gapDetail.tag.id}
+                  type="text"
+                  defaultValue={gapDetail.tag.label === 'Note' ? '' : gapDetail.tag.label}
+                  placeholder="What should stay here?"
+                  autoFocus={gapDetail.tag.label === 'Note'}
+                  onBlur={(e) => {
+                    dispatch({ type: 'setTagLabel', tagId: gapDetail.tag!.id, label: e.target.value })
+                    const toast = describeNoteSaved(e.target.value)
+                    if (toast) onToast?.(toast)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  }}
+                />
+              </Field>
+            ) : gapDetail.tag ? (
               <p className="help" data-tag={gapDetail.tag.kind}>
                 {gapDetail.tag.label}
               </p>
-            )}
+            ) : null}
             <HelperActions dispatch={dispatch} onToast={onToast} actions={gapDetail.actions} onNavigate={compareTakes} />
             {gapDetail.similarSafeCount > 1 && (
               <p className="help">{gapDetail.similarSafeCount} safe pauses can be cleaned from the bar below.</p>
@@ -529,6 +616,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             <HelperHead
               headline={suggestionDetail.headline}
               detail={suggestionDetail.clock}
+              onClear={() => clearSelection()}
               onHear={() => {
                 const sug = project.suggestions.find((s) => s.id === selectedSuggestionId)
                 if (sug) hearSource(sug.start, sug.end)
@@ -658,13 +746,25 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </Field>
                 {project.transcript.speakers.map((speaker) => (
                   <Field key={speaker.id} label={speaker.name}>
-                    <input
-                      type="text"
-                      value={speaker.name}
-                      onChange={(e) =>
-                        dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name: e.target.value })
-                      }
-                    />
+                    <div className="chips">
+                      <input
+                        type="text"
+                        value={speaker.name}
+                        onChange={(e) =>
+                          dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name: e.target.value })
+                        }
+                      />
+                      {project.transcript.speakers.length > 1 && (
+                        <button
+                          className="chip"
+                          type="button"
+                          title="Remove this speaker. Their words go to the remaining voice."
+                          onClick={() => onToast?.(removeSpeakerFromContext(speaker.id).toast)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                   </Field>
                 ))}
                 <button className="chip" onClick={() => dispatch({ type: 'addSpeaker' })}>
@@ -724,7 +824,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                       className="chip"
                       type="button"
                       data-active={isVerticalFrame(project)}
-                      title="Tall frame, centered. Drag X/Y to pick the face."
+                      title="Tall frame. Left, Center, or Right on the picture — or drag it."
                       onClick={() => onToast?.(setFrameFromContext('vertical').toast)}
                     >
                       Vertical 9:16
@@ -801,6 +901,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               headline="Hold"
               detail={`${formatClock(clip.duration)} of black / silence · later clips stay put`}
               onHear={() => playLoop(clip.start, clip.start + clip.duration)}
+              onClear={() => clearSelection()}
             />
             <HelperActions
               dispatch={dispatch}
@@ -840,6 +941,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               headline={clip.text || 'Picture segment'}
               detail={`${formatClock(clip.inPoint)}–${formatClock(clip.outPoint)} · program ${formatClock(clip.start)}–${formatClock(clip.start + clip.duration)}`}
               onHear={() => playLoop(clip.start, clip.start + clip.duration)}
+              onClear={() => clearSelection()}
             />
             <HelperActions
               dispatch={dispatch}
@@ -1367,6 +1469,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   ? () => playLoop(overlayClip.start, overlayClip.start + overlayClip.duration)
                   : undefined
               }
+              onClear={() => clearSelection()}
             />
             <button
               className="chip"
@@ -1453,7 +1556,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   className="chip"
                   onClick={() => onToast?.(applyCaptionStyleToAllFromContext().toast)}
                 >
-                  Apply style to all titles
+                  Apply style
                 </button>
               </>
             )}
@@ -1469,11 +1572,13 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
 function HelperHead({
   headline,
   detail,
-  onHear
+  onHear,
+  onClear
 }: {
   headline: string
   detail?: string
   onHear?: () => void
+  onClear?: () => void
 }) {
   return (
     <div className="helper-head">
@@ -1482,6 +1587,11 @@ function HelperHead({
         {onHear && (
           <button className="chip" type="button" title="Hear this" onClick={onHear}>
             Hear
+          </button>
+        )}
+        {onClear && (
+          <button className="chip" type="button" title="Deselect (Esc)" onClick={onClear}>
+            Clear
           </button>
         )}
       </div>
@@ -1550,6 +1660,12 @@ function HelperActions({
             if (action.navigate === 'compare-takes') onNavigate?.()
             else if (action.id === 'cut-scene' || action.id === 'restore-scene') {
               onToast?.(removeSceneFromContext().toast)
+            } else if (action.id === 'cut-prev') {
+              onToast?.(cutPreviousFromContext().toast)
+            } else if (action.id === 'cut-sentence') {
+              onToast?.(cutThisFromContext().toast)
+            } else if (action.id === 'cut-paragraph') {
+              onToast?.(cutParagraphFromContext().toast)
             } else if (action.command) {
               const before = useEditor.getState().project
               dispatch(action.command)

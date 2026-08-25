@@ -1,4 +1,5 @@
 import type { Project } from '../types'
+import { startPictureTextEdit } from './pictureText'
 import { useEditor, usePlayback } from '../store'
 
 export const TITLE_DURATION = 3
@@ -6,7 +7,7 @@ export const TITLE_PLACEHOLDER = 'Title'
 
 export function isTitleCard(clip: { text?: string; assetId?: string; start?: number; style?: { position?: string; fontSize?: number } } | undefined): boolean {
   if (!clip?.text || clip.assetId) return false
-  if (clip.text === 'ZOOM') return false
+  if (clip.text === 'ZOOM' || clip.text === 'REDACT') return false
   if (clip.style?.position === 'center' && (clip.style.fontSize ?? 0) >= 56) return true
   return clip.text === TITLE_PLACEHOLDER && (clip.start ?? 0) < 0.35
 }
@@ -26,7 +27,7 @@ function clipLooksLikeTitle(
   position?: string
 ): boolean {
   if (!text || auto || assetId) return false
-  if (text === 'ZOOM') return false
+  if (text === 'ZOOM' || text === 'REDACT') return false
   if (position === 'lower') return false
   return true
 }
@@ -58,9 +59,9 @@ export function titleLabel(project: Project): string {
 
 export function describeTitle(placement: TitlePlacement): string {
   if (placement.at === 'head') {
-    return 'Title at the start — 3 seconds. Type in the inspector.'
+    return 'Title at the start — 3 seconds. Type the subject.'
   }
-  return 'Title on the tape — 3 seconds from here. Type in the inspector.'
+  return 'Title on the tape — 3 seconds from here. Type the subject.'
 }
 
 export function applyTitleFromContext(): { toast: string; placement: TitlePlacement } {
@@ -73,5 +74,8 @@ export function applyTitleFromContext(): { toast: string; placement: TitlePlacem
     text: titleLabel(editor.project),
     preset: 'title'
   })
+  const clipId = useEditor.getState().selectedClipId
+  usePlayback.getState().seekProgram(placement.start + 0.15)
+  startPictureTextEdit(clipId)
   return { toast: describeTitle(placement), placement }
 }

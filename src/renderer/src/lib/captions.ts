@@ -257,10 +257,11 @@ export function lowerThirdClips(project: Project): Clip[] {
 }
 
 export function hasSceneLowerThirds(project: Project): boolean {
-  const wanted = lowerThirdClips(project)
-  if (wanted.length < 2) return false
+  const chapters = (project.scenes ?? []).filter((scene) => scene.kind !== 'retake')
+  if (chapters.length < 2) return false
   const overlay = project.tracks.find((track) => track.type === 'overlay')?.clips ?? []
-  return wanted.every((need) => overlay.some((clip) => clip.text === need.text))
+  const names = overlay.filter((clip) => Boolean(clip.text) && !clip.assetId && clip.style?.position === 'lower')
+  return names.length >= chapters.length
 }
 
 export function withLowerThirds(project: Project): Project {
@@ -386,17 +387,72 @@ export function projectToTranscriptTxt(project: Project): string {
     .trim()
 }
 
+/** Notes someone actually typed — not the empty “Note” placeholder. */
+export function typedTapeNotes(project: Project): { start: number; label: string }[] {
+  return (project.tags ?? [])
+    .filter((tag) => tag.kind === 'note')
+    .map((tag) => ({ start: tag.start, label: tag.label.trim() }))
+    .filter((note) => note.label && note.label !== 'Note')
+    .sort((a, b) => a.start - b.start)
+}
+
 export function projectToTranscriptMd(project: Project): string {
   const live = project.transcript.words.filter((w) => !w.deleted)
   const names = new Map(project.transcript.speakers.map((s) => [s.id, s.name]))
-  const turns: { speaker: string; words: string[] }[] = []
-  for (const word of live) {
-    const name = names.get(word.speaker) ?? prettySpeakerName(word.speaker)
-    const last = turns[turns.length - 1]
-    if (!last || last.speaker !== name) turns.push({ speaker: name, words: [word.text] })
-    else last.words.push(word.text)
+  const chapters = (project.scenes ?? [])
+    .filter((scene) => scene.kind !== 'retake')
+    .slice()
+    .sort((a, b) => a.start - b.start)
+  const notes = typedTapeNotes(project)
+  const parts: string[] = []
+  let chapter = -1
+  let noteAt = 0
+  let speaker: string | null = null
+  let lastSpeaker: string | null = null
+  let words: string[] = []
+
+  const flushSpeech = () => {
+    if (!speaker || !words.length) return
+    if (lastSpeaker !== speaker) {
+      parts.push(`## ${speaker}\n\n${words.join(' ')}\n`)
+      lastSpeaker = speaker
+    } else {
+      parts.push(`${words.join(' ')}\n`)
+    }
+    words = []
   }
-  return turns.map((turn) => `## ${turn.speaker}\n\n${turn.words.join(' ')}\n`).join('\n')
+
+  const emitNote = (label: string) => {
+    flushSpeech()
+    parts.push(`> ${label}\n`)
+  }
+
+  for (const word of live) {
+    while (chapter + 1 < chapters.length && chapters[chapter + 1]!.start <= word.start + 0.05) {
+      chapter += 1
+      flushSpeech()
+      speaker = null
+      lastSpeaker = null
+      const title = chapters[chapter]!.title.trim() || 'Chapter'
+      parts.push(`### ${title}\n`)
+    }
+    while (noteAt < notes.length && notes[noteAt]!.start <= word.start + 0.05) {
+      emitNote(notes[noteAt]!.label)
+      noteAt += 1
+    }
+    const name = names.get(word.speaker) ?? prettySpeakerName(word.speaker)
+    if (name !== speaker) {
+      flushSpeech()
+      speaker = name
+    }
+    words.push(word.text)
+  }
+  flushSpeech()
+  while (noteAt < notes.length) {
+    emitNote(notes[noteAt]!.label)
+    noteAt += 1
+  }
+  return parts.join('\n')
 }
 
 const YOUTUBE_CHAPTER_GAP = 10
