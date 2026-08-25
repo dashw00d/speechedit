@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "speechedit": {
+      "command": "bun",
+      "args": ["src/mcp/server.ts"],
+      "env": {
+        "SPEECHEDIT_PROJECT": "/home/ryan/.speechedit/current.speechedit.json"
+      }
+    }
+  }
+}

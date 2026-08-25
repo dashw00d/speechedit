@@ -1,0 +1,273 @@
+import { useEffect, useState } from 'react'
+import { Inspector } from './components/Inspector'
+import { MenuBar } from './components/MenuBar'
+import { Monitor } from './components/Monitor'
+import { Palette } from './components/Palette'
+import { Suggestions } from './components/Suggestions'
+import { Timeline } from './components/Timeline'
+import { Transcript } from './components/Transcript'
+import { host, isElectron } from './host'
+import { programLength } from './lib/commands'
+import { currentWord } from './lib/edl'
+import { buildExportJob } from './lib/exportJob'
+import { programToSourceOf, sourceToProgramOf } from './lib/resolver'
+import { extendSelection, wordRange } from './lib/transcriptEdit'
+import { currentProgramDuration, useEditor, usePlayback } from './store'
+
+export function App() {
+  const [toast, setToast] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+
+  useEffect(() => {
+    if (!toast) return
+    const id = setTimeout(() => setToast(null), 3600)
+    return () => clearTimeout(id)
+  }, [toast])
+
+  useHotkeys(setToast)
+
+  async function onExport() {
+    const project = useEditor.getState().project
+    const job = buildExportJob(project, '')
+    if (!job) {
+      setToast('Open media to export a program.')
+      return
+    }
+    if (!isElectron) {
+      setToast('Export needs the Electron app.')
+      return
+    }
+    const output = await host.chooseExport()
+    if (!output) return
+    setExporting(true)
+    const stop = host.onExportProgress((ratio) => setToast(`Export ${Math.round(ratio * 100)}%`))
+    try {
+      await host.exportProgram({ ...job, output })
+      setToast('Export finished — dissolves, captions, loudnorm, and hardware encode are in the file.')
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : 'Export failed.')
+    } finally {
+      stop()
+      setExporting(false)
+    }
+  }
+
+  return (
+    <div className="app">
+      <MenuBar onToast={setToast} onExport={onExport} exporting={exporting} />
+      <main className="workspace">
+        <Transcript />
+        <Monitor />
+        <Inspector onToast={setToast} />
+      </main>
+      <Timeline />
+      <Suggestions />
+      <Palette />
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  )
+}
+
+function useHotkeys(setToast: (msg: string) => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey
+      const target = e.target as HTMLElement
+      const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+      const editor = useEditor.getState()
+      const playback = usePlayback.getState()
+
+      if (meta && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        editor.setPalette(!editor.palette)
+        return
+      }
+      if (e.code === 'Space' && !typing) {
+        e.preventDefault()
+        playback.toggle()
+        return
+      }
+      if (meta && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        e.shiftKey ? editor.redo() : editor.undo()
+        return
+      }
+      if (meta && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        void host.saveProject(editor.project).then((path) => {
+          if (path) {
+            editor.markClean()
+            setToast('Saved.')
+          }
+        })
+        return
+      }
+      if (e.key === 'Home' && !typing) {
+        playback.seekProgram(0)
+        return
+      }
+      if (e.key === 'End' && !typing) {
+        playback.seekProgram(currentProgramDuration())
+        return
+      }
+      if ((e.key === 'i' || e.key === 'I') && !typing && !meta) {
+        const span = wordRange(editor.project.transcript.words, editor.selectedWordIds)
+        editor.dispatch({
+          type: 'setMarks',
+          markIn: span ? sourceToProgramOf(editor.project, span.start) : playback.programTime
+        })
+        return
+      }
+      if ((e.key === 'o' || e.key === 'O') && !typing && !meta) {
+        const span = wordRange(editor.project.transcript.words, editor.selectedWordIds)
+        editor.dispatch({
+          type: 'setMarks',
+          markOut: span ? sourceToProgramOf(editor.project, span.end) : playback.programTime
+        })
+        return
+      }
+      if ((e.key === 'm' || e.key === 'M') && !typing && !meta) {
+        const span = wordRange(editor.project.transcript.words, editor.selectedWordIds)
+        if (span) {
+          e.preventDefault()
+          editor.dispatch({
+            type: 'setMarks',
+            markIn: sourceToProgramOf(editor.project, span.start),
+            markOut: sourceToProgramOf(editor.project, span.end)
+          })
+          setToast('Marked the selected words. / loops them, Delete ripples them.')
+        }
+        return
+      }
+      if (e.key === '/' && !typing && !meta) {
+        e.preventDefault()
+        usePlayback.setState({ loop: !playback.loop })
+        setToast(playback.loop ? 'Loop off' : 'Loop I/O — or the whole reel if marks are empty.')
+        return
+      }
+      if ((e.key === 'g' || e.key === 'G') && !typing && !meta) {
+        e.preventDefault()
+        const next = editor.tool === 'guard' ? 'select' : 'guard'
+        editor.setTool(next)
+        if (e.shiftKey) editor.setGuardKind('demo')
+        setToast(next === 'guard' ? 'Guard brush — drag the tape or words before Auto Edit.' : 'Select tool')
+        return
+      }
+      if ((e.key === '.' || e.key === '>') && !typing && !meta) {
+        const wordId =
+          editor.selectedWordIds[0] ??
+          currentWord(editor.project.transcript.words, programToSourceOf(editor.project, playback.programTime))?.id
+        if (wordId) {
+          e.preventDefault()
+          editor.dispatch({ type: 'cutSentence', wordId })
+        }
+        return
+      }
+      if ((e.key === ',' || e.key === '<') && !typing && !meta) {
+        const wordId =
+          editor.selectedWordIds[0] ??
+          currentWord(editor.project.transcript.words, programToSourceOf(editor.project, playback.programTime))?.id
+        if (wordId) {
+          e.preventDefault()
+          editor.dispatch({ type: 'cutPreviousSentence', wordId })
+        }
+        return
+      }
+      if ((e.key === 't' || e.key === 'T') && !typing && !meta) {
+        const span =
+          wordRange(editor.project.transcript.words, editor.selectedWordIds) ??
+          (editor.project.markIn != null && editor.project.markOut != null
+            ? {
+                start: programToSourceOf(editor.project, Math.min(editor.project.markIn, editor.project.markOut)),
+                end: programToSourceOf(editor.project, Math.max(editor.project.markIn, editor.project.markOut))
+              }
+            : null)
+        if (span) {
+          e.preventDefault()
+          editor.dispatch({ type: 'tightenRange', start: span.start, end: span.end })
+          setToast('Tightened gaps — guarded demo/keep ranges stayed.')
+        }
+        return
+      }
+      if ((e.key === 'x' || e.key === 'X') && !typing && !meta && editor.selectedWordIds.length) {
+        e.preventDefault()
+        editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds })
+        return
+      }
+      if ((e.key === 'u' || e.key === 'U') && !typing && !meta) {
+        e.preventDefault()
+        const span = wordRange(editor.project.transcript.words, editor.selectedWordIds)
+        if (span) {
+          editor.dispatch({ type: 'restoreRange', start: span.start, end: span.end })
+          return
+        }
+        if (editor.selectedSuggestionId) {
+          editor.dispatch({ type: 'revertSuggestion', suggestionId: editor.selectedSuggestionId })
+        }
+        return
+      }
+      if ((e.key === 'b' || e.key === 'B') && !typing && !meta) {
+        const span =
+          wordRange(editor.project.transcript.words, editor.selectedWordIds) ??
+          (editor.project.markIn != null && editor.project.markOut != null
+            ? {
+                start: programToSourceOf(editor.project, Math.min(editor.project.markIn, editor.project.markOut)),
+                end: programToSourceOf(editor.project, Math.max(editor.project.markIn, editor.project.markOut))
+              }
+            : null)
+        if (span) {
+          e.preventDefault()
+          editor.dispatch({
+            type: 'addTag',
+            start: span.start,
+            end: span.end,
+            kind: e.shiftKey ? 'demo' : 'keep'
+          })
+          setToast(e.shiftKey ? 'Tagged silent demo — Auto Edit will skip it.' : 'Tagged keep — Auto Edit will skip it.')
+        }
+        return
+      }
+      if ((e.key === '[' || e.key === ']') && !typing) {
+        e.preventDefault()
+        editor.selectWords(
+          extendSelection(editor.project.transcript.words, editor.selectedWordIds, e.key === '[' ? -1 : 1)
+        )
+        return
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
+        if (editor.selectedWordIds.length) {
+          e.preventDefault()
+          editor.dispatch({ type: 'toggleWords', wordIds: editor.selectedWordIds })
+          return
+        }
+        if (editor.project.markIn != null && editor.project.markOut != null) {
+          e.preventDefault()
+          editor.dispatch({ type: 'rippleDeleteMarks' })
+          return
+        }
+        const clip = editor.project.tracks.flatMap((t) => t.clips).find((c) => c.id === editor.selectedClipId)
+        if (clip) {
+          e.preventDefault()
+          editor.dispatch({ type: 'removeClip', clipId: clip.id })
+        }
+        return
+      }
+      if (e.key.toLowerCase() === 's' && !typing && !meta) {
+        editor.dispatch({
+          type: 'splitAt',
+          time: programToSourceOf(editor.project, playback.programTime)
+        })
+        return
+      }
+      if (e.key.toLowerCase() === 'k' && !typing && !meta) playback.toggle()
+      if (e.key.toLowerCase() === 'j' && !typing) {
+        playback.seekProgram(Math.max(0, playback.programTime - 2))
+      }
+      if (e.key.toLowerCase() === 'l' && !typing) {
+        playback.seekProgram(Math.min(programLength(editor.project), playback.programTime + 2))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setToast])
+}
