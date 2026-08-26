@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+!.env.example
+.cache
+.vite
+dist
+node_modules
+out
+release
+vendor
+*.log
+*.mp4
+*.mov
+*.wav

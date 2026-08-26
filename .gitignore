@@ -7,6 +7,7 @@ vendor
 *.log
 .env
 .env.*
+!.env.example
 *.mp4
 *.mov
 *.wav

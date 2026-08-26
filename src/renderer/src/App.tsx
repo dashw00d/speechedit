@@ -56,18 +56,38 @@ import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from '
 import { useClearSelection } from './useClearSelection'
 import { activeThemeId, subscribeTheme } from './lib/theme'
 import { host, isElectron } from './host'
+import {
+  isWorkspacePane,
+  WORKSPACE_PANES,
+  workspacePaneFromHotkey,
+  type WorkspacePane
+} from '../../shared/windowLayout'
+import { formatAppIdentity, loadAppIdentity } from './lib/appIdentity'
+import { loadMediaHealth } from './lib/mediaHealth'
+import type { MediaToolsHealth } from '../../shared/mediaTools'
 import { shouldPreventWindowClose } from './lib/windowClose'
 import { runTool } from './lib/mcpTools'
 import { loadSettings } from './lib/settings'
 import { currentEditorSession } from './lib/editorSession'
 import { openAssistant } from './lib/assistantNavigation'
+import { ActivityStrip } from './components/ActivityPanel'
+import { syncModelActivities } from './lib/activity'
+import { preloadBrowserWhisper } from './lib/browserWhisper'
+
+const WORKSPACE_PANE_LABELS: Record<WorkspacePane, string> = {
+  preview: 'Preview',
+  review: 'Review',
+  script: 'Script',
+  timeline: 'Timeline'
+}
 
 export function App() {
   const [, setThemeId] = useState(activeThemeId)
   const [toast, setToast] = useState<string | null>(null)
+  const [mediaHealth, setMediaHealth] = useState<MediaToolsHealth | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
-  const [mobilePane, setMobilePane] = useState<'preview' | 'review' | 'script' | 'timeline'>('preview')
+  const [mobilePane, setMobilePane] = useState<WorkspacePane>('preview')
   const mcpPolling = useRef(false)
   const { menu: contextMenu, closeMenu: closeContextMenu } = useContextMenu()
   useClearSelection()
@@ -83,6 +103,22 @@ export function App() {
   )
 
   useEffect(() => subscribeTheme(setThemeId), [])
+
+  useEffect(() => {
+    if (!isElectron) void preloadBrowserWhisper().catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    void host.modelQueueStatus().then(syncModelActivities).catch(() => undefined)
+    return host.onModelQueue(syncModelActivities)
+  }, [])
+
+  useEffect(() => {
+    void loadMediaHealth().then(setMediaHealth)
+    void loadAppIdentity().then((identity) => {
+      document.title = formatAppIdentity(identity)
+    })
+  }, [])
 
   useEffect(() => {
     if (!isElectron) return
@@ -134,8 +170,16 @@ export function App() {
 
   useEffect(() => {
     const showAssistant = () => setMobilePane('review')
+    const showPane = (event: Event) => {
+      const pane = (event as CustomEvent<unknown>).detail
+      if (isWorkspacePane(pane)) setMobilePane(pane)
+    }
     window.addEventListener('speechedit:assistant', showAssistant)
-    return () => window.removeEventListener('speechedit:assistant', showAssistant)
+    window.addEventListener('speechedit:workspace-pane', showPane)
+    return () => {
+      window.removeEventListener('speechedit:assistant', showAssistant)
+      window.removeEventListener('speechedit:workspace-pane', showPane)
+    }
   }, [])
 
   useEffect(() => {
@@ -173,7 +217,7 @@ export function App() {
     return () => clearTimeout(id)
   }, [toast, exporting])
 
-  useHotkeys(setToast, () => setKeysOpen((open) => !open))
+  useHotkeys(setToast, () => setKeysOpen((open) => !open), setMobilePane)
 
   function onExportClick() {
     const editor = useEditor.getState()
@@ -186,7 +230,18 @@ export function App() {
       setToast(busy)
       return
     }
-    setExportOpen(true)
+    if (!isElectron) {
+      setExportOpen(true)
+      return
+    }
+    void loadMediaHealth().then((health) => {
+      setMediaHealth(health)
+      if (!health.ok) {
+        setToast(health.message ?? 'FFmpeg did not start.')
+        return
+      }
+      setExportOpen(true)
+    })
   }
 
   useEffect(() => {
@@ -215,14 +270,7 @@ export function App() {
         onShortcuts={() => setKeysOpen(true)}
       />
       <nav className="mobile-workspace-nav" aria-label="Editor view">
-        {(
-          [
-            ['preview', 'Preview'],
-            ['review', 'Review'],
-            ['script', 'Script'],
-            ['timeline', 'Timeline']
-          ] as const
-        ).map(([id, label]) => (
+        {WORKSPACE_PANES.map((id) => (
           <button
             key={id}
             type="button"
@@ -230,13 +278,30 @@ export function App() {
             aria-pressed={mobilePane === id}
             onClick={() => setMobilePane(id)}
           >
-            {label}
+            {WORKSPACE_PANE_LABELS[id]}
           </button>
         ))}
       </nav>
       <div className="stage">
-        {(recoveryOffer || missingAssets.length > 0) && (
+        <ActivityStrip />
+        {(recoveryOffer || missingAssets.length > 0 || (isElectron && mediaHealth && !mediaHealth.ok)) && (
           <div className="doc-banners">
+            {isElectron && mediaHealth && !mediaHealth.ok && (
+              <div className="doc-banner" data-kind="missing">
+                <span>{mediaHealth.message}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void loadMediaHealth(true).then((next) => {
+                      setMediaHealth(next)
+                      if (next.ok) setToast(`${next.ffmpeg.version ? `FFmpeg ${next.ffmpeg.version}` : 'FFmpeg'} is ready.`)
+                    })
+                  }}
+                >
+                  Check again
+                </button>
+              </div>
+            )}
             {recoveryOffer && (
               <div className="doc-banner" data-kind="recovery">
                 <span>{recoveryCopy(recoveryOffer)} — restore them or keep the last save.</span>
@@ -262,7 +327,9 @@ export function App() {
               <div className="doc-banner" data-kind="missing">
                 <span>
                   {missingAssets.length === 1
-                    ? `Media missing: ${missingAssets[0].name}`
+                    ? missingAssets[0].path.startsWith('blob:')
+                      ? `Reconnect after browser reload: ${missingAssets[0].name}`
+                      : `Media missing: ${missingAssets[0].name}`
                     : `${missingAssets.length} media files are missing`}
                 </span>
                 <button
@@ -276,7 +343,7 @@ export function App() {
                     })
                   }}
                 >
-                  Relink…
+                  {missingAssets[0].path.startsWith('blob:') ? 'Reconnect…' : 'Relink…'}
                 </button>
                 {missingAssets.length > 1 && (
                   <button
@@ -313,7 +380,11 @@ export function App() {
   )
 }
 
-function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
+function useHotkeys(
+  setToast: (msg: string) => void,
+  toggleKeys: () => void,
+  setMobilePane: (pane: WorkspacePane) => void
+) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey
@@ -321,6 +392,12 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
       const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
       const editor = useEditor.getState()
       const playback = usePlayback.getState()
+      const pane = workspacePaneFromHotkey(e)
+      if (pane && !typing) {
+        e.preventDefault()
+        setMobilePane(pane)
+        return
+      }
       if ((e.key === '?' || (e.key === '/' && e.shiftKey)) && !typing && !meta) {
         e.preventDefault()
         toggleKeys()

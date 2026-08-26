@@ -259,7 +259,7 @@ export function shouldOfferRecovery(
 
 export function localMediaRefs(project: Project): MediaRef[] {
   return Object.values(project.assets)
-    .filter((asset) => asset.path && !isExternalMediaPath(asset.path))
+    .filter((asset) => asset.path && (!isExternalMediaPath(asset.path) || asset.path.startsWith('blob:')))
     .map((asset) => ({ id: asset.id, name: asset.name, path: asset.path }))
 }
 

@@ -17,7 +17,7 @@ Transcript / timeline / Auto Edit / shortcuts / palette
 
 ## Run
 
-Needs system `ffmpeg` / `ffprobe`. Transcription is pluggable: Whisper on PATH, or any OpenAI-compatible ASR (Speaches, faster-whisper-server, Groq, OpenAI). A second local or API model can group scenes and retakes.
+Needs `ffmpeg` / `ffprobe` on PATH for development. The Windows ZIP bundles both and checks them at startup; if either binary is missing, SpeechEdit shows one recovery message and refuses import and export. Transcription is pluggable: Whisper on PATH, or any OpenAI-compatible ASR (Speaches, faster-whisper-server, Groq, OpenAI). A second local or API model can group scenes and retakes.
 
 ```bash
 bun install
@@ -28,7 +28,25 @@ bun test
 
 On WSL, if the window never appears: `NO_SANDBOX=1 bun run dev`.
 
+The window title, Preferences, and Project → Advanced show the version and git commit. **Copy build id** pastes a diagnostic for a run record. The desktop window can shrink to 960×600 so a 1280×720 laptop still fits after the taskbar; Alt+1–4 switch Preview / Review / Script / Timeline when a pane is collapsed.
+
 For the path from development build to real-footage dogfooding and private alpha, follow the [real-video validation roadmap](docs/real_video_validation_roadmap.md).
+
+## Web demo deployment
+
+The web demo is a small server application, not a static `dist/` upload. The server serves the built editor, keeps the OpenRouter credential private, forces Assistant requests through `openrouter/free`, and caches browser Whisper model files.
+
+For a command-based Bun service:
+
+```bash
+bun install --frozen-lockfile
+bun run build:web
+bun run start:web
+```
+
+Set `OPENROUTER_API_KEY` as a secret in the hosting platform. Do not upload the local `.env`; `.env.example` lists the supported variables without credentials. The service listens on the platform-provided `PORT` (3000 by default), binds `0.0.0.0`, and exposes `GET /healthz`.
+
+For a Docker service, build the included `Dockerfile`, expose port 3000, and mount `/data` if the platform supports persistent volumes. Without a volume the app still works, but the server refetches its Whisper cache after a container replacement. The first browser still downloads and locally caches the approximately 114 MiB browser Whisper model.
 
 ## Windows validation build
 

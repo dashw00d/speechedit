@@ -8,7 +8,7 @@ import {
   takeFamily,
   uncollapsedRetakeCount
 } from './sceneAnalysis'
-import { isFillerToken } from './transcript'
+import { isFillerToken, transcriptIsPlaceholder } from './transcript'
 import {
   coveringAppliedSuggestion,
   isParagraphSelection,
@@ -380,6 +380,30 @@ function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport
     (s) => s.type === 'filler' && !s.blockedBy && (s.action === 'cut' || s.action === 'speed')
   ).length
 
+  const placeholder =
+    project.transcript.words.length > 0 && transcriptIsPlaceholder(project.transcript.words)
+  if (placeholder) {
+    const regions = project.transcript.words.filter((word) => !word.deleted).length
+    return {
+      headline:
+        regions > 0
+          ? `No transcript. ${regions} speech region${regions === 1 ? '' : 's'} from silence — not spoken words. Drop Whisper JSON or Transcribe again.`
+          : 'No transcript. Drop Whisper JSON or Transcribe again.',
+      applyLabel: safe.length ? `Apply ${safe.length} safe edits` : null,
+      reviewLabel: review.length ? `Review ${review.length}` : 'Review',
+      reviewCount: review.length,
+      safeCount: safe.length,
+      findRetakes: false,
+      collapseRetakes,
+      showWatch: false,
+      showZoom: false,
+      showTitle: false,
+      showLowerThird: false,
+      showPace: true,
+      showPreviewToggle: true,
+      fillerCount: 0
+    }
+  }
   if (!project.transcript.words.length) {
     if (applied.length) {
       return {

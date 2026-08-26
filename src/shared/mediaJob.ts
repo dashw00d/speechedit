@@ -1,5 +1,7 @@
 /** One media job at a time. Main kills children; renderer tracks busy/cancel. */
 
+import { explainMediaToolFailure } from './mediaTools'
+
 export type MediaJobKind = 'export' | 'import'
 
 export class JobCancelled extends Error {
@@ -290,9 +292,8 @@ export function explainImportError(err: unknown): string {
   if (isJobBusy(err)) return err instanceof Error ? err.message : busyMessage('import')
   if (isWhisperUnavailable(err)) return whisperMissingMessage()
   const msg = err instanceof Error ? err.message : String(err)
-  if (/ffmpeg|ffprobe/i.test(msg) && /ENOENT|not found|did not start|spawn /i.test(msg)) {
-    return 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
-  }
+  const tools = explainMediaToolFailure(msg)
+  if (tools) return tools
   if (/ENOENT|no such file|does not exist|Error opening input|Can't open that recording/i.test(msg)) {
     const path = msg.match(/(?:recording:\n|file: )(.+)/)?.[1]
     return path

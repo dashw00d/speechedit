@@ -3,6 +3,7 @@ import { assetNeedsProxy, proxyGopSeekable } from '../../../shared/proxy'
 import { flushWorkspace, useEditor } from '../store'
 import { requestLoseWork } from './loseWork'
 import { rememberRecent } from './recents'
+import { browserMediaKeyForPath, remountBrowserAssets } from './browserMediaStore'
 import {
   documentLabel,
   isExternalMediaPath,
@@ -125,6 +126,7 @@ export async function hydrateMedia(): Promise<void> {
 }
 
 export async function refreshMissingAssets(): Promise<void> {
+  await remountPersistedBrowserMedia()
   const project = useEditor.getState().project
   const refs = localMediaRefs(project)
   if (!refs.length) {
@@ -135,6 +137,14 @@ export async function refreshMissingAssets(): Promise<void> {
   const present: Record<string, boolean> = {}
   for (const row of checks) present[row.path] = row.exists
   useEditor.getState().setMissingAssets(missingMedia(project, present))
+}
+
+async function remountPersistedBrowserMedia(): Promise<number> {
+  if (isElectron) return 0
+  const project = useEditor.getState().project
+  const result = await remountBrowserAssets(project.assets)
+  if (result.assets !== project.assets) useEditor.getState().hydrateLooks(result.assets)
+  return result.restored
 }
 
 export async function hydrateWorkspace(): Promise<{ source: string; recovery: boolean }> {
@@ -162,7 +172,8 @@ export async function hydrateWorkspace(): Promise<{ source: string; recovery: bo
     useEditor.getState().loadProject(saved.project, {
       path: saved.path,
       clean: true,
-      lastSavedAt: saved.savedAt
+      lastSavedAt: saved.savedAt,
+      persist: false
     })
     useEditor.getState().setRecoveryOffer(recovery)
     await refreshMissingAssets()
@@ -287,7 +298,12 @@ export async function relinkAssetInteractive(
 ): Promise<{ path: string; nearby: number } | null> {
   const file = await host.openMedia()
   if (!file) return null
-  useEditor.getState().dispatch({ type: 'relinkAsset', assetId, path: file })
+  useEditor.getState().dispatch({
+    type: 'relinkAsset',
+    assetId,
+    path: file,
+    browserMediaKey: browserMediaKeyForPath(file)
+  })
   await refreshMissingAssets()
   const nearby = await relinkNearbyMissing(file, assetId)
   await hydrateMedia()

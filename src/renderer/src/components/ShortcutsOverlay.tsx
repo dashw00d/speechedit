@@ -56,7 +56,8 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
       { keys: '⌘Z', does: 'Undo' },
       { keys: '\\', does: 'Fit the timeline' },
       { keys: 'G', does: 'Protect words so Auto Edit skips them' },
-      { keys: '?', does: 'This list' }
+      { keys: '?', does: 'This list' },
+      { keys: 'Alt 1–4', does: 'Preview · Review · Script · Timeline when a pane is collapsed' }
     ]
   }
 ]

@@ -119,7 +119,7 @@ export interface EditorState {
   setGuardKind: (kind: EditorState['guardKind']) => void
   loadProject: (
     project: Project,
-    opts?: { path?: string | null; clean?: boolean; lastSavedAt?: number | null }
+    opts?: { path?: string | null; clean?: boolean; lastSavedAt?: number | null; persist?: boolean }
   ) => void
   newProject: () => void
   loadDemo: () => void
@@ -570,7 +570,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         dirty,
         documentPath,
         lastSavedAt,
-        persistNow: true
+        persistNow: opts?.persist ?? true
       })
     )
     resetPlaybackForProjectChange()

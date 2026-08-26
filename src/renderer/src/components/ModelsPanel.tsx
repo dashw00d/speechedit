@@ -12,6 +12,8 @@ import { presetIdFor } from '../../../shared/asr'
 import { applySafeFirstEdit, describeFirstEdit } from '../lib/firstEdit'
 import { busyMessage, isJobCancelled, whisperMissingMessage } from '../lib/mediaJobs'
 import { useEditor } from '../store'
+import { failActivity, finishActivity, startActivity, updateActivity } from '../lib/activity'
+import { useBrowserWhisperState } from '../lib/browserWhisper'
 
 type IntelligenceModel = {
   id: string
@@ -36,6 +38,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   const [pathStatus, setPathStatus] = useState<{ kind: string; available: boolean; found: string[] }[]>(
     []
   )
+  const browserWhisper = useBrowserWhisperState()
 
   useEffect(() => {
     void host.asrPath().then(setPathStatus).catch(() => undefined)
@@ -64,7 +67,9 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   async function inspectModels(endpoint = settings.intelligence, repair = false) {
     if (endpoint.kind === 'openai-compatible' && !endpoint.baseUrl) return
     setModelBusy('list')
+    startActivity({ id: 'system:model-check', label: 'Checking Assistant models', detail: endpoint.model || endpoint.kind })
     setModelStatus({ state: 'info', message: 'Checking the model endpoint…' })
+    let keepErrorVisible = false
     try {
       const status = await host.listModels(endpoint)
       setIntelModels(status.models)
@@ -104,12 +109,15 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       setModelStatus({ state: 'ok', message: facts.join(' · ') })
     } catch (err) {
       setIntelModels([])
+      failActivity('system:model-check', err instanceof Error ? err.message : 'Could not inspect the model endpoint.')
+      keepErrorVisible = true
       setModelStatus({
         state: 'error',
         message: err instanceof Error ? err.message : 'Could not inspect the model endpoint.'
       })
     } finally {
       setModelBusy(null)
+      if (!keepErrorVisible) finishActivity('system:model-check')
     }
   }
 
@@ -151,31 +159,96 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
     }
     setBusy('transcribe')
     setAnalyzing('transcript')
+    startActivity({
+      id: 'media:transcribe',
+      label: 'Whisper transcription',
+      detail: asset.name,
+      ratio: 0.05,
+      cancellable: 'import'
+    })
+    const stopProgress = host.onTranscribeProgress((info) => {
+      const detail =
+        info.stage === 'install'
+          ? 'Installing local Whisper'
+          : info.stage === 'audio'
+            ? 'Extracting speech audio'
+            : info.stage === 'run'
+              ? info.chunk
+                ? `Transcribing chunk ${info.chunk.finished} of ${info.chunk.total}`
+                : 'Recognizing words'
+              : info.stage === 'parse'
+                ? 'Building word timings'
+                : info.stage === 'done'
+                  ? 'Transcript ready'
+                  : 'Preparing audio'
+      setAnalyzing(`transcript:${info.stage}`)
+      updateActivity('media:transcribe', { ratio: info.ratio, detail })
+    })
+    let keepErrorVisible = false
     try {
       await host.beginJob('import')
       const cues = await host.transcribe(asset.path, { ...settings.transcript, force: true })
       const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
-      if (!words.length) throw new Error(`${whisperMissingMessage()} Or use speech islands.`)
+      if (!words.length) {
+        throw new Error(isElectron ? `${whisperMissingMessage()} Or use speech islands.` : 'Local Whisper found no spoken words in this recording.')
+      }
       useEditor.getState().loadTranscript(words)
       const first = applySafeFirstEdit()
       onToast(first ? describeFirstEdit(first.applied, first.review, first.retakes) : `Transcript · ${words.length} words`)
     } catch (err) {
+      if (!isJobCancelled(err)) {
+        failActivity('media:transcribe', err instanceof Error ? err.message : 'Transcription failed.')
+        keepErrorVisible = true
+      }
       onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Transcribe failed.')
     } finally {
+      stopProgress()
       await host.endJob('import').catch(() => undefined)
       setAnalyzing(null)
       setBusy(null)
+      if (!keepErrorVisible) finishActivity('media:transcribe')
     }
   }
 
   return (
-    <>
-      <p className="help">
-        File → Open media uses this provider and lands Word[] on the project. Default is local
-        whisper.cpp in ~/.speechedit; other CLIs on PATH are used if that is missing. Groq / OpenAI /
-        Speaches use the same HTTP call. Missing ASR falls back to speech islands.
-      </p>
-      <Field label="Transcript">
+    <div className="models-panel">
+      <section className="project-settings-section" data-kind="whisper">
+        <header className="project-settings-heading">
+          <span>
+            <strong>Whisper transcription</strong>
+            <small>Turns spoken audio into editable words</small>
+          </span>
+          <b data-state={browserWhisper.state === 'error' || settings.transcript.kind === 'off' ? 'off' : 'ready'}>
+            {!isElectron
+              ? browserWhisper.state === 'ready'
+                ? 'Ready'
+                : browserWhisper.state === 'transcribing'
+                  ? 'Listening'
+                  : browserWhisper.state === 'error'
+                    ? 'Retry'
+                    : 'Starting'
+              : settings.transcript.kind === 'off' ? 'Off' : 'On'}
+          </b>
+        </header>
+        <p className="help">
+          {isElectron
+            ? 'Open media uses this provider automatically. Transcription is separate from the Assistant model. If Whisper is unavailable, SpeechEdit shows approximate speech regions instead of inventing words.'
+            : 'Private transcription starts when the site opens. The model is cached in this browser, then every recording is transcribed locally without uploading it.'}
+        </p>
+      {!isElectron && (
+        <div className="model-check" data-state={browserWhisper.state === 'error' ? 'error' : browserWhisper.state === 'ready' ? 'ok' : 'info'}>
+          <div>
+            <strong>Whisper tiny.en · on this device</strong>
+            <span>{browserWhisper.detail}</span>
+          </div>
+          {browserWhisper.state === 'loading' && browserWhisper.ratio != null && (
+            <progress max={1} value={browserWhisper.ratio} aria-label={`${Math.round(browserWhisper.ratio * 100)}%`} />
+          )}
+        </div>
+      )}
+      {isElectron && (
+      <>
+      <Field label="Whisper provider">
         <select
           value={presetIdFor(settings.transcript.kind, settings.transcript.baseUrl)}
           onChange={(e) => {
@@ -246,7 +319,52 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           </Field>
         </>
       )}
-      <Field label="Intelligence">
+      </>
+      )}
+      <div className="project-settings-actions">
+        <button
+          className="chip"
+          disabled={Boolean(busy) || Boolean(analyzing) || exporting || (isElectron && settings.transcript.kind === 'off')}
+          onClick={() => void transcribeAgain()}
+        >
+          {busy === 'transcribe' ? 'Transcribing…' : 'Transcribe current media'}
+        </button>
+        <small>{isElectron ? 'Replaces the current transcript using the Whisper settings above.' : 'Runs locally using the model already warming in the background.'}</small>
+      </div>
+      </section>
+
+      <section className="project-settings-section" data-kind="intelligence">
+        <header className="project-settings-heading">
+          <span>
+            <strong>Assistant intelligence</strong>
+            <small>Plans edits and calls SpeechEdit tools</small>
+          </span>
+          <b data-state={settings.intelligence.kind === 'off' ? 'off' : 'ready'}>
+            {settings.intelligence.kind === 'off' ? 'Off' : 'On'}
+          </b>
+        </header>
+        <p className="help">This model never transcribes audio. It only answers questions and plans editor actions.</p>
+      {!isElectron ? (
+        <div className="model-check" data-state={modelStatus?.state ?? 'idle'}>
+          <div>
+            <strong>Demo AI · Free</strong>
+            <span>
+              {modelStatus?.message ??
+                'A server-managed free model plans edits. The provider, model, and credential are fixed for this demo.'}
+            </span>
+          </div>
+          <div className="script-tools" style={{ padding: 0 }}>
+            <button className="chip" type="button" disabled={Boolean(modelBusy)} onClick={() => void inspectModels()}>
+              {modelBusy === 'list' ? 'Checking…' : 'Check availability'}
+            </button>
+            <button className="chip" type="button" disabled={Boolean(modelBusy)} onClick={() => void testModel()}>
+              {modelBusy === 'test' ? 'Testing…' : 'Test Demo AI'}
+            </button>
+          </div>
+        </div>
+      ) : (
+      <>
+      <Field label="Assistant provider">
         <select
           value={
             settings.intelligence.kind === 'off'
@@ -380,20 +498,18 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           </div>
         </div>
       )}
-      <div className="script-tools" style={{ padding: 0 }}>
-        <button
-          className="chip"
-          disabled={Boolean(busy) || Boolean(analyzing) || exporting}
-          onClick={() => void transcribeAgain()}
-        >
-          {busy === 'transcribe' ? 'Transcribing…' : 'Transcribe again'}
-        </button>
-      </div>
-      <p className="help">
-        MCP: <code>bun src/mcp/server.ts</code>
-        {isElectron ? ' · live project in ~/.speechedit/current.speechedit.json' : ' · save a project JSON and set SPEECHEDIT_PROJECT'}
-      </p>
-    </>
+      </>
+      )}
+      </section>
+
+      <details className="project-settings-section project-technical">
+        <summary>Developer integration</summary>
+        <p className="help">
+          MCP: <code>bun src/mcp/server.ts</code>
+          {isElectron ? ' · live project in ~/.speechedit/current.speechedit.json' : ' · save a project JSON and set SPEECHEDIT_PROJECT'}
+        </p>
+      </details>
+    </div>
   )
 }
 

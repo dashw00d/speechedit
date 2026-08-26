@@ -7,6 +7,7 @@ import {
   saveSettings,
   settingsFromEnv
 } from './settings'
+import { WEB_DEMO_INTELLIGENCE } from './settings'
 
 const KEY = 'speechedit:settings'
 
@@ -110,6 +111,37 @@ describe('transcript defaults', () => {
       })
       expect(grok.intelligence.kind).toBe('grok-cli')
       expect(loadSettings().intelligence.model).toBe('grok-4')
+    })
+  })
+
+  test('web demo ignores saved provider, model, and key overrides', () => {
+    withMemoryStorage(() => {
+      const previous = (globalThis as { window?: unknown }).window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: { speech: undefined } })
+      try {
+        localStorage.setItem(KEY, JSON.stringify({
+          transcript: DEFAULT_SETTINGS.transcript,
+          intelligence: {
+            kind: 'openai-compatible',
+            baseUrl: 'https://attacker.invalid/v1',
+            model: 'paid/model',
+            apiKey: 'browser-secret'
+          }
+        }))
+        expect(loadSettings().intelligence).toEqual(WEB_DEMO_INTELLIGENCE)
+        expect(saveSettings({
+          ...DEFAULT_SETTINGS,
+          intelligence: {
+            kind: 'openai-compatible',
+            baseUrl: 'https://attacker.invalid/v1',
+            model: 'paid/model',
+            apiKey: 'browser-secret'
+          }
+        }).intelligence).toEqual(WEB_DEMO_INTELLIGENCE)
+      } finally {
+        if (previous === undefined) delete (globalThis as { window?: unknown }).window
+        else Object.defineProperty(globalThis, 'window', { configurable: true, value: previous })
+      }
     })
   })
 })

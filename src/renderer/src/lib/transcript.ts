@@ -146,9 +146,13 @@ export function wordsFromPlainText(text: string, step = 0.35): Word[] {
   }))
 }
 
+export function isPlaceholderWord(word: Word): boolean {
+  return word.origin === 'island' || /^Speech\s+\d+$/i.test(word.text.trim())
+}
+
 export function transcriptIsPlaceholder(words: Word[]): boolean {
   if (!words.length) return true
-  return words.every((word) => /^Speech\s+\d+$/i.test(word.text.trim()))
+  return words.every(isPlaceholderWord)
 }
 
 /**
@@ -173,7 +177,8 @@ export function wordsFromIslands(islands: { start: number; end: number }[]): Wor
         start: span.start,
         end: span.end,
         speaker: 'ryan',
-        deleted: false
+        deleted: false,
+        origin: 'island'
       }
     ]
   })

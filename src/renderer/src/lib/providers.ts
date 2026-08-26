@@ -1,4 +1,5 @@
 import { parseAsrPayload, transcriptionsUrl } from '../../../shared/asr'
+import { jsonrepair } from 'jsonrepair'
 import type { ModelEndpoint, ProviderKind } from './settings'
 
 export function transcriptReady(endpoint: ModelEndpoint): boolean {
@@ -85,7 +86,12 @@ export function extractJson(text: string): unknown {
   const start = raw.indexOf('{')
   const end = raw.lastIndexOf('}')
   if (start < 0 || end <= start) throw new Error('Model reply was not JSON.')
-  return JSON.parse(raw.slice(start, end + 1))
+  const candidate = raw.slice(start, end + 1)
+  try {
+    return JSON.parse(candidate)
+  } catch {
+    return JSON.parse(jsonrepair(candidate))
+  }
 }
 
 export interface ApiWord {

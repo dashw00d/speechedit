@@ -34,15 +34,15 @@ describe('waveform and thumbnail disk cache', () => {
     })
   }, 30000)
 
-  test('recordings ≥90s seek peak windows instead of decoding the whole soundtrack', async () => {
+  test('recordings ≥90s build peaks in one bounded decode', async () => {
     await withCacheHome(async () => {
       const ffmpeg = Bun.which('ffmpeg')
       if (!ffmpeg) throw new Error('ffmpeg required for seek-peak smoke')
       await Bun.$`${ffmpeg} -y -f lavfi -i sine=frequency=440:sample_rate=8000 -t 90 -c:a aac /tmp/se-long-peaks.m4a`.quiet()
       const { waveform } = await import('../../../main/ffmpeg.ts')
       const { wantsSeekPeaks, waveformStrategy } = await import('../../../shared/importLooks.ts')
-      expect(wantsSeekPeaks(90)).toBe(true)
-      expect(waveformStrategy(90)).toBe('seek')
+      expect(wantsSeekPeaks(90)).toBe(false)
+      expect(waveformStrategy(90)).toBe('decode')
       const peaks = await waveform('/tmp/se-long-peaks.m4a', 40)
       expect(peaks.length).toBe(40)
       expect(peaks.some((n) => n > 0.05)).toBe(true)

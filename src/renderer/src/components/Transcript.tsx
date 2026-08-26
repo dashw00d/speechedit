@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { leftoverForSpan, reviewGap } from '../lib/analysis'
-import { isFillerToken } from '../lib/transcript'
+import { isFillerToken, isPlaceholderWord, transcriptIsPlaceholder } from '../lib/transcript'
 import { ingestDroppedFile } from '../lib/fileActions'
 import { currentWord } from '../lib/edl'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
@@ -121,6 +121,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const setFollowPlayhead = useEditor((s) => s.setFollowPlayhead)
   const followLock = useRef(false)
   const words = project.transcript.words
+  const islands = words.length > 0 && transcriptIsPlaceholder(words)
   const findGroups = findWordGroups(words, findQuery)
   const findHitIds = new Set(findGroups.flat())
   const { choices } = transcriptChoices(project, selected)
@@ -709,11 +710,15 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
         <span className="transcript-heading">
           <strong>Transcript</strong>
           <small>
-            {words.filter((word) => !word.deleted).length} words · {(project.scenes ?? []).length} chapters
+            {islands
+              ? `${words.filter((word) => !word.deleted).length} speech regions · no words`
+              : `${words.filter((word) => !word.deleted).length} words · ${(project.scenes ?? []).length} chapters`}
           </small>
         </span>
         <span className="transcript-head-actions">
-          {(words.some((word) => !word.deleted) || hasYouTubeChapters(project) || hasExportableCaptions(project)) && (
+          {((words.some((word) => !word.deleted) && !islands) ||
+            hasYouTubeChapters(project) ||
+            hasExportableCaptions(project)) && (
             <OverflowMenu tone="chip" place="below" label="Copy" title="Copy transcript output">
               {words.some((word) => !word.deleted) && (
                 <button
@@ -990,11 +995,16 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
         hasSource || analyzing ? (
           <div className="start-guide compact">
             <p className="start-guide-lead">
-              {analyzing ? `Transcribing · ${analyzing}` : 'No transcript yet.'}
+              {analyzing
+                ? /transcript|whisper/i.test(analyzing)
+                  ? 'Whisper is transcribing the recording'
+                  : 'Media is still being prepared'
+                : 'No transcript yet.'}
             </p>
             <p>
-              Play and cut on the timeline. Words land when analysis finishes, or drop a transcript
-              here now.
+              {analyzing && !/transcript|whisper/i.test(analyzing)
+                ? 'Waveform, picture analysis, and preview work are separate from Whisper. Their live status is shown above.'
+                : 'Play and cut on the timeline. Words land when Whisper finishes, or drop a transcript here now.'}
             </p>
           </div>
         ) : (
@@ -1067,6 +1077,12 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
         }}
       >
         <div className="transcript-document">
+        {islands && (
+          <p className="help transcript-island-note">
+            No transcript. These blocks are silence-detected speech regions, not spoken words. Drop
+            Whisper JSON here or Transcribe again.
+          </p>
+        )}
         {transcriptSections.map((section) => {
           const scene = section.scenes[0]
           const takeScenes = scene ? takeFamily(project.scenes ?? [], scene.id) : []
@@ -1186,6 +1202,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                     else wordRefs.current.delete(word.id)
                   }}
                   className="word"
+                  data-origin={isPlaceholderWord(word) ? 'island' : undefined}
                   data-word-id={word.id}
                   data-on={active?.id === word.id}
                       data-sel={selected.includes(word.id) && !selectedSceneId}
@@ -1201,11 +1218,13 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                   data-paint={paintIds?.includes(word.id) ?? false}
                   data-find={findHitIds.has(word.id) || undefined}
                   title={
-                    applied
-                      ? `${applied.label} · double-click puts this cut back`
-                      : tag
-                        ? `${tag.label}`
-                        : 'Click to hear · double-click a sentence · triple-click a paragraph · Remove paragraph hears the join'
+                    isPlaceholderWord(word)
+                      ? 'Not spoken text — a silence-detected speech region. Drop Whisper JSON or Transcribe again for words.'
+                      : applied
+                        ? `${applied.label} · double-click puts this cut back`
+                        : tag
+                          ? `${tag.label}`
+                          : 'Click to hear · double-click a sentence · triple-click a paragraph · Remove paragraph hears the join'
                   }
                   style={{ ['--spk' as string]: speakerColor(project.transcript.speakers, word.speaker) }}
                   onMouseDown={(e) => {

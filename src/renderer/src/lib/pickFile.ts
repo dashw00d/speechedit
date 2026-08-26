@@ -1,4 +1,5 @@
-import { host, isElectron } from '../host'
+import { host, isElectron, registerBrowserMedia } from '../host'
+import { browserMediaKeyForPath } from './browserMediaStore'
 import { displaySize, quarterTurn } from '../../../shared/mediaOrient'
 import { needsProxy } from '../../../shared/proxy'
 import type { Asset } from '../types'
@@ -54,20 +55,22 @@ export async function pickBroll(): Promise<Asset | null> {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'image/*,video/mp4,video/webm,video/quicktime'
-    input.onchange = () => {
+    input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) {
         resolve(null)
         return
       }
       const image = file.type.startsWith('image/')
+      const path = await registerBrowserMedia(file)
       resolve({
         id: uid('asset'),
-        path: URL.createObjectURL(file),
+        path,
         name: file.name,
         kind: image ? 'image' : 'video',
         duration: 8,
-        waveform: []
+        waveform: [],
+        browserMediaKey: browserMediaKeyForPath(path)
       })
     }
     input.oncancel = () => resolve(null)
@@ -85,19 +88,21 @@ export async function pickAudio(): Promise<Asset | null> {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'audio/*'
-    input.onchange = () => {
+    input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) {
         resolve(null)
         return
       }
+      const path = await registerBrowserMedia(file)
       resolve({
         id: uid('asset'),
-        path: URL.createObjectURL(file),
+        path,
         name: file.name,
         kind: 'audio',
         duration: 30,
-        waveform: []
+        waveform: [],
+        browserMediaKey: browserMediaKeyForPath(path)
       })
     }
     input.oncancel = () => resolve(null)

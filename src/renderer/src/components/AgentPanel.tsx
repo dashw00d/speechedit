@@ -51,7 +51,7 @@ export function AgentPanel({ onToast }: { onToast: (msg: string) => void }) {
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(Date.now())
   const [modelQueue, setModelQueue] = useState<ModelQueueStatus>({ active: false, pending: 0, jobs: [] })
-  const [activity, setActivity] = useState(agentActivityState)
+  const [activity, setActivity] = useState(() => agentActivityState(project.id))
   const input = useRef<HTMLTextAreaElement>(null)
   const inspectorTab = useEditor((s) => s.inspectorTab)
   const retakes = (project.scenes ?? []).filter((scene) => scene.kind === 'retake').length
@@ -69,7 +69,10 @@ export function AgentPanel({ onToast }: { onToast: (msg: string) => void }) {
     return host.onModelQueue(setModelQueue)
   }, [])
 
-  useEffect(() => subscribeAgentActivity(setActivity), [])
+  useEffect(() => {
+    setActivity(agentActivityState(project.id))
+    return subscribeAgentActivity(project.id, setActivity)
+  }, [project.id])
 
   useEffect(() => {
     if (followUp) input.current?.focus()
@@ -84,25 +87,33 @@ export function AgentPanel({ onToast }: { onToast: (msg: string) => void }) {
   async function run(text: string) {
     const question = text.trim()
     if (!question) return
+    const before = useEditor.getState().project
+    const sourceProjectId = before.id
     setBusy(true)
     try {
-      const before = useEditor.getState().project
       const result = await askEditor(before, question, currentEditorSession(), followUp)
       const changed = result.project !== before
-      if (changed) dispatch({ type: 'replaceProject', project: result.project })
-      const recorded = recordAgentTurn({
+      const stillOnSourceProject = useEditor.getState().project.id === sourceProjectId
+      if (changed && stillOnSourceProject) dispatch({ type: 'replaceProject', project: result.project })
+      const recorded = recordAgentTurn(sourceProjectId, {
         question,
-        answer: result.message,
+        answer: stillOnSourceProject
+          ? result.message
+          : `Finished after you switched projects, so no edit was applied. ${result.message}`,
         calls: result.calls,
-        changed,
+        changed: changed && stillOnSourceProject,
         parentId: followUp?.id
       })
-      if (followUp) selectAgentTurn(recorded.id)
-      onToast(`${changed ? 'Applied to reel' : 'No edit made'} · ${result.message}`)
+      if (followUp) selectAgentTurn(sourceProjectId, recorded.id)
+      onToast(
+        stillOnSourceProject
+          ? `${changed ? 'Applied to reel' : 'No edit made'} · ${result.message}`
+          : `Assistant finished for ${before.name}. Switch back to that project to review it.`
+      )
       setIntent('')
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Agent failed.'
-      recordAgentTurn({ question, answer: message, calls: [], changed: false, failed: true, parentId: followUp?.id })
+      recordAgentTurn(sourceProjectId, { question, answer: message, calls: [], changed: false, failed: true, parentId: followUp?.id })
       onToast(`Agent failed · ${message}`)
     } finally {
       setBusy(false)
@@ -147,7 +158,7 @@ export function AgentPanel({ onToast }: { onToast: (msg: string) => void }) {
             <ol className="agent-turn-list">
               {activity.turns.slice(0, 8).map((turn) => (
                 <li key={turn.id} data-state={turn.failed ? 'failed' : turn.changed ? 'applied' : 'unchanged'}>
-                  <button type="button" onClick={() => selectAgentTurn(turn.id)}>
+                  <button type="button" onClick={() => selectAgentTurn(project.id, turn.id)}>
                     <span className="agent-turn-outcome">
                       {turn.failed ? 'Failed' : turn.changed ? 'Applied to reel' : 'No edit made'}
                     </span>
@@ -192,7 +203,7 @@ export function AgentPanel({ onToast }: { onToast: (msg: string) => void }) {
         {followUp && (
           <span className="agent-followup">
             <span><small>Using context from</small><strong>{followUp.question}</strong></span>
-            <button type="button" aria-label="Start a new question" onClick={() => selectAgentTurn(null)}>×</button>
+            <button type="button" aria-label="Start a new question" onClick={() => selectAgentTurn(project.id, null)}>×</button>
           </span>
         )}
         <textarea

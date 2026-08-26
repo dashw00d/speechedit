@@ -303,7 +303,7 @@ const TOOL_DEFINITIONS: RawToolSpec[] = [
   },
   {
     name: 'get_timeline',
-    description: 'Cuts, overlays, captions, extra audio, marks, and program duration.',
+    description: 'Detailed timeline tracks and clips: ids, assets, PROGRAM timing, text, transforms, caption styles, audio state, cuts, and marks.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -318,7 +318,7 @@ const TOOL_DEFINITIONS: RawToolSpec[] = [
   },
   {
     name: 'get_scenes',
-    description: 'Editorial scenes and retake links.',
+    description: 'Editorial scene ids, names, summaries, exact scene transcript, retake links, and safe sentence-boundary SOURCE times.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -744,7 +744,7 @@ const TOOL_DEFINITIONS: RawToolSpec[] = [
   {
     name: 'set_caption_style',
     description: 'VISIBLE GRAPHICS ONLY. Style one existing caption/title clip. Does not change its text, timing, transcript, or scenes.',
-    inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, style: { type: 'object', description: 'CaptionStyle patch: fontSize, color, background, position, align, fontFamily, weight, italic.' } }, required: ['clipId', 'style'] }
+    inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, style: { type: 'object', description: 'CaptionStyle patch: fontSize, fill, stroke, position (lower/center/upper), align (left/center/right).' } }, required: ['clipId', 'style'] }
   },
   {
     name: 'set_all_caption_styles',
@@ -986,7 +986,7 @@ export function assistantToolsForIntent(intent: string, priorToolNames: string[]
   }
   if (/\b(b[- ]?roll|music|media layer|overlay clip|move (the )?clip|trim (the )?clip|remove (the )?clip)\b/.test(text)) domains.add('media_layers')
   if (/\b(zoom|crop|position|scale|rotation|opacity|blur|redact|redaction|canvas|aspect ratio|vertical|square|picture transform)\b/.test(text)) domains.add('picture_effects')
-  if (/\b(volume|loud|quiet|audio|sound|mix|mute|duck)\b/.test(text)) domains.add('audio_mix')
+  if (/\b(volume|loud(?:er)?|quiet(?:er)?|audio|sound|mix|mute|unmute|duck)\b/.test(text)) domains.add('audio_mix')
   if (/\b(speaker|rename speaker|transcript text|rewrite|spelling|correct (the )?word|change (the )?word)\b/.test(text)) domains.add('transcript_content')
   if (/\b(cut|remove|delete|restore|put back|tighten|pause|silence|filler|speed|ripple|lift|mark in|mark out|razor)\b/.test(text)) domains.add('timeline_edit')
   if (/\b(suggestion|safe edit|review issue|apply safe|dismiss|revert suggestion)\b/.test(text)) domains.add('review_suggestions')
@@ -1075,7 +1075,24 @@ export async function runTool(
             id: t.id,
             type: t.type,
             name: t.name,
-            clips: t.clips.map((c) => ({ id: c.id, start: c.start, duration: c.duration, text: c.text }))
+            muted: t.muted,
+            hidden: t.hidden,
+            locked: t.locked,
+            clips: t.clips.map((c) => ({
+              id: c.id,
+              assetId: c.assetId,
+              start: c.start,
+              duration: c.duration,
+              inPoint: c.inPoint,
+              outPoint: c.outPoint,
+              text: c.text,
+              volume: c.volume,
+              muted: c.muted,
+              pan: c.pan,
+              transform: c.transform,
+              captionStyle: c.style,
+              effect: c.effect
+            }))
           })),
           markIn: project.markIn,
           markOut: project.markOut
@@ -1086,7 +1103,15 @@ export async function runTool(
     case 'get_tags':
       return { project, message: `${project.tags.length} tags`, data: project.tags }
     case 'get_scenes':
-      return { project, message: `${(project.scenes ?? []).length} scenes`, data: project.scenes ?? [] }
+      return {
+        project,
+        message: `${(project.scenes ?? []).length} scenes with exact transcript and safe split boundaries`,
+        data: (project.scenes ?? []).map((scene) => ({
+          ...scene,
+          transcript: sceneWords(project, scene).map((word) => word.text).join(' ').replace(/\s+([,.;!?])/g, '$1'),
+          sentenceBoundaries: sentenceBoundaries(project, scene)
+        }))
+      }
     case 'get_program':
       return {
         project,

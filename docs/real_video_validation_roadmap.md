@@ -26,6 +26,7 @@ Verified on 2026-08-25:
 - [x] Save, reopen, recovery, missing-media, and relink tests pass
 - [x] Local whisper.cpp transcription smoke tests pass in the current Linux/WSL environment
 - [x] Current environment has FFmpeg/FFprobe 4.4.2
+- [x] Phase 0 known-sample path: import JFK → 22 timed words → save/reopen → export (`src/renderer/src/lib/phase0.smoke.test.ts`, run record [`docs/runs/phase0-jfk.md`](runs/phase0-jfk.md))
 - [ ] A representative real-video corpus exists
 - [ ] A complete real deliverable has been edited and accepted
 - [ ] SpeechEdit has completed a real-media import/export on a clean Windows machine
@@ -61,11 +62,11 @@ The repository now has a reproducible Windows x64 ZIP packaging workflow for int
 - [x] Choose and configure Electron Builder.
 - [x] Produce a Windows x64 ZIP validation artifact.
 - [x] Include the package version in the artifact name.
-- [ ] Show exact version/build identity inside the application and diagnostic output.
+- [x] Show exact version/build identity inside the application and diagnostic output.
 - [ ] Test install, launch, upgrade, and uninstall on a clean Windows user account.
 - [ ] Decide how unsigned private-alpha builds will be communicated; code signing can follow before wider distribution.
 
-**Current evidence:** `bun run package:win` produces a valid ZIP. The extracted app launches natively from a `C:\` path and opens a responsive `SpeechEdit` window without a development checkout, Bun, or Node.
+**Current evidence:** `bun run package:win` produces a valid ZIP. The extracted app launches natively from a `C:\` path and opens a responsive `SpeechEdit` window without a development checkout, Bun, or Node. The window title, Preferences, and Project → Advanced show `SpeechEdit <version> · <commit>` (a trailing `+` means a dirty checkout). **Copy build id** pastes a three-line diagnostic for a run record. Packaged builds use the commit baked at `electron-vite` compile time; development reads live `git rev-parse`.
 
 **Exit gate:** A tester can install or extract and launch SpeechEdit without a development checkout, Bun, or a terminal.
 
@@ -75,11 +76,11 @@ SpeechEdit currently invokes `ffmpeg` and `ffprobe` from `PATH`. That is accepta
 
 - [x] Bundle checksum-pinned FFmpeg/FFprobe 6.1.1 Windows x64 binaries.
 - [x] Resolve packaged binaries from `process.resourcesPath/bin` by absolute path instead of assuming shell `PATH`.
-- [ ] Add a startup health check that reports the binary paths and versions.
-- [ ] Provide one plain-language recovery action when either tool is unavailable.
+- [x] Add a startup health check that reports the binary paths and versions.
+- [x] Provide one plain-language recovery action when either tool is unavailable.
 - [ ] Document and satisfy the redistribution/license obligations of the selected build.
 
-**Current evidence:** Both packaged executables run natively on Windows and report FFmpeg/FFprobe 6.1.1. Automated tests verify packaged-path selection and developer-PATH fallback.
+**Current evidence:** Both packaged executables run natively on Windows and report FFmpeg/FFprobe 6.1.1. Automated tests verify packaged-path selection, developer-PATH fallback, version parsing, and a live `-version` probe. The desktop app calls `media:health` on hydrate, shows a banner with **Check again** when either tool is down, and refuses import/export with the same recovery sentence. Damaged packaged binaries keep the “Re-download SpeechEdit” copy instead of asking the user to install FFmpeg on PATH.
 
 **Exit gate:** A clean Windows machine can import and export without manually installing FFmpeg.
 
@@ -100,11 +101,13 @@ The current installer recognizes a Windows whisper.cpp download URL, but its unp
 
 The Electron window currently has a minimum size of 1100×720. This may fit the development display but can be awkward or inaccessible on a 1280×720-class screen after operating-system chrome. Evidence: [`src/main/index.ts`](../src/main/index.ts).
 
+- [x] Lower the minimum window size or add intentional panel collapse behavior if required.
+- [x] Confirm playback does not cause contextual controls to change panel height or make the workspace bounce.
+- [ ] Keyboard-test every critical action when a panel is collapsed.
 - [ ] Test the actual Electron application at 1280×720 and 1366×768.
 - [ ] Confirm import, playback, transcript review, suggestion decisions, save, and export remain reachable.
-- [ ] Confirm playback does not cause contextual controls to change panel height or make the workspace bounce.
-- [ ] Lower the minimum window size or add intentional panel collapse behavior if required.
-- [ ] Keyboard-test every critical action when a panel is collapsed.
+
+**Current evidence:** The window floor is 960×600 (`WINDOW_MIN_*` in [`src/shared/windowLayout.ts`](../src/shared/windowLayout.ts)), which fits a 1280×720 work area after a typical taskbar. At ≤1366×768 the three-column workstation stays, with tighter columns, a shorter menubar, and a 168px timeline cap. The monitor transport row is a reserved 44px slot so selection chrome cannot grow the panel during playback. Alt+1…4 (and the command palette) switch Preview / Review / Script / Timeline when the existing ≤860px pane collapse is active.
 
 **Exit gate:** A tester can finish the baseline workflow on a small laptop without hidden or overlapping required controls.
 
@@ -112,7 +115,10 @@ The Electron window currently has a minimum size of 1100×720. This may fit the 
 
 - [ ] Add a one-click support bundle containing app version, platform, FFmpeg/FFprobe versions, settings with secrets removed, project JSON, source metadata, and recent logs.
 - [ ] Add first-run status for media tools, transcription, cache location, and free disk space.
-- [ ] Test crash recovery by terminating the app during an unsaved edit.
+- [x] Test crash recovery by terminating the app during an unsaved edit.
+
+**Current evidence:** Offering recovery used to call `loadProject` with persist-on, which immediately wrote a clean recovery file and destroyed the dirty one. The offer path now loads the last save with `persist: false`. `bun test src/renderer/src/lib/documentIo.test.ts` (2 pass): after a dirty `setName` + `flushWorkspace`, a second `hydrateWorkspace` still has the dirty recovery on the stub disk and **Restore** reloads it; **Discard** keeps the last save and clears recovery. This is a hydrate drill through the same App functions, not a live Electron kill mid-edit.
+
 - [ ] Define a privacy statement for local files and any configured remote transcription/model endpoint.
 
 ### Explicitly not blockers for the first validation cycle
@@ -131,13 +137,15 @@ These should be prioritized only when real sessions repeatedly demonstrate the n
 
 ## Phase 0 — Establish a reproducible candidate
 
-- [ ] Capture the Git commit and note any intentional uncommitted changes.
+- [x] Capture the Git commit and note any intentional uncommitted changes.
 - [ ] Run the four baseline checks listed under **Current state**.
-- [ ] Launch Electron with `bun run dev`.
-- [ ] Confirm FFmpeg/FFprobe paths and versions.
-- [ ] Transcribe a short known sample and confirm the transcript contains real timed words.
-- [ ] Create a private run folder outside the repository for sources, outputs, projects, logs, and notes.
-- [ ] Create the first run record from the template at the end of this document.
+- [x] Launch Electron with `bun run dev`.
+- [x] Confirm FFmpeg/FFprobe paths and versions.
+- [x] Transcribe a short known sample and confirm the transcript contains real timed words.
+- [x] Create a private run folder outside the repository for sources, outputs, projects, logs, and notes.
+- [x] Create the first run record from the template at the end of this document.
+
+**Current evidence:** `bun test src/renderer/src/lib/phase0.smoke.test.ts` imported `/tmp/speechedit-phase0/jfk.mp4` through `importRecording` with live FFmpeg 4.4.2 and local whisper.cpp, landed 22 real timed words (not speech islands), cut the first word on the command bus, wrote `jfk.speechedit.json`, reopened it, and exported `jfk-export.mp4` (12.88s). Build identity was `SpeechEdit 0.1.0 · f3915fe+ · dev`. `NO_SANDBOX=1 bun run dev` built main/preload and started Electron against the renderer at `http://localhost:5175/` without a crash. Run record: [`docs/runs/phase0-jfk.md`](runs/phase0-jfk.md). The JFK import/export was not repeated inside the Electron window.
 
 **Exit gate:** One identified build can import, transcribe, save, reopen, and export a short known sample.
 

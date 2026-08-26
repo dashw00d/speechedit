@@ -18,12 +18,8 @@ import {
   wantsCheapScenes,
   wantsSeekPeaks,
   wantsSeekThumbs,
-  waveformConcatArgs,
-  waveformConcatList,
   waveformLookArgs,
-  waveformSeekBatchArgs,
   waveformStrategy,
-  peakSeekTimes
 } from '../../../shared/importLooks'
 
 describe('import look policy', () => {
@@ -90,31 +86,17 @@ describe('import look policy', () => {
     expect(ANALYSIS_CACHE_VERSION).toBe(2)
   })
 
-  test('long recordings seek peak windows instead of decoding the whole soundtrack', () => {
+  test('waveforms use one bounded audio decode instead of thousands of seeks', () => {
     expect(wantsSeekPeaks(12)).toBe(false)
     expect(wantsSeekPeaks(89)).toBe(false)
-    expect(wantsSeekPeaks(90)).toBe(true)
-    expect(wantsSeekPeaks(3600)).toBe(true)
+    expect(wantsSeekPeaks(90)).toBe(false)
+    expect(wantsSeekPeaks(3600)).toBe(false)
     expect(waveformStrategy(12)).toBe('decode')
-    expect(waveformStrategy(3600)).toBe('seek')
-    const times = peakSeekTimes(3600, 20)
-    expect(times).toHaveLength(20)
-    expect(times[0]).toBeGreaterThanOrEqual(0)
-    expect(times.at(-1) ?? 0).toBeLessThan(3600)
-    const list = waveformConcatList('/tmp/long.mp4', [10, 20], 0.06)
-    expect(list).toContain('ffconcat version 1.0')
-    expect(list).toContain("file '/tmp/long.mp4'")
-    expect(list).toContain('inpoint 10.000')
-    expect(list).toContain('outpoint 10.060')
-    expect(waveformConcatArgs('/tmp/windows.concat')).toContain('-f')
-    expect(waveformConcatArgs('/tmp/windows.concat').join(' ')).toMatch(/concat/)
-    expect(waveformConcatArgs('/tmp/windows.concat')).toContain('-vn')
-    const batch = waveformSeekBatchArgs('/tmp/long.mp4', [10, 20]).join(' ')
-    expect(batch).toContain('-ss 10')
-    expect(batch).toContain('-ss 20')
-    expect(batch).toContain('-t 0.06')
-    expect(batch).toContain('-vn')
-    expect(waveformLookArgs('/tmp/a.mp4')).not.toContain('-ss')
+    expect(waveformStrategy(3600)).toBe('decode')
+    const args = waveformLookArgs('/tmp/a.mp4')
+    expect(args.filter((arg) => arg === '-i')).toHaveLength(1)
+    expect(args).not.toContain('-ss')
+    expect(args).toContain('1000')
   })
 
   test('long recordings share one cheap audio look for silence and loudness', () => {

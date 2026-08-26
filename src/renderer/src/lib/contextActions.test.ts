@@ -143,6 +143,22 @@ describe('transcript context choices', () => {
 })
 
 describe('suggest task copy', () => {
+  test('speech-island fallback is not advertised as a transcript', () => {
+    const empty = createEmptyProject('islands')
+    const project = {
+      ...empty,
+      transcript: {
+        ...empty.transcript,
+        words: [
+          { id: 'w1', text: 'Speech 1', start: 0, end: 2, speaker: 'ryan', deleted: false, origin: 'island' as const }
+        ]
+      }
+    }
+    expect(suggestTask(project).headline).toMatch(/No transcript/)
+    expect(suggestTask(project).headline).not.toMatch(/Transcript ready/)
+    expect(suggestTask(createEmptyProject()).headline).toMatch(/Open media/)
+  })
+
   test('demo starts as transcript-ready with safe cleans, not a chip dump', () => {
     const task = suggestTask(createDemoProject())
     expect(task.headline).toMatch(/Transcript ready/)

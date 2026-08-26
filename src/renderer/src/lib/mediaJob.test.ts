@@ -55,6 +55,11 @@ describe('job gate + errors', () => {
     expect(mediaBusyToast(false, null)).toBeNull()
     expect(explainImportError(new Error('spawn ffprobe ENOENT'))).toMatch(/Install ffmpeg 4\.4/)
     expect(explainImportError(new Error('ffmpeg did not start (spawn ffmpeg ENOENT)'))).toMatch(/PATH/)
+    expect(
+      explainImportError(
+        new Error('Bundled ffmpeg did not start. Re-download SpeechEdit or set SPEECHEDIT_FFMPEG. (spawn ENOENT)')
+      )
+    ).toMatch(/Re-download SpeechEdit/)
     expect(explainImportError(new Error(`Can't open that recording:\n/no/file.mp4`))).toMatch(/Pick a real media file/)
     expect(explainImportError(new Error('No such file or directory'))).toMatch(/Pick a real media file/)
     expect(isWhisperUnavailable(new Error(whisperMissingMessage()))).toBe(true)

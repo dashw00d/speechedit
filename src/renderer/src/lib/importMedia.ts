@@ -1,4 +1,5 @@
-import { host } from '../host'
+import { host, mediaDisplayName } from '../host'
+import { browserMediaKeyForPath } from './browserMediaStore'
 import { displaySize, quarterTurn } from '../../../shared/mediaOrient'
 import { needsProxy } from '../../../shared/proxy'
 import type { Asset, Command, Project, Word } from '../types'
@@ -12,6 +13,7 @@ import { loadSettings } from './settings'
 import { createEmptyProject } from './demo'
 import { parseSrt } from './transcript'
 import { uid } from './time'
+import { failActivity, finishActivity, startActivity, updateActivity } from './activity'
 import { wordsFromIslands } from './transcript'
 import {
   explainImportError,
@@ -64,13 +66,15 @@ export async function inspectRecording(
   if (!file) throw new Error('Pick a media file to import.')
 
   onStage?.('probe')
+  const displayName = mediaDisplayName(file)
+  startActivity({ id: 'media:probe', label: 'Reading media', detail: displayName })
   const info = await host.probe(file).catch((err) => {
     if (isJobCancelled(err)) throw err
     throw new Error(explainImportError(err))
-  })
+  }).finally(() => finishActivity('media:probe'))
   throwIfAborted(signal, 'import')
 
-  const name = file.split(/[\\/]/).pop() ?? 'Recording'
+  const name = displayName
   const shown = displaySize(info.width, info.height, info.rotation)
   const displayRotation = quarterTurn(info.rotation)
   const baseAsset: Asset = {
@@ -85,6 +89,7 @@ export async function inspectRecording(
     sampleRate: info.sampleRate,
     waveform: [],
     sourceOffset: 0,
+    ...(browserMediaKeyForPath(file) ? { browserMediaKey: browserMediaKeyForPath(file) } : {}),
     ...(displayRotation ? { displayRotation } : {}),
     ...(info.codec ? { codec: info.codec } : {}),
     ...(info.vfr ? { vfr: true } : {})
@@ -114,12 +119,13 @@ export async function inspectRecording(
 
   const proxyP = (async () => {
     if (!wantProxy) return ''
+    startActivity({ id: 'media:proxy', label: 'Building preview', detail: 'Smaller editing copy' })
     if (!looksFinished) onStage?.('proxy')
     throwIfAborted(signal, 'import')
     const path = await host.makeProxy(file).catch((err) => {
       if (isJobCancelled(err)) throw err
       return ''
-    })
+    }).finally(() => finishActivity('media:proxy'))
     throwIfAborted(signal, 'import')
     proxyPath = path
     proxyFinished = true
@@ -134,6 +140,10 @@ export async function inspectRecording(
   const looksP = (async () => {
     if (proxyFinished) onStage?.('looks')
     throwIfAborted(signal, 'import')
+    startActivity({ id: 'media:analysis', label: 'Analyzing picture and sound', detail: 'Pauses, motion, and loudness' })
+    const stopAnalyzeProgress = host.onAnalyzeProgress((info) => {
+      updateActivity('media:analysis', { ratio: info.ratio, detail: info.stage })
+    })
     const analysisP = host.analyze(file).catch(async (err) => {
       if (isJobCancelled(err)) throw err
       const silence = await host.silence(file).catch((inner) => {
@@ -141,15 +151,20 @@ export async function inspectRecording(
         throw new Error(explainImportError(err))
       })
       return { silence, scenes: { times: [], staticRegions: [] }, loudness: [] }
+    }).finally(() => {
+      stopAnalyzeProgress()
+      finishActivity('media:analysis')
     })
+    startActivity({ id: 'media:waveform', label: 'Drawing waveform', detail: 'One audio pass' })
     const peaksP = host.waveform(file).catch((err) => {
       if (isJobCancelled(err)) throw err
       throw new Error(explainImportError(err))
-    })
+    }).finally(() => finishActivity('media:waveform'))
+    startActivity({ id: 'media:thumbnails', label: 'Generating thumbnails', detail: 'Timeline preview frames' })
     const thumbsP = host.thumbnails(file).catch((err) => {
       if (isJobCancelled(err)) throw err
       return []
-    })
+    }).finally(() => finishActivity('media:thumbnails'))
     const [peaks, thumbs, analysis] = await Promise.all([peaksP, thumbsP, analysisP])
     throwIfAborted(signal, 'import')
     looksFinished = true
@@ -171,7 +186,18 @@ export async function inspectRecording(
   })()
 
   const asrP = (async () => {
+    startActivity({ id: 'media:transcribe', label: 'Whisper transcription', detail: 'Preparing audio', ratio: 0.05 })
+    let keepErrorVisible = false
     const stopProgress = host.onTranscribeProgress((info) => {
+      const stage = {
+        prepare: 'Preparing audio',
+        install: 'Installing local Whisper',
+        audio: 'Extracting speech audio',
+        run: info.chunk ? `Transcribing chunk ${info.chunk.finished} of ${info.chunk.total}` : 'Recognizing words',
+        parse: 'Building word timings',
+        done: 'Transcript ready'
+      }[info.stage]
+      updateActivity('media:transcribe', { ratio: info.ratio, detail: stage })
       if (looksFinished) onStage?.(`transcript:${info.stage}`)
       if (info.cues?.length) emitWords(info.cues)
     })
@@ -183,11 +209,16 @@ export async function inspectRecording(
         if (isJobCancelled(err)) throw err
         const explained = explainImportError(err)
         if (/FFmpeg did not start|Can't open that recording/i.test(explained)) throw new Error(explained)
-        if (isWhisperUnavailable(err) || kind !== 'off') return null
+        if (isWhisperUnavailable(err) || kind !== 'off') {
+          failActivity('media:transcribe', explained)
+          keepErrorVisible = true
+          return null
+        }
         throw new Error(explained)
       }
     } finally {
       stopProgress()
+      if (!keepErrorVisible) finishActivity('media:transcribe')
     }
   })()
 

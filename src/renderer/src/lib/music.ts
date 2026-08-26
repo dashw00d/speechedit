@@ -1,6 +1,7 @@
 import type { Asset, Project } from '../types'
-import { host } from '../host'
+import { host, isElectron } from '../host'
 import { programLength } from './commands'
+import { mediaToolsBlocker } from './mediaHealth'
 import { explainImportError, mediaBusyToast } from './mediaJobs'
 import { pickAudio } from './pickFile'
 import { zoomPlacement, type ZoomBasis } from './zoom'
@@ -72,6 +73,10 @@ export async function addMusicFromContext(): Promise<{ toast: string; added: boo
   const editor = useEditor.getState()
   const busy = mediaBusyToast(editor.exporting, editor.analyzing)
   if (busy) return { toast: busy, added: false }
+  if (isElectron) {
+    const blocked = await mediaToolsBlocker()
+    if (blocked) return { toast: blocked, added: false }
+  }
   try {
     await host.beginJob('import')
     editor.setAnalyzing('probe')

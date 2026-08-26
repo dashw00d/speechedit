@@ -214,6 +214,26 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
         run: () => window.dispatchEvent(new CustomEvent('speechedit:shortcuts'))
       },
       {
+        name: 'Preview pane',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:workspace-pane', { detail: 'preview' }))
+      },
+      {
+        name: 'Review pane',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:workspace-pane', { detail: 'review' }))
+      },
+      {
+        name: 'Script pane',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:workspace-pane', { detail: 'script' }))
+      },
+      {
+        name: 'Timeline pane',
+        group: 'file',
+        run: () => window.dispatchEvent(new CustomEvent('speechedit:workspace-pane', { detail: 'timeline' }))
+      },
+      {
         name: 'Note at playhead',
         group: 'edit',
         run: () => onToast?.(addNoteFromContext().toast)

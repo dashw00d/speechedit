@@ -277,7 +277,7 @@ async function planWithModel(
     annotations: 'ANNOTATIONS — keep/demo/note tags only',
     scene_structure: 'SCENE STRUCTURE — transcript chapters, names, summaries, and retakes only',
     transcript_content: 'TRANSCRIPT CONTENT — spoken words and speaker identity only',
-    visible_graphics: 'VISIBLE GRAPHICS — on-screen captions, titles, lower thirds, and zooms only',
+    visible_graphics: 'VISIBLE GRAPHICS — on-screen captions, titles, and lower thirds only',
     media_layers: 'MEDIA LAYERS — B-roll, music, overlays, and extra timeline clips only',
     picture_effects: 'PICTURE EFFECTS — zoom, crop, transform, redaction, and canvas only',
     audio_mix: 'AUDIO MIX — volume automation only',

@@ -1,6 +1,13 @@
 import { JobGate } from '../../shared/mediaJob'
+import type { AppIdentity } from '../../shared/appIdentity'
+import type { MediaToolsHealth } from '../../shared/mediaTools'
 import { ModelQueue, type ModelQueueStatus } from '../../shared/modelQueue'
 import type { TranscribeProgress } from '../../shared/asr'
+import { WEB_DEMO_INTELLIGENCE } from './lib/settings'
+import {
+  browserMediaForPath,
+  registerBrowserMedia as persistBrowserMedia
+} from './lib/browserMediaStore'
 
 export interface SpeechHost {
   openMedia: () => Promise<string | null>
@@ -83,6 +90,8 @@ export interface SpeechHost {
     loudness: { start: number; end: number; lufs: number }[]
   }>
   encoders: () => Promise<{ id: string; label: string; hardware: boolean }[]>
+  mediaHealth: () => Promise<MediaToolsHealth>
+  appIdentity: () => Promise<AppIdentity>
   beginJob: (kind: 'export' | 'import') => Promise<void>
   endJob: (kind?: 'export' | 'import') => Promise<void>
   cancelJob: (kind?: 'export' | 'import') => Promise<void>
@@ -94,6 +103,13 @@ export interface SpeechHost {
 
 const missing = async () => null
 const empty = async () => []
+
+async function webAppVersion(): Promise<string> {
+  const fromEnv = (globalThis as { process?: { env?: { SPEECHEDIT_VERSION?: string } } }).process?.env
+    ?.SPEECHEDIT_VERSION
+  if (fromEnv?.trim()) return fromEnv.trim()
+  return '0.1.0'
+}
 
 function projectName(project: unknown): string {
   if (project && typeof project === 'object') {
@@ -140,16 +156,123 @@ function pickBrowserFile(accept: string): Promise<{ name: string; text: string }
   })
 }
 
+export function registerBrowserMedia(file: File): Promise<string> {
+  return persistBrowserMedia(file)
+}
+
+export function mediaDisplayName(filePath: string): string {
+  return browserMediaForPath(filePath)?.name ?? filePath.split(/[\\/]/).pop() ?? 'Recording'
+}
+
+function pickBrowserMedia(accept: string): Promise<string | null> {
+  if (typeof document === 'undefined') return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = accept
+    const finish = (value: string | null) => {
+      input.removeEventListener('cancel', onCancel)
+      resolve(value)
+    }
+    const onCancel = () => finish(null)
+    input.addEventListener('cancel', onCancel)
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      finish(file ? await registerBrowserMedia(file) : null)
+    }
+    input.click()
+  })
+}
+
+async function probeBrowserMedia(filePath: string): Promise<{
+  duration: number
+  width?: number
+  height?: number
+  hasVideo: boolean
+  hasAudio: boolean
+}> {
+  if (typeof document === 'undefined') throw new Error('Open media needs a browser window.')
+  const file = browserMediaForPath(filePath)
+  const hasVideo = Boolean(file?.type.startsWith('video/') || /\.(mp4|m4v|mov|mkv|webm|avi)$/i.test(file?.name ?? ''))
+  const media = document.createElement(hasVideo ? 'video' : 'audio')
+  media.preload = 'metadata'
+  media.src = filePath
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error('The browser took too long to read that recording.')), 15_000)
+      const finish = (fn: () => void) => {
+        window.clearTimeout(timer)
+        media.removeEventListener('loadedmetadata', onLoaded)
+        media.removeEventListener('error', onError)
+        fn()
+      }
+      const onLoaded = () => finish(resolve)
+      const onError = () => finish(() => reject(new Error('This browser cannot decode that media file.')))
+      media.addEventListener('loadedmetadata', onLoaded)
+      media.addEventListener('error', onError)
+    })
+    return {
+      duration: Number.isFinite(media.duration) ? media.duration : 0,
+      ...(hasVideo && media instanceof HTMLVideoElement
+        ? { width: media.videoWidth || undefined, height: media.videoHeight || undefined }
+        : {}),
+      hasVideo,
+      // Browsers do not expose a portable audio-track probe. Silent video is
+      // harmless here because the waveform decoder below fails soft.
+      hasAudio: true
+    }
+  } finally {
+    media.removeAttribute('src')
+    media.load()
+  }
+}
+
+async function browserWaveform(filePath: string, samples = 1800): Promise<number[]> {
+  if (typeof window === 'undefined') return []
+  const file = browserMediaForPath(filePath)
+  if (file && file.size > 500 * 1024 * 1024) return []
+  const AudioContextClass = window.AudioContext
+  if (!AudioContextClass) return []
+  const context = new AudioContextClass()
+  try {
+    const bytes = await fetch(filePath).then((response) => response.arrayBuffer())
+    const audio = await context.decodeAudioData(bytes)
+    const channels = Array.from({ length: Math.min(2, audio.numberOfChannels) }, (_, index) => audio.getChannelData(index))
+    if (!channels.length) return []
+    const size = Math.max(1, Math.floor(audio.length / samples))
+    return Array.from({ length: samples }, (_, index) => {
+      let peak = 0
+      const start = index * size
+      const end = index === samples - 1 ? audio.length : Math.min(audio.length, start + size)
+      for (const channel of channels) {
+        for (let cursor = start; cursor < end; cursor++) peak = Math.max(peak, Math.abs(channel[cursor] ?? 0))
+      }
+      return Math.min(1, peak)
+    })
+  } catch {
+    return []
+  } finally {
+    void context.close()
+  }
+}
+
 const electronHost = typeof window !== 'undefined' ? window.speech : undefined
 const webJobs = new JobGate()
 const webModelListeners = new Set<(status: ModelQueueStatus) => void>()
+const webTranscribeListeners = new Set<(progress: TranscribeProgress) => void>()
 const webModelQueue = new ModelQueue((status) => {
   for (const listener of webModelListeners) listener(status)
 })
 
+async function webDemoStatus(): Promise<{ available: boolean; model: string; message?: string }> {
+  const response = await fetch('/api/demo-ai/status')
+  if (!response.ok) throw new Error(`Demo AI status ${response.status}.`)
+  return await response.json() as { available: boolean; model: string; message?: string }
+}
+
 export const host: SpeechHost = electronHost ?? {
-  openMedia: missing,
-  openBroll: missing,
+  openMedia: () => pickBrowserMedia('video/*,audio/*,.mkv,.avi'),
+  openBroll: () => pickBrowserMedia('image/*,video/*,.mkv,.avi'),
   chooseTextExport: missing,
   writeText: async () => {
     throw new Error('Save needs the Electron app.')
@@ -233,71 +356,61 @@ export const host: SpeechHost = electronHost ?? {
   mediaExists: async (paths) =>
     paths.map((path) => ({
       path,
-      exists: /^(blob:|https?:|data:|media:)/i.test(path)
+      exists: path.startsWith('blob:')
+        ? Boolean(browserMediaForPath(path))
+        : /^(https?:|data:|media:)/i.test(path)
     })),
   chooseExport: missing,
-  probe: async () => {
-    throw new Error('Import needs the Electron app.')
-  },
+  probe: probeBrowserMedia,
   makeProxy: async () => '',
   probeProxyGop: async () => 15,
-  waveform: empty,
+  waveform: browserWaveform,
   thumbnails: empty,
   silence: empty,
   scenes: async () => ({ times: [], staticRegions: [] }),
   loudness: empty,
-  transcribe: async () => null,
+  transcribe: async (file) => {
+    const { transcribeBrowserMedia } = await import('./lib/browserWhisper')
+    return transcribeBrowserMedia(file, (progress) => {
+      for (const listener of webTranscribeListeners) listener(progress)
+    })
+  },
   asrPath: async () => [],
   complete: async (req) => {
-    if (req.endpoint.kind === 'codex-cli' || req.endpoint.kind === 'grok-cli') {
-      throw new Error('CLI model providers require the desktop app.')
-    }
     const { completeOpenAI } = await import('./lib/providers')
     return webModelQueue.enqueue(() =>
       completeOpenAI(
-        {
-          kind: 'openai-compatible',
-          baseUrl: req.endpoint.baseUrl || '',
-          model: req.endpoint.model || '',
-          apiKey: req.endpoint.apiKey || ''
-        },
+        WEB_DEMO_INTELLIGENCE,
         req.messages as { role: 'system' | 'user' | 'assistant'; content: string }[]
       ),
-      { label: req.label }
+      { label: req.label || 'Demo AI' }
     )
   },
-  listModels: async (endpoint) => {
-    if (endpoint.kind === 'codex-cli' || endpoint.kind === 'grok-cli') {
-      throw new Error('CLI model providers require the desktop app.')
-    }
-    if (!endpoint.baseUrl) throw new Error('Intelligence endpoint is not configured.')
-    const headers: Record<string, string> = {}
-    if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`
-    const res = await fetch(`${endpoint.baseUrl.replace(/\/$/, '')}/models`, { headers })
-    if (!res.ok) throw new Error(`Model list ${res.status}: ${(await res.text()).slice(0, 240)}`)
-    const data = (await res.json()) as { data?: { id?: string }[] }
+  listModels: async () => {
+    const status = await webDemoStatus()
+    if (!status.available) throw new Error(status.message || 'Demo AI is unavailable on this server.')
     return {
       provider: 'openai-compatible' as const,
-      models: (data.data ?? []).flatMap((model) =>
-        model.id ? [{ id: model.id, capabilities: [] as string[] }] : []
-      )
+      models: [{
+        id: status.model || WEB_DEMO_INTELLIGENCE.model,
+        capabilities: ['tools', 'structured replies'],
+        remote: true,
+        detail: 'SpeechEdit Demo AI · free router'
+      }]
     }
   },
-  testModel: async (endpoint) => {
-    if (endpoint.kind === 'codex-cli' || endpoint.kind === 'grok-cli') {
-      throw new Error('CLI model providers require the desktop app.')
-    }
+  testModel: async () => {
     const started = Date.now()
     const { completeOpenAI } = await import('./lib/providers')
     const reply = await webModelQueue.enqueue(() =>
       completeOpenAI(
-        { kind: 'openai-compatible', baseUrl: endpoint.baseUrl || '', model: endpoint.model || '', apiKey: endpoint.apiKey || '' },
+        WEB_DEMO_INTELLIGENCE,
         [
           { role: 'system', content: 'Return only a JSON object.' },
           { role: 'user', content: 'Return {"status":"SPEECHEDIT_MODEL_OK"}.' }
         ]
       ),
-      { label: `Test connection · ${endpoint.model || endpoint.kind || 'model'}` }
+      { label: 'Test Demo AI' }
     )
     try {
       const start = reply.indexOf('{')
@@ -307,7 +420,7 @@ export const host: SpeechHost = electronHost ?? {
     } catch {
       throw new Error('Model replied, but failed the structured JSON test.')
     }
-    return { model: endpoint.model || '', latencyMs: Date.now() - started, reply }
+    return { model: WEB_DEMO_INTELLIGENCE.model, latencyMs: Date.now() - started, reply }
   },
   modelQueueStatus: async () => webModelQueue.status(),
   onModelQueue: (fn) => {
@@ -329,6 +442,22 @@ export const host: SpeechHost = electronHost ?? {
     loudness: []
   }),
   encoders: async () => [{ id: 'libx264', label: 'x264 (CPU)', hardware: false }],
+  mediaHealth: async () => ({
+    ffmpeg: { name: 'ffmpeg', path: 'ffmpeg', version: null, ok: false },
+    ffprobe: { name: 'ffprobe', path: 'ffprobe', version: null, ok: false },
+    ok: false,
+    message: 'Browser preview is available. Whisper transcription, full media analysis, and export require the desktop app.'
+  }),
+  appIdentity: async () => ({
+    name: 'SpeechEdit',
+    version: await webAppVersion(),
+    commit: null,
+    dirty: false,
+    channel: 'web',
+    electron: '',
+    platform: 'web',
+    arch: ''
+  }),
   beginJob: async (kind) => {
     webJobs.start(kind)
   },
@@ -337,13 +466,20 @@ export const host: SpeechHost = electronHost ?? {
   },
   cancelJob: async (kind) => {
     webJobs.cancel(kind)
+    if (!kind || kind === 'import') {
+      const { cancelBrowserWhisper } = await import('./lib/browserWhisper')
+      cancelBrowserWhisper()
+    }
   },
   exportProgram: async () => {
     throw new Error('Export needs the Electron app.')
   },
   onExportProgress: () => () => undefined,
   onAnalyzeProgress: () => () => undefined,
-  onTranscribeProgress: () => () => undefined
+  onTranscribeProgress: (fn) => {
+    webTranscribeListeners.add(fn)
+    return () => webTranscribeListeners.delete(fn)
+  }
 }
 
 export function mediaUrl(filePath: string): string {

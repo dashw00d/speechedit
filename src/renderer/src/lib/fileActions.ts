@@ -1,4 +1,4 @@
-import { host, isElectron } from '../host'
+import { host, isElectron, mediaDisplayName, registerBrowserMedia } from '../host'
 import { assetNeedsProxy } from '../../../shared/proxy'
 import { applyInterchange, pickInterchange } from './interchange'
 import {
@@ -25,6 +25,7 @@ import {
   isJobCancelled,
   whisperMissingMessage
 } from './mediaJobs'
+import { mediaToolsBlocker } from './mediaHealth'
 import { openDocumentFromRaw } from './projectDocument'
 import { forgetRecent, rememberRecent } from './recents'
 import {
@@ -45,6 +46,7 @@ import {
 import { parseAnyTranscript } from './transcript'
 import { useEditor } from '../store'
 import type { Command } from '../types'
+import { finishActivity, startActivity } from './activity'
 
 function leftoverReviewToast(kind: 'activity' | 'still' | 'static' | 'loud'): string {
   if (kind === 'activity') return 'Quiet picture changes need a listen. Silent demo, Speed, or Cut.'
@@ -99,7 +101,9 @@ function inspectStageHandler(
 ): (stage: string) => void {
   return (stage) => {
     if (stage === 'transcript:missing') {
-      whisperNote.current = whisperMissingMessage()
+      whisperNote.current = isElectron
+        ? whisperMissingMessage()
+        : 'Local browser Whisper did not return words. Try Transcribe again, or drop Whisper JSON here.'
       useEditor.getState().setAnalyzing('transcript')
       return
     }
@@ -109,7 +113,21 @@ function inspectStageHandler(
       return
     }
     useEditor.getState().setAnalyzing(stage)
-    onToast(opened() ? `Analyzing · ${stage}` : `${label} · ${stage}`)
+    const readable =
+      stage === 'probe'
+        ? 'Reading media'
+        : stage === 'proxy' || stage === 'preview'
+          ? 'Building preview'
+          : stage === 'looks'
+            ? 'Analyzing picture and sound'
+            : stage === 'transcript:islands'
+              ? 'Building approximate speech regions'
+              : stage.startsWith('transcript:')
+                ? 'Whisper transcription'
+                : stage === 'transcript'
+                  ? 'Transcript ready'
+                  : stage
+    onToast(opened() ? readable : `${label} · ${readable}`)
   }
 }
 
@@ -209,7 +227,20 @@ export async function importMediaFromPath(file: string, onToast: ToastFn): Promi
     onToast(busy)
     return
   }
+  if (isElectron) {
+    const blocked = await mediaToolsBlocker()
+    if (blocked) {
+      onToast(blocked)
+      return
+    }
+  }
   const signal = createImportSignal()
+  startActivity({
+    id: 'media:import',
+    label: 'Opening media',
+    detail: mediaDisplayName(file),
+    cancellable: 'import'
+  })
   const whisperNote = { current: null as string | null }
   const inspect = inspectMediaCallbacks(onToast, whisperNote, 'Opening', (partial) => {
     useEditor.getState().loadProject(projectFromTake(partial), { path: null, clean: false })
@@ -235,6 +266,7 @@ export async function importMediaFromPath(file: string, onToast: ToastFn): Promi
   } finally {
     if (!inspect.released.current) await host.endJob('import').catch(() => undefined)
     useEditor.getState().setAnalyzing(null)
+    finishActivity('media:import')
   }
 }
 
@@ -245,10 +277,17 @@ export async function importMediaAction(onToast: ToastFn): Promise<void> {
     onToast(busy)
     return
   }
+  if (isElectron) {
+    const blocked = await mediaToolsBlocker()
+    if (blocked) {
+      onToast(blocked)
+      return
+    }
+  }
   if (!(await confirmLoseWork())) return
   const file = await host.openMedia()
   if (!file) {
-    onToast(isElectron ? 'No file selected.' : 'Open this in the desktop app to import a recording.')
+    onToast('No file selected.')
     return
   }
   await importMediaFromPath(file, onToast)
@@ -261,12 +300,25 @@ export async function appendTakeAction(onToast: ToastFn): Promise<void> {
     onToast(busy)
     return
   }
+  if (isElectron) {
+    const blocked = await mediaToolsBlocker()
+    if (blocked) {
+      onToast(blocked)
+      return
+    }
+  }
   const file = await host.openMedia()
   if (!file) {
-    onToast(isElectron ? 'No file selected.' : 'Open this in the desktop app to add a take.')
+    onToast('No file selected.')
     return
   }
   const signal = createImportSignal()
+  startActivity({
+    id: 'media:import',
+    label: 'Adding take',
+    detail: mediaDisplayName(file),
+    cancellable: 'import'
+  })
   const whisperNote = { current: null as string | null }
   const inspect = inspectMediaCallbacks(onToast, whisperNote, 'Analyzing take', (partial) => {
     useEditor.getState().dispatch({ type: 'appendTake', asset: partial.asset, words: [] })
@@ -305,6 +357,7 @@ export async function appendTakeAction(onToast: ToastFn): Promise<void> {
   } finally {
     if (!inspect.released.current) await host.endJob('import').catch(() => undefined)
     useEditor.getState().setAnalyzing(null)
+    finishActivity('media:import')
   }
 }
 
@@ -393,11 +446,7 @@ export async function ingestDroppedFile(file: File, onToast: ToastFn): Promise<v
   }
 
   if (kind === 'media') {
-    const path = droppedFilePath(file)
-    if (!path) {
-      onToast('Drop recordings in the desktop app — the browser cannot read the file path.')
-      return
-    }
+    const path = droppedFilePath(file) ?? (await registerBrowserMedia(file))
     if (!(await confirmLoseWork('Replace this reel with the dropped recording?'))) return
     await importMediaFromPath(path, onToast)
     return

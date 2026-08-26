@@ -1,0 +1,21 @@
+# Real-video run 2026-08-25 — Phase 0 JFK
+
+- Tester: agent (automated Phase 0 smoke)
+- Build/commit: SpeechEdit 0.1.0 · f3915fe+ · dev (dirty checkout)
+- Platform and display size: linux/x64 WSL2. `NO_SANDBOX=1 bun run dev` started Electron (renderer on :5175) and stayed up; the JFK pipeline was not repeated in that window.
+- Source fingerprint and metadata: public-domain JFK `jfk.wav` muxed with lavfi black 320×240@25, H.264/AAC, 13.00s. Artifacts in `/tmp/speechedit-phase0/`.
+- Intended deliverable: prove import → local Whisper words → command-bus cut → save/reopen → FFmpeg export. Not a shippable video.
+- Started: 2026-08-25
+- First playable: probe during `importRecording` (same process)
+- Transcript usable: yes — 22 timed words, “and so my fellow Americans ask not what your country can do for you…”
+- Analysis complete: yes (silence/scenes/loudness on the native host)
+- Proxy complete: skipped (320×240 does not need a proxy)
+- Active edit time: one `toggleWords` on the first word via `applyCommand`
+- Export time and size: `jfk-export.mp4` 222916 bytes, 12.88s (source 13s minus the cut word)
+- Save/reopen passed: yes — `jfk.speechedit.json` relativized `jfk.mp4`, deleted flag survived `openDocumentFromRaw`
+- Full watch-through passed: no (file probed, not watched)
+- Artifact accepted for real use: no
+- P0 defects: none observed on this sample
+- P1 defects: none observed on this sample
+- Confusing moments: none — islands were not used
+- What should change before the next run: launch Electron (`bun run dev`), repeat on a consented 8–15 minute screen recording, watch the export all the way through

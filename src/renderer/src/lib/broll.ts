@@ -1,6 +1,7 @@
 import type { Asset, Project, Transform } from '../types'
 import { DEFAULT_TRANSFORM } from '../types'
-import { host } from '../host'
+import { host, isElectron } from '../host'
+import { mediaToolsBlocker } from './mediaHealth'
 import { explainImportError, mediaBusyToast } from './mediaJobs'
 import { pickBroll } from './pickFile'
 import { zoomPlacement, type ZoomBasis } from './zoom'
@@ -73,6 +74,10 @@ export async function addBrollFromContext(): Promise<{ toast: string; added: boo
   const editor = useEditor.getState()
   const busy = mediaBusyToast(editor.exporting, editor.analyzing)
   if (busy) return { toast: busy, added: false }
+  if (isElectron) {
+    const blocked = await mediaToolsBlocker()
+    if (blocked) return { toast: blocked, added: false }
+  }
   try {
     await host.beginJob('import')
     editor.setAnalyzing('probe')

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isElectron } from '../host'
 import { confirmLoseWork } from '../lib/documentIo'
 import { openRecentAction } from '../lib/fileActions'
 import { listRecents, recentWhen } from '../lib/recents'
@@ -45,12 +46,14 @@ export function StartGuide({
       <p className="start-guide-lead">
         {compact
           ? 'Open a recording, drop a file here, or try the studio demo.'
-          : 'Edit video by editing words. Open a recording to transcribe, or drop a transcript if you already have one.'}
+          : isElectron
+            ? 'Edit video by editing words. Open a recording to transcribe, or drop a transcript if you already have one.'
+            : 'Edit video by editing words. Private Whisper is already starting in this browser—open a recording and it transcribes automatically.'}
       </p>
       <div className="start-cards">
         <button type="button" className="start-card" data-primary="true" onClick={openMedia}>
           <strong>Open media</strong>
-          <span>Import a recording — we transcribe, find pauses, and suggest cuts</span>
+          <span>{isElectron ? 'Import a recording — we transcribe, find pauses, and suggest cuts' : 'Pick a recording — local Whisper turns it into editable words automatically'}</span>
         </button>
         <button type="button" className="start-card" data-kind="drop" onClick={openTranscript}>
           <strong>{hover ? 'Drop to open' : 'Open or drop transcript'}</strong>

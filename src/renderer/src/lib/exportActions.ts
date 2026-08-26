@@ -16,12 +16,14 @@ import {
   projectToTranscriptTxt,
   projectToVtt
 } from './interchange'
+import { mediaToolsBlocker } from './mediaHealth'
 import { cancelExport, isJobCancelled, mediaBusyToast } from './mediaJobs'
 import { saveTextExport } from './saveText'
 import { formatClock } from './time'
 import { useEditor } from '../store'
 import type { Project } from '../types'
 import type { ToastFn } from './fileActions'
+import { failActivity, finishActivity, startActivity, updateActivity } from './activity'
 
 export type SidecarId =
   | 'srt'
@@ -388,14 +390,30 @@ export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts 
     onToast('Open media to export a program.')
     return
   }
+  if (isElectron) {
+    const blocked = await mediaToolsBlocker()
+    if (blocked) {
+      onToast(blocked)
+      return
+    }
+  }
   const picked = await host.chooseExport()
   if (!picked) return
   const output = opts.audioOnly ? picked.replace(/\.[^.]+$/, '.m4a') : picked
   editor.setExporting(true)
+  startActivity({
+    id: 'media:export',
+    label: opts.audioOnly ? 'Exporting audio' : 'Exporting video',
+    detail: info.summary,
+    ratio: 0,
+    cancellable: 'export'
+  })
   onToast(`Export 0% — ${info.summary}`)
-  const stop = host.onExportProgress((progress) =>
+  const stop = host.onExportProgress((progress) => {
+    updateActivity('media:export', { ratio: progress.ratio, detail: progress.stage })
     onToast(`Export ${Math.round(progress.ratio * 100)}% — ${progress.stage}`)
-  )
+  })
+  let keepErrorVisible = false
   try {
     await host.exportProgram({ ...job, output })
     onToast(
@@ -404,9 +422,14 @@ export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts 
         : `Export finished — ${info.summary}. File: ${output}`
     )
   } catch (err) {
+    if (!isJobCancelled(err)) {
+      failActivity('media:export', err instanceof Error ? err.message : 'Export failed.')
+      keepErrorVisible = true
+    }
     onToast(isJobCancelled(err) ? 'Export cancelled.' : err instanceof Error ? err.message : 'Export failed.')
   } finally {
     stop()
+    if (!keepErrorVisible) finishActivity('media:export')
     useEditor.getState().setExporting(false)
   }
 }

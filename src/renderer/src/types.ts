@@ -38,6 +38,8 @@ export interface Asset {
   /** Source codec from probe. Used to remake a preview proxy after reopen or relink. */
   codec?: string
   vfr?: boolean
+  /** Browser-only durable key used to recreate a playable blob URL after reload. */
+  browserMediaKey?: string
   /** Where this take sits on the unified source timeline. Overlay/B-roll assets omit it. */
   sourceOffset?: number
 }
@@ -141,6 +143,8 @@ export interface Word {
   end: number
   speaker: string
   deleted: boolean
+  /** Silence-gap stand-in when ASR did not land words. Never treat as spoken text. */
+  origin?: 'island'
 }
 
 export interface Speaker {
@@ -413,7 +417,7 @@ export type Command =
   | { type: 'keepTake'; sceneId: string }
   | { type: 'applyModelSuggestions' }
   | { type: 'setTrackFlag'; trackId: string; patch: Partial<Pick<Track, 'muted' | 'hidden' | 'locked' | 'name' | 'solo'>> }
-  | { type: 'relinkAsset'; assetId: string; path: string }
+  | { type: 'relinkAsset'; assetId: string; path: string; browserMediaKey?: string }
   | { type: 'setAssetProxy'; assetId: string; proxyPath: string | null }
   | {
       type: 'setAssetLooks'

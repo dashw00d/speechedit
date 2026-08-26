@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { host } from '../host'
+import { formatAppIdentity, formatAppIdentityDiagnostic, loadAppIdentity } from '../lib/appIdentity'
+import { loadMediaHealth } from '../lib/mediaHealth'
+import type { AppIdentity } from '../../../shared/appIdentity'
+import { mediaToolsHealthSummary, type MediaToolsHealth } from '../../../shared/mediaTools'
 import { primarySegments, programLength } from '../lib/commands'
 import {
   gapInspectorDetail,
@@ -54,7 +58,6 @@ import {
   relinkToast,
   saveCurrentDocument
 } from '../lib/documentIo'
-import { cancelExport, cancelImport } from '../lib/mediaJobs'
 import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
 import { slugInsertId } from '../lib/inserts'
 import { pickAudio, pickBroll } from '../lib/pickFile'
@@ -71,6 +74,7 @@ function cropBottomOf(crop: Crop) {
 }
 import { AgentPanel } from './AgentPanel'
 import { ModelsPanel } from './ModelsPanel'
+import { ActivityPanel } from './ActivityPanel'
 
 export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
@@ -101,10 +105,13 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const setShowNowWord = useEditor((s) => s.setShowNowWord)
 
   const [advanced, setAdvanced] = useState(false)
+  const [projectAdvanced, setProjectAdvanced] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [encoders, setEncoders] = useState<EncoderOption[]>([
     { id: 'libx264', label: 'x264 (CPU)', hardware: false }
   ])
+  const [mediaHealth, setMediaHealth] = useState<MediaToolsHealth | null>(null)
+  const [appIdentity, setAppIdentity] = useState<AppIdentity | null>(null)
   const titleFieldRef = useRef<HTMLTextAreaElement>(null)
   const overlayClip = project.tracks.flatMap((t) => t.clips).find((c) => c.id === selectedClipId)
   const titleCard = isTitleCard(overlayClip)
@@ -194,6 +201,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     void host.encoders().then((list) => {
       if (list.length) setEncoders(list)
     })
+    void loadMediaHealth().then(setMediaHealth)
+    void loadAppIdentity().then(setAppIdentity)
   }, [])
 
   useEffect(() => {
@@ -208,6 +217,15 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   useEffect(() => {
     setProjectOpen(false)
   }, [focus, selectedWordIds, selectedSceneId, selectedSuggestionId, selectedClipId, selectedGap])
+
+  useEffect(() => {
+    const openProjectSettings = () => {
+      setProjectOpen(true)
+      setTab('project')
+    }
+    window.addEventListener('speechedit:project-settings', openProjectSettings)
+    return () => window.removeEventListener('speechedit:project-settings', openProjectSettings)
+  }, [setTab])
 
   const panelTitle =
     pane === 'words' && wordsDetail
@@ -259,28 +277,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
       <div className="fields">
         {pane === 'agent' && <AgentPanel onToast={onToast ?? (() => undefined)} />}
         {pane === 'job' && (
-          <>
-            <HelperHead
-              headline={exporting ? 'Export in progress' : `Analyzing · ${analyzing}`}
-              detail={
-                exporting
-                  ? analyzing && /transcript|whisper/i.test(analyzing)
-                    ? 'Writing the program. Transcription is parked until this finishes.'
-                    : 'Writing the program you see.'
-                  : 'Import is building the transcript and suggestions.'
-              }
-            />
-            <button
-              className="chip"
-              type="button"
-              onClick={() => {
-                if (exporting) void cancelExport()
-                else void cancelImport()
-              }}
-            >
-              {exporting ? 'Cancel export' : 'Cancel import'}
-            </button>
-          </>
+          <ActivityPanel />
         )}
         {pane === 'words' && wordsDetail && (
           <>
@@ -696,6 +693,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         )}
         {(pane === 'project' || pane === 'job') && (
           <>
+            {pane === 'project' && <ActivityPanel />}
+            <section className="project-overview-section">
             <HelperHead headline={projectDetail.headline} />
             {projectDetail.pendingByType.length > 0 && (
               <HelperSection title="Issues & suggestions">
@@ -730,8 +729,15 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             {projectDetail.agentHint && pane === 'project' && (
               <p className="help agent-hint">{projectDetail.agentHint}</p>
             )}
+            </section>
+            <ModelsPanel onToast={onToast ?? (() => undefined)} />
             {!projectDetail.isEmpty && (
             <>
+            <section className="project-settings-section project-file-section">
+            <header className="project-settings-heading">
+              <span><strong>Project file</strong><small>Name, save location, and linked media</small></span>
+              <b data-state={dirty || !documentPath ? 'attention' : 'ready'}>{dirty || !documentPath ? 'Unsaved' : 'Saved'}</b>
+            </header>
             <Field label="Reel name">
               <input
                 type="text"
@@ -789,11 +795,82 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 Relink all missing…
               </button>
             )}
-            <button className="chip" type="button" onClick={() => setAdvanced((on) => !on)}>
-              {advanced ? 'Hide advanced' : 'Advanced'}
+            </section>
+
+            <section className="project-settings-section">
+              <header className="project-settings-heading">
+                <span><strong>Editing defaults</strong><small>How tightly automatic cuts hug speech</small></span>
+              </header>
+              {!task.showPace && (
+                <>
+                  <div className="chips">
+                    {PACE_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        className="chip"
+                        data-active={pace === preset.id}
+                        title={preset.hint}
+                        onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <Slider
+                    label="Fine-tune padding"
+                    value={project.cutMargin}
+                    min={0}
+                    max={0.4}
+                    step={0.02}
+                    onChange={(margin) => dispatch({ type: 'setCutMargin', margin })}
+                  />
+                </>
+              )}
+              {task.showPace && (
+                <Slider
+                  label="Pause padding"
+                  value={project.cutMargin}
+                  min={0}
+                  max={0.4}
+                  step={0.02}
+                  onChange={(margin) => dispatch({ type: 'setCutMargin', margin })}
+                />
+              )}
+            </section>
+
+            <section className="project-settings-section">
+              <header className="project-settings-heading">
+                <span><strong>Speakers</strong><small>Names used in the transcript and captions</small></span>
+              </header>
+              {project.transcript.speakers.map((speaker) => (
+                <Field key={speaker.id} label={speaker.name}>
+                  <div className="chips">
+                    <input
+                      type="text"
+                      value={speaker.name}
+                      onChange={(e) => dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name: e.target.value })}
+                    />
+                    {project.transcript.speakers.length > 1 && (
+                      <button className="chip" type="button" onClick={() => onToast?.(removeSpeakerFromContext(speaker.id).toast)}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </Field>
+              ))}
+              <button className="chip" type="button" onClick={() => dispatch({ type: 'addSpeaker' })}>Add speaker</button>
+            </section>
+
+            <button className="project-more-toggle" type="button" onClick={() => setProjectAdvanced((on) => !on)}>
+              <span><strong>Picture, sound, and export</strong><small>Canvas, master mix, monitor, encoder, and diagnostics</small></span>
+              <b>{projectAdvanced ? 'Hide' : 'Open'}</b>
             </button>
-            {advanced && (
-              <>
+            {projectAdvanced && (
+              <section className="project-settings-section project-output-section">
+                <header className="project-settings-heading">
+                  <span><strong>Output and preview</strong><small>Whole-project picture, sound, and renderer settings</small></span>
+                </header>
                 <Field label="Encoder">
                   <select
                     value={project.encoder ?? 'auto'}
@@ -808,71 +885,31 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     ))}
                   </select>
                 </Field>
-                {project.transcript.speakers.map((speaker) => (
-                  <Field key={speaker.id} label={speaker.name}>
-                    <div className="chips">
-                      <input
-                        type="text"
-                        value={speaker.name}
-                        onChange={(e) =>
-                          dispatch({ type: 'renameSpeaker', speakerId: speaker.id, name: e.target.value })
-                        }
-                      />
-                      {project.transcript.speakers.length > 1 && (
-                        <button
-                          className="chip"
-                          type="button"
-                          title="Remove this speaker. Their words go to the remaining voice."
-                          onClick={() => onToast?.(removeSpeakerFromContext(speaker.id).toast)}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                  </Field>
-                ))}
-                <button className="chip" onClick={() => dispatch({ type: 'addSpeaker' })}>
-                  Add speaker
-                </button>
-                {!task.showPace && (
+                {mediaHealth && (
+                  <p className="help">
+                    {mediaHealth.ok
+                      ? `${mediaToolsHealthSummary(mediaHealth)} · ${mediaHealth.ffmpeg.path}`
+                      : mediaHealth.message}
+                  </p>
+                )}
+                {appIdentity && (
                   <>
-                    <HelperSection title="Pause padding">
-                      <div className="chips">
-                        {PACE_PRESETS.map((preset) => (
-                          <button
-                            key={preset.id}
-                            type="button"
-                            className="chip"
-                            data-active={pace === preset.id}
-                            title={preset.hint}
-                            onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
-                          >
-                            {preset.label}
-                          </button>
-                        ))}
-                      </div>
-                    </HelperSection>
-                    <Slider
-                      label="Fine-tune padding"
-                      value={project.cutMargin}
-                      min={0}
-                      max={0.4}
-                      step={0.02}
-                      onChange={(margin) => dispatch({ type: 'setCutMargin', margin })}
-                    />
+                    <p className="help">{formatAppIdentity(appIdentity)}</p>
+                    <button
+                      className="chip"
+                      type="button"
+                      onClick={() => {
+                        const text = formatAppIdentityDiagnostic(appIdentity)
+                        void (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
+                          () => onToast?.('Copied build id.'),
+                          () => onToast?.(text)
+                        )
+                      }}
+                    >
+                      Copy build id
+                    </button>
                   </>
                 )}
-                {task.showPace && (
-                  <Slider
-                    label="Pause padding"
-                    value={project.cutMargin}
-                    min={0}
-                    max={0.4}
-                    step={0.02}
-                    onChange={(margin) => dispatch({ type: 'setCutMargin', margin })}
-                  />
-                )}
-                <ModelsPanel onToast={onToast ?? (() => undefined)} />
                 <HelperSection title="Master picture">
                   <p className="help">Applies to the whole reel. Clip transform still wins on overlays.</p>
                   <div className="chips">
@@ -947,14 +984,9 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     Editing with a lighter preview. Export still uses the original camera file.
                   </p>
                 )}
-              </>
+              </section>
             )}
             </>
-            )}
-            {advanced && projectDetail.showMcpHint && pane === 'project' && (
-              <p className="help mcp-hint">
-                Cursor MCP: <code>bun run mcp</code> — tools read/write the live reel.
-              </p>
             )}
           </>
         )}
@@ -1436,8 +1468,11 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           </>
         )}
 
-        {pane === 'project' && advanced && (
-          <>
+        {pane === 'project' && projectAdvanced && (
+          <section className="project-settings-section project-audio-section">
+            <header className="project-settings-heading">
+              <span><strong>Master sound</strong><small>Final voice level, fades, EQ, compression, and ducking</small></span>
+            </header>
             <Slider
               label="Master"
               value={project.audioMaster.volume}
@@ -1514,7 +1549,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 }
               />
             </label>
-          </>
+          </section>
         )}
 
         {pane === 'caption' && (

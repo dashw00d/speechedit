@@ -35,6 +35,10 @@ import {
   waveform
 } from './ffmpeg'
 import { proxyCachePath } from './asrLocal'
+import { resolveAppIdentity } from './appIdentity'
+import { formatAppIdentity } from '../shared/appIdentity'
+import { WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from '../shared/windowLayout'
+import { checkMediaTools } from './mediaTools'
 import { parseByteRange } from '../shared/mediaRange'
 import { ModelQueue, type ModelQueueStatus } from '../shared/modelQueue'
 
@@ -131,10 +135,19 @@ function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1100,
-    minHeight: 720,
+    minWidth: WINDOW_MIN_WIDTH,
+    minHeight: WINDOW_MIN_HEIGHT,
     backgroundColor: '#16140F',
-    title: 'SpeechEdit',
+    title: formatAppIdentity({
+      name: 'SpeechEdit',
+      version: app.getVersion(),
+      commit: process.env.SPEECHEDIT_COMMIT?.trim() || null,
+      dirty: false,
+      channel: app.isPackaged ? 'packaged' : 'dev',
+      electron: process.versions.electron ?? '',
+      platform: process.platform,
+      arch: process.arch
+    }),
     autoHideMenuBar: true,
     webPreferences: {
       preload: preloadScript(),
@@ -142,6 +155,17 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: false
     }
+  })
+
+  void resolveAppIdentity({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    electron: process.versions.electron ?? '',
+    platform: process.platform,
+    arch: process.arch,
+    bakedCommit: process.env.SPEECHEDIT_COMMIT?.trim() || null
+  }).then((identity) => {
+    if (!win.isDestroyed()) win.setTitle(formatAppIdentity(identity))
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -543,6 +567,17 @@ ipcMain.handle('media:thumbnails', async (_e, file: string) => {
   return thumbnails(file, 20, jobs.signal)
 })
 ipcMain.handle('media:encoders', async () => detectEncoders())
+ipcMain.handle('media:health', () => checkMediaTools())
+ipcMain.handle('app:identity', () =>
+  resolveAppIdentity({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    electron: process.versions.electron ?? '',
+    platform: process.platform,
+    arch: process.arch,
+    bakedCommit: process.env.SPEECHEDIT_COMMIT?.trim() || null
+  })
+)
 
 ipcMain.handle('media:export', async (e, job) => {
   const signal = beginExportExclusive(jobs, importLingers)

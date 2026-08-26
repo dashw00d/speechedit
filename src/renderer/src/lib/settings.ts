@@ -42,6 +42,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
   }
 }
 
+/** Fixed browser demo route. The real OpenRouter URL, model, and key live on the server. */
+export const WEB_DEMO_INTELLIGENCE: ModelEndpoint = {
+  kind: 'openai-compatible',
+  baseUrl: '/api/demo-ai',
+  model: 'openrouter/free',
+  apiKey: ''
+}
+
+function isLockedWebDemo(): boolean {
+  return typeof window !== 'undefined' && !window.speech
+}
+
 export const TRANSCRIPT_PRESETS = TRANSCRIPT_PROVIDERS.map((p) => ({
   id: p.id,
   label: p.label,
@@ -110,13 +122,19 @@ export function isLegacyFactoryTranscript(patch?: Partial<TranscriptEndpoint>): 
 export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(KEY)
-    if (!raw) return cloneSettings(DEFAULT_SETTINGS)
+    if (!raw) {
+      const next = cloneSettings(DEFAULT_SETTINGS)
+      if (isLockedWebDemo()) next.intelligence = { ...WEB_DEMO_INTELLIGENCE }
+      return next
+    }
     const parsed = JSON.parse(raw) as Partial<AppSettings>
     const next = {
       transcript: isLegacyFactoryTranscript(parsed.transcript)
         ? { ...DEFAULT_SETTINGS.transcript }
         : normalizeTranscriptEndpoint(DEFAULT_SETTINGS.transcript, parsed.transcript),
-      intelligence: normalizeIntelligenceEndpoint(DEFAULT_SETTINGS.intelligence, parsed.intelligence)
+      intelligence: isLockedWebDemo()
+        ? { ...WEB_DEMO_INTELLIGENCE }
+        : normalizeIntelligenceEndpoint(DEFAULT_SETTINGS.intelligence, parsed.intelligence)
     }
     if (isLegacyFactoryTranscript(parsed.transcript)) persistSettings(next)
     return next
@@ -160,7 +178,9 @@ function normalizeIntelligenceEndpoint(base: ModelEndpoint, patch?: Partial<Mode
 export function saveSettings(settings: AppSettings): AppSettings {
   const next = {
     transcript: normalizeTranscriptEndpoint(DEFAULT_SETTINGS.transcript, settings.transcript),
-    intelligence: normalizeIntelligenceEndpoint(DEFAULT_SETTINGS.intelligence, settings.intelligence)
+    intelligence: isLockedWebDemo()
+      ? { ...WEB_DEMO_INTELLIGENCE }
+      : normalizeIntelligenceEndpoint(DEFAULT_SETTINGS.intelligence, settings.intelligence)
   }
   persistSettings(next)
   return next

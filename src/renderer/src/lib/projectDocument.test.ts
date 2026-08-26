@@ -172,6 +172,14 @@ describe('project document portability', () => {
       ...withHttp,
       assets: {
         ...withHttp.assets,
+        staleBrowser: {
+          id: 'staleBrowser',
+          path: 'blob:http://127.0.0.1/stale',
+          name: 'browser-take.mp4',
+          kind: 'video' as const,
+          duration: 4,
+          waveform: []
+        },
         take: {
           id: 'take',
           path: '/missing/take.mp4',
@@ -182,7 +190,11 @@ describe('project document portability', () => {
         }
       }
     }
-    expect(missingMedia(withFile, { '/missing/take.mp4': false })).toEqual([
+    expect(missingMedia(withFile, {
+      'blob:http://127.0.0.1/stale': false,
+      '/missing/take.mp4': false
+    })).toEqual([
+      { id: 'staleBrowser', name: 'browser-take.mp4', path: 'blob:http://127.0.0.1/stale' },
       { id: 'take', name: 'take.mp4', path: '/missing/take.mp4' }
     ])
     expect(missingMedia(withFile, () => true)).toEqual([])

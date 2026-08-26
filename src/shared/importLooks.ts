@@ -13,6 +13,7 @@ export const SEEK_PEAK_DURATION_S = 90
 export const SEEK_PEAK_WINDOW_S = 0.06
 export const SEEK_PEAK_BATCH = 16
 export const WAVEFORM_SAMPLES = 1800
+export const WAVEFORM_SAMPLE_RATE = 1000
 export const CHEAP_AUDIO_LOOK_DURATION_S = 90
 export const CHEAP_AUDIO_LOOK_RATE = 8000
 export const CHEAP_SCENE_FPS = 5
@@ -29,7 +30,8 @@ export function wantsSeekThumbs(duration: number, count: number): boolean {
 }
 
 export function wantsSeekPeaks(duration: number): boolean {
-  return duration >= SEEK_PEAK_DURATION_S
+  void duration
+  return false
 }
 
 export function peakSeekTimes(duration: number, samples: number): number[] {
@@ -40,7 +42,8 @@ export function peakSeekTimes(duration: number, samples: number): number[] {
 }
 
 export function waveformStrategy(duration: number): 'decode' | 'seek' {
-  return wantsSeekPeaks(duration) ? 'seek' : 'decode'
+  void duration
+  return 'decode'
 }
 
 export function thumbSeekTimes(duration: number, count: number): number[] {
@@ -59,7 +62,7 @@ export function waveformLookArgs(file: string): string[] {
     '-ac',
     '1',
     '-ar',
-    '8000',
+    String(WAVEFORM_SAMPLE_RATE),
     '-f',
     'f32le',
     '-acodec',

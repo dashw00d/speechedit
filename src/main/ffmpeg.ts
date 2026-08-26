@@ -28,16 +28,9 @@ import {
   thumbPassArgs,
   thumbSeekArgs,
   thumbSeekTimes,
-  wantsSeekPeaks,
   wantsSeekThumbs,
   WAVEFORM_SAMPLES,
-  waveformConcatArgs,
-  waveformConcatList,
   waveformLookArgs,
-  waveformSeekBatchArgs,
-  chunkTimes,
-  peakSeekTimes,
-  SEEK_PEAK_BATCH
 } from '../shared/importLooks'
 import { JobCancelled, isJobCancelled, throwIfAborted, type MediaJobKind } from '../shared/mediaJob'
 import { parseStreamRotation, transposeFilters, type QuarterTurn } from '../shared/mediaOrient'
@@ -403,49 +396,6 @@ async function decodeWaveform(file: string, samples: number, signal?: AbortSigna
   return windowPeaks(floats, samples)
 }
 
-async function concatSeekWaveform(file: string, times: number[], signal?: AbortSignal): Promise<number[]> {
-  return withTempDir('speechedit-peaks-', async (dir) => {
-    const list = join(dir, 'windows.concat')
-    await writeFile(list, waveformConcatList(file, times))
-    const floats = await importLookLane.run(() => ffmpegPcm(waveformConcatArgs(list), signal), signal, 'import')
-    return windowPeaks(floats, times.length)
-  })
-}
-
-async function batchSeekWaveform(file: string, times: number[], signal?: AbortSignal): Promise<number[]> {
-  const groups = chunkTimes(times, SEEK_PEAK_BATCH)
-  const peaks = new Array<number>(times.length)
-  let offset = 0
-  await Promise.all(
-    groups.map((group) => {
-      const start = offset
-      offset += group.length
-      return importLookLane.run(async () => {
-        const floats = await ffmpegPcm(waveformSeekBatchArgs(file, group), signal)
-        windowPeaks(floats, group.length).forEach((peak, i) => {
-          peaks[start + i] = peak
-        })
-      }, signal, 'import')
-    })
-  )
-  return peaks.map((peak) => peak ?? 0)
-}
-
-async function seekWaveform(
-  file: string,
-  duration: number,
-  samples: number,
-  signal?: AbortSignal
-): Promise<number[]> {
-  const times = peakSeekTimes(duration, samples)
-  try {
-    return await concatSeekWaveform(file, times, signal)
-  } catch (err) {
-    if (isJobCancelled(err)) throw err
-    return batchSeekWaveform(file, times, signal)
-  }
-}
-
 export async function waveform(
   file: string,
   samples = WAVEFORM_SAMPLES,
@@ -457,18 +407,7 @@ export async function waveform(
   if (hit?.v === 1 && hit.samples === samples && Array.isArray(hit.peaks) && hit.peaks.length) {
     return hit.peaks
   }
-  let duration = 0
-  try {
-    duration = (await probe(file, signal)).duration
-  } catch (err) {
-    if (isJobCancelled(err)) throw err
-  }
-  const peaks = wantsSeekPeaks(duration)
-    ? await seekWaveform(file, duration, samples, signal).catch((err) => {
-        if (isJobCancelled(err)) throw err
-        return decodeWaveform(file, samples, signal)
-      })
-    : await decodeWaveform(file, samples, signal)
+  const peaks = await decodeWaveform(file, samples, signal)
   await writeJsonCache(cache, { v: 1, samples, peaks }).catch(() => undefined)
   return peaks
 }

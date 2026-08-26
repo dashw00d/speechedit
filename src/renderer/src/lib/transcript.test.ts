@@ -3,7 +3,13 @@ import { readFileSync } from 'node:fs'
 import { applyCommand } from './commands'
 import { createEmptyProject } from './demo'
 import { normalizeProject } from './normalize'
-import { parseAnyTranscript, parseTranscriptJson, takeWordsNeedReplace } from './transcript'
+import {
+  parseAnyTranscript,
+  parseTranscriptJson,
+  takeWordsNeedReplace,
+  transcriptIsPlaceholder,
+  wordsFromIslands
+} from './transcript'
 
 const whisperCli = {
   text: 'Hello there um world',
@@ -147,5 +153,16 @@ describe('drop / open transcript JSON', () => {
       takeWordsNeedReplace([word('hello', 0.2, 0.6)], [word('hello', 0.2, 0.6), word('world', 9.5, 10.1)])
     ).toBe(true)
     expect(takeWordsNeedReplace([word('already here', 0.2, 0.6)], [word('whisper', 0.2, 0.5)])).toBe(false)
+  })
+
+  test('silence islands are marked so they cannot pass as spoken words', () => {
+    const islands = wordsFromIslands([
+      { start: 0, end: 2 },
+      { start: 3.2, end: 5 }
+    ])
+    expect(islands.map((w) => w.origin)).toEqual(['island', 'island'])
+    expect(transcriptIsPlaceholder(islands)).toBe(true)
+    expect(transcriptIsPlaceholder([])).toBe(true)
+    expect(transcriptIsPlaceholder([{ ...islands[0], text: 'Hello', origin: undefined }])).toBe(false)
   })
 })

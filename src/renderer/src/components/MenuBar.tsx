@@ -63,6 +63,7 @@ import { protectFromContext, protectRange } from '../lib/protect'
 import { generateCaptionsFromContext } from '../lib/captionGenerate'
 import { useEditor, usePlayback } from '../store'
 import { openAssistant } from '../lib/assistantNavigation'
+import { useActivityJobs } from '../lib/activity'
 
 interface Props {
   onToast: (msg: string) => void
@@ -86,6 +87,8 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
   const documentPath = useEditor((s) => s.documentPath)
   const setPalette = useEditor((s) => s.setPalette)
   const recents = listRecents()
+  const activities = useActivityJobs()
+  const primaryActivity = activities.find((job) => job.state === 'running') ?? activities[0]
 
   function ioSource() {
     if (project.markIn == null || project.markOut == null) {
@@ -465,17 +468,18 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
         <span
           className="status-pill"
           data-dirty={dirty || !documentPath || undefined}
-          data-clickable={Boolean(analyzing || dirty || !documentPath) || undefined}
+          data-working={Boolean(primaryActivity) || undefined}
+          data-clickable={Boolean(primaryActivity || dirty || !documentPath) || undefined}
           title={
-            analyzing
-              ? 'Cancel import'
+            primaryActivity
+              ? 'Open Project activity'
               : dirty || !documentPath
                 ? 'Save this reel'
                 : documentPath
           }
           onClick={() => {
-            if (analyzing) {
-              void cancelImport()
+            if (primaryActivity) {
+              window.dispatchEvent(new Event('speechedit:project-settings'))
               return
             }
             if (!dirty && documentPath) return
@@ -487,8 +491,10 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
             )
           }}
         >
-          {analyzing
-            ? `Working · ${analyzing}`
+          {primaryActivity
+            ? `${primaryActivity.label}${activities.length > 1 ? ` · +${activities.length - 1}` : ''}`
+            : analyzing
+              ? `Working · ${analyzing}`
             : dirty || !documentPath
               ? 'Not saved'
               : 'Saved'}{' '}
