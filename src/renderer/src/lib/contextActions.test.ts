@@ -3,6 +3,7 @@ import { applyCommand } from './commands'
 import {
   hasUncollapsedRetakes,
   inspectorFocus,
+  inspectorTabs,
   nextPendingSuggestionAfter,
   paceFromMargin,
   projectInspectorDetail,
@@ -146,7 +147,7 @@ describe('suggest task copy', () => {
     const task = suggestTask(createDemoProject())
     expect(task.headline).toMatch(/Transcript ready/)
     expect(task.safeCount).toBeGreaterThan(0)
-    expect(task.applyLabel).toMatch(/Clean \d+ pauses/)
+    expect(task.applyLabel).toMatch(/Apply \d+ safe edits/)
     expect(task.reviewLabel).toMatch(/Review/)
     expect(task.showPace).toBe(true)
     expect(task.showMarkedExport).toBe(false)
@@ -194,7 +195,7 @@ describe('suggest task copy', () => {
     expect(task.headline).toMatch(/Find retakes/)
   })
 
-  test('after leftovers, dropped retakes become the next review', () => {
+  test('after leftovers, completed retakes stay applied while breaths remain actionable', () => {
     const first = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
     const collapsed = applyCommand(first, { type: 'collapseRetakes' })
     expect(suggestTask(collapsed).headline).toMatch(/quiet picture|silent still|First edit done/)
@@ -209,9 +210,9 @@ describe('suggest task copy', () => {
     }
     const task = suggestTask(leftoversGone)
     expect(task.findRetakes).toBe(false)
-    expect(task.headline).toMatch(/Dropped \d+ false take/)
-    expect(task.reviewLabel).toMatch(/Review \d+ take/)
-    expect(task.reviewCount).toBeGreaterThan(0)
+    expect(task.headline).not.toMatch(/Dropped \d+ false take/)
+    expect(task.reviewLabel).not.toMatch(/Review \d+ take/)
+    expect(task.reviewCount).toBe(0)
     expect(task.showWatch).toBe(true)
     expect(task.showZoom).toBe(true)
     expect(task.showTitle).toBe(true)
@@ -226,9 +227,11 @@ describe('suggest task copy', () => {
     expect(breath).toBeTruthy()
     const detail = suggestionInspectorDetail(demo, breath!.id)
     expect(detail?.title).toBe('Breath')
+    expect(detail?.category).toBe('Breath')
+    expect(detail?.prompt).toMatch(/sound natural/i)
     expect(detail?.actions.some((a) => a.id === 'apply' && a.label === 'Cut')).toBe(true)
     expect(detail?.actions.find((a) => a.id === 'keep')?.command.type).toBe('resolveSuggestion')
-    expect(detail?.explanation).toMatch(/hisses|breathe/)
+    expect(detail?.explanation).toMatch(/more natural/i)
     const first = applyCommand(demo, { type: 'applySafeSuggestions' })
     expect(suggestTask(first).showBreaths).toBe(false)
     const leftoversGone = {
@@ -253,7 +256,9 @@ describe('suggest task copy', () => {
     expect(detail?.actions.some((a) => a.id === 'speed' && a.command.type === 'resolveSuggestion')).toBe(true)
     expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'resolveSuggestion')).toBe(true)
     expect(detail?.actions.find((a) => a.id === 'keep')?.consequence).toMatch(/Auto Edit will skip/)
-    expect(detail?.explanation).toMatch(/silent demo|dead air/i)
+    expect(detail?.category).toBe('Silent still')
+    expect(detail?.prompt).toMatch(/useful hold|dead air/i)
+    expect(detail?.explanation).toMatch(/deliberate hold|dead air/i)
   })
 
   test('quiet picture changes lead with Silent demo, then Speed or Cut', () => {
@@ -261,10 +266,13 @@ describe('suggest task copy', () => {
     const project = { ...createDemoProject(), suggestions: [activity] }
     const detail = suggestionInspectorDetail(project, activity.id)
     expect(detail?.title).toBe('Quiet picture change')
+    expect(detail?.category).toBe('Silent activity')
+    expect(detail?.status).toBe('Needs decision')
+    expect(detail?.prompt).toMatch(/walkthrough|dead air/i)
     expect(detail?.actions[0]?.id).toBe('demo')
     expect(detail?.actions.some((a) => a.id === 'speed')).toBe(true)
     expect(detail?.actions.some((a) => a.id === 'cut')).toBe(true)
-    expect(detail?.explanation).toMatch(/click-through|fidget/i)
+    expect(detail?.explanation).toMatch(/walkthrough|dead air/i)
     const task = suggestTask({
       ...createEmptyProject('activity-bar'),
       suggestions: [
@@ -292,7 +300,7 @@ describe('suggest task copy', () => {
     expect(detail?.title).toBe('Static screen')
     expect(detail?.actions.some((a) => a.id === 'apply' && a.label.startsWith('Speed'))).toBe(true)
     expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'dismissSuggestion')).toBe(true)
-    expect(detail?.explanation).toMatch(/loading screen|Speed or Keep/i)
+    expect(detail?.explanation).toMatch(/loading screen|deliberate hold/i)
   })
 
   test('hot audio gets Quiet and Keep in the inspector', () => {
@@ -308,7 +316,7 @@ describe('suggest task copy', () => {
     expect(detail?.title).toBe('Hot audio')
     expect(detail?.actions.some((a) => a.id === 'apply' && a.label === 'Quiet')).toBe(true)
     expect(detail?.actions.some((a) => a.id === 'keep' && a.command.type === 'dismissSuggestion')).toBe(true)
-    expect(detail?.explanation).toMatch(/Quiet or Keep/i)
+    expect(detail?.explanation).toMatch(/louder than the rest/i)
   })
 })
 
@@ -484,6 +492,12 @@ describe('pace and inspector focus', () => {
         selectedGap: null
       })
     ).toBe('project')
+  })
+
+  test('context details always provide stable Project and Assistant routes', () => {
+    expect(inspectorTabs('words').map((tab) => tab.label)).toEqual(['Words', 'Project', 'Assistant'])
+    expect(inspectorTabs('clip').map((tab) => tab.label)).toEqual(['Picture', 'Project', 'Assistant'])
+    expect(inspectorTabs('project').map((tab) => tab.label)).toEqual(['Project', 'Assistant'])
   })
 })
 

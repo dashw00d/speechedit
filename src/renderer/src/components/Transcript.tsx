@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { leftoverForSpan, reviewGap } from '../lib/analysis'
 import { isFillerToken } from '../lib/transcript'
 import { ingestDroppedFile } from '../lib/fileActions'
@@ -7,7 +7,7 @@ import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
   appliedForWord,
   extendSelection,
-  shrinkSelection,
+  nearestSpokenWord,
   PARAGRAPH_GAP,
   paragraphIds,
   sentenceIds,
@@ -50,6 +50,7 @@ import { cutThisFromContext } from '../lib/cutSentence'
 import { cutParagraphFromContext } from '../lib/scriptActions'
 import { copyStillFromContext } from '../lib/still'
 import { describeClearMarks, markClipFromContext } from '../lib/marks'
+import { placePopoverInBounds, type PopoverPlacement } from '../lib/popoverPlacement'
 import { useEditor, usePlayback } from '../store'
 import { StartGuide } from './StartGuide'
 import { OverflowMenu } from './OverflowMenu'
@@ -103,6 +104,8 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const scriptRef = useRef<HTMLDivElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const wordRefs = useRef(new Map<string, HTMLButtonElement>())
+  const popoverRef = useRef<HTMLSpanElement>(null)
+  const [popoverPlacement, setPopoverPlacement] = useState<(PopoverPlacement & { anchorId: string }) | null>(null)
   const tool = useEditor((s) => s.tool)
   const setTool = useEditor((s) => s.setTool)
   const guardKind = useEditor((s) => s.guardKind)
@@ -126,6 +129,61 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     selectedSceneId || tool === 'guard' ? undefined : [...words].reverse().find((w) => selectedSet.has(w.id))
   const selectedScene = selectedSceneId ? (project.scenes ?? []).find((s) => s.id === selectedSceneId) : undefined
   const sceneAnchors = groupScenesByTranscriptAnchor(project.scenes ?? [], words)
+
+  useLayoutEffect(() => {
+    const script = scriptRef.current
+    const anchorId = popoverAnchor?.id
+    const anchor = anchorId ? wordRefs.current.get(anchorId) : undefined
+    const popover = popoverRef.current
+    if (!script || !anchorId || !anchor || !popover) {
+      setPopoverPlacement(null)
+      return
+    }
+
+    let frame = 0
+    const update = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const next = {
+          ...placePopoverInBounds(
+            script.getBoundingClientRect(),
+            anchor.getBoundingClientRect(),
+            popover.getBoundingClientRect()
+          ),
+          anchorId
+        }
+        setPopoverPlacement((current) =>
+          current &&
+          current.anchorId === next.anchorId &&
+          current.left === next.left &&
+          current.top === next.top &&
+          current.maxWidth === next.maxWidth &&
+          current.maxHeight === next.maxHeight &&
+          current.visible === next.visible
+            ? current
+            : next
+        )
+      })
+    }
+
+    update()
+    script.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('scroll', update)
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    observer?.observe(script)
+    observer?.observe(popover)
+
+    return () => {
+      cancelAnimationFrame(frame)
+      script.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('scroll', update)
+      observer?.disconnect()
+    }
+  }, [popoverAnchor?.id, choices.length])
 
   function loopSpan(start: number, end: number) {
     playLoop(sourceToProgramOf(project, start), sourceToProgramOf(project, end))
@@ -282,11 +340,17 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     })
     const editing = editingScene === scene.id
     return (
-      <div key={scene.id} className="scene-chip-row">
+      <div
+        key={scene.id}
+        className="scene-chip-row"
+        data-kind={scene.kind}
+        data-on={on || undefined}
+      >
         {editing ? (
           <div className="scene-chip" data-kind={scene.kind} data-on="true">
             <span className="scene-chip-kicker">
-              {sceneKindLabel(scene, family)} · {sceneClockLabel(scene)}
+              <span>{sceneKindLabel(scene, family)}</span>
+              <span>{sceneClockLabel(scene)}</span>
             </span>
             <input
               className="scene-chip-edit"
@@ -336,7 +400,8 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             }}
           >
             <span className="scene-chip-kicker">
-              {sceneKindLabel(scene, family)} · {sceneClockLabel(scene)}
+              <span>{sceneKindLabel(scene, family)}</span>
+              <span>{sceneClockLabel(scene)}</span>
             </span>
             <span className="scene-chip-title">{scene.title}</span>
             {scene.summary ? <span className="scene-chip-summary">{scene.summary}</span> : null}
@@ -591,6 +656,34 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     )
   }
 
+  const transcriptSections: Array<{
+    key: string
+    scenes: (typeof project.scenes)
+    wordIndexes: number[]
+  }> = []
+  let currentSection: (typeof transcriptSections)[number] = {
+    key: 'transcript-intro',
+    scenes: [],
+    wordIndexes: []
+  }
+  words.forEach((_, index) => {
+    const anchoredScenes = sceneAnchors.atWord.get(index) ?? []
+    if (anchoredScenes.length) {
+      if (currentSection.scenes.length || currentSection.wordIndexes.length) transcriptSections.push(currentSection)
+      anchoredScenes.forEach((scene, sceneIndex) => {
+        const nextSection = {
+          key: `transcript-${scene.id}`,
+          scenes: [scene],
+          wordIndexes: [] as number[]
+        }
+        if (sceneIndex < anchoredScenes.length - 1) transcriptSections.push(nextSection)
+        else currentSection = nextSection
+      })
+    }
+    currentSection.wordIndexes.push(index)
+  })
+  if (currentSection.scenes.length || currentSection.wordIndexes.length) transcriptSections.push(currentSection)
+
   return (
     <section
       className="panel transcript"
@@ -612,70 +705,16 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
         })
       }}
     >
-      <div className="panel-head">
-        Transcript
-        <div className="speakers">
-          {project.transcript.speakers.map((s) => {
-            const active =
-              focusedSpeaker === s.id ||
-              speakerIdFromSelection(selected, words, project.transcript.speakers) === s.id
-            return (
-            <span className="speaker-slot" data-speaker-id={s.id} key={s.id}>
-            {editingSpeaker === s.id ? (
-              <input
-                className="speaker-edit"
-                autoFocus
-                defaultValue={s.name}
-                aria-label="Speaker name"
-                onFocus={(e) => e.currentTarget.select()}
-                onBlur={(e) => commitSpeakerName(s, e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                  if (e.key === 'Escape') setEditingSpeaker(null)
-                }}
-              />
-            ) : (
-              <button
-                className="speaker"
-                data-on={active || undefined}
-                title={
-                  selected.length
-                    ? `Assign ${s.name}`
-                    : `Select ${s.name} · right-click to rename or remove`
-                }
-                onClick={() => clickSpeakerChip(s)}
-                onDoubleClick={(e) => {
-                  e.preventDefault()
-                  const pending = pendingSpeakerClick.current
-                  if (pending) {
-                    window.clearTimeout(pending.timer)
-                    pendingSpeakerClick.current = null
-                  }
-                  setEditingSpeaker(s.id)
-                }}
-              >
-                <i className="swatch" style={{ background: s.color }} />
-                {s.name}
-              </button>
-            )}
-            </span>
-            )
-          })}
-          <button
-            className="speaker add"
-            onClick={() => {
-              clearSelection()
-              dispatch({ type: 'addSpeaker' })
-              const next = useEditor.getState().project.transcript.speakers
-              setFocusedSpeaker(next[next.length - 1]?.id ?? null)
-            }}
-          >
-            + speaker
-          </button>
-          {(words.some((word) => !word.deleted) ||
-            hasYouTubeChapters(project) ||
-            hasExportableCaptions(project)) && (
-            <OverflowMenu tone="chip" label="Copy" title="Copy notes, chapters, or captions">
+      <div className="panel-head transcript-head">
+        <span className="transcript-heading">
+          <strong>Transcript</strong>
+          <small>
+            {words.filter((word) => !word.deleted).length} words · {(project.scenes ?? []).length} chapters
+          </small>
+        </span>
+        <span className="transcript-head-actions">
+          {(words.some((word) => !word.deleted) || hasYouTubeChapters(project) || hasExportableCaptions(project)) && (
+            <OverflowMenu tone="chip" place="below" label="Copy" title="Copy transcript output">
               {words.some((word) => !word.deleted) && (
                 <button
                   type="button"
@@ -708,7 +747,67 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
               )}
             </OverflowMenu>
           )}
-        </div>
+          <OverflowMenu tone="chip" place="below" label="•••" title="Transcript options">
+            <span className="overflow-section-label">Reading</span>
+            <button
+              type="button"
+              className="overflow-item"
+              data-active={followPlayhead || undefined}
+              onClick={() => setFollowPlayhead(!followPlayhead)}
+            >
+              {followPlayhead ? '✓ Follow playback' : 'Follow playback'}
+            </button>
+            <span className="overflow-section-label">Speakers</span>
+            {project.transcript.speakers.map((speaker) => {
+              const active =
+                focusedSpeaker === speaker.id ||
+                speakerIdFromSelection(selected, words, project.transcript.speakers) === speaker.id
+              return editingSpeaker === speaker.id ? (
+                <input
+                  key={speaker.id}
+                  className="speaker-edit transcript-speaker-edit"
+                  autoFocus
+                  defaultValue={speaker.name}
+                  aria-label="Speaker name"
+                  onFocus={(event) => event.currentTarget.select()}
+                  onBlur={(event) => commitSpeakerName(speaker, event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+                    if (event.key === 'Escape') setEditingSpeaker(null)
+                  }}
+                />
+              ) : (
+                <button
+                  key={speaker.id}
+                  type="button"
+                  className="overflow-item transcript-speaker-option"
+                  data-active={active || undefined}
+                  title={selected.length ? `Assign ${speaker.name}` : `Select ${speaker.name} · double-click to rename`}
+                  onClick={() => clickSpeakerChip(speaker)}
+                  onDoubleClick={(event) => {
+                    event.preventDefault()
+                    setEditingSpeaker(speaker.id)
+                  }}
+                >
+                  <i className="swatch" style={{ background: speaker.color }} />
+                  {speaker.name}
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              className="overflow-item"
+              onClick={() => {
+                clearSelection()
+                dispatch({ type: 'addSpeaker' })
+                const next = useEditor.getState().project.transcript.speakers
+                setFocusedSpeaker(next[next.length - 1]?.id ?? null)
+              }}
+            >
+              Add speaker
+            </button>
+          </OverflowMenu>
+        </span>
       </div>
       {words.length > 0 && tool === 'guard' && (
         <div className="guard-banner" role="status">
@@ -757,6 +856,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             ref={findRef}
             type="search"
             className="transcript-find"
+            aria-label="Find in transcript"
             value={findQuery}
             placeholder="Find phrase, scene, or edit… ⌘F"
             onChange={(e) => {
@@ -883,63 +983,6 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
               </OverflowMenu>
             </>
           )}
-          <button
-            type="button"
-            className="chip"
-            data-on={followPlayhead || undefined}
-            title={
-              followPlayhead
-                ? 'Transcript scrolls with playback. Scroll the words to pause follow.'
-                : 'Keep the current word in view while playing'
-            }
-            onClick={() => setFollowPlayhead(!followPlayhead)}
-          >
-            {followPlayhead ? 'Follow on' : 'Follow'}
-          </button>
-          {selected.length > 0 && !selectedSceneId && (
-            <>
-              <button
-                type="button"
-                className="chip"
-                title="Shrink selection by one word ([)"
-                onClick={() => applySelection(shrinkSelection(words, selected), { loop: false })}
-              >
-                Fewer
-              </button>
-              <button
-                type="button"
-                className="chip"
-                title="Grow selection by one word (])"
-                onClick={() => applySelection(extendSelection(words, selected, 1), { loop: false })}
-              >
-                More
-              </button>
-            </>
-          )}
-          {selected.length > 0 || selectedSceneId ? (
-            <button
-              type="button"
-              className="chip"
-              title="Deselect words or chapter (Esc)"
-              onClick={() => clearSelection()}
-            >
-              Clear
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="chip"
-              title="Select every word in the transcript"
-              onClick={() =>
-                applySelection(
-                  words.map((w) => w.id),
-                  { loop: false }
-                )
-              }
-            >
-              Select all
-            </button>
-          )}
           {findNote && !findGroups.length && <span className="transcript-find-note">{findNote}</span>}
         </div>
       )}
@@ -1023,7 +1066,35 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           dragMoved.current = false
         }}
       >
-        {words.map((word, i) => {
+        <div className="transcript-document">
+        {transcriptSections.map((section) => {
+          const scene = section.scenes[0]
+          const takeScenes = scene ? takeFamily(project.scenes ?? [], scene.id) : []
+          const isTake = takeScenes.length > 1 || scene?.kind === 'retake'
+          const takePosition = scene ? takeScenes.findIndex((take) => take.id === scene.id) : -1
+          const isFirstTake = isTake && takePosition <= 0
+          const isActiveTake = isTake && scene?.kind !== 'retake'
+          return (
+            <section
+              key={section.key}
+              className="transcript-chapter"
+              data-kind={section.scenes[0]?.kind ?? 'chapter'}
+              data-on={section.scenes.some((scene) => scene.id === selectedSceneId) || undefined}
+              data-take={isTake || undefined}
+              data-take-first={isFirstTake || undefined}
+              data-take-active={isActiveTake || undefined}
+            >
+              {isFirstTake && (
+                <div className="take-group-label">
+                  <span>Takes</span>
+                  <span>{takeScenes.length} versions</span>
+                </div>
+              )}
+              {isTake && <span className="take-branch-dot" aria-hidden="true" />}
+              {section.scenes.map((scene) => renderScene(scene))}
+              <div className="transcript-chapter-copy">
+        {section.wordIndexes.map((i) => {
+          const word = words[i]
           const prev = words[i - 1]
           const gap = prev ? word.start - prev.end : 0
           const tag = tagAt(project.tags, word.start)
@@ -1031,18 +1102,20 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           const gapReview = gapSpan ? reviewGap(project, gapSpan.start, gapSpan.end) : null
           const leftoverAtGap = gapSpan ? leftoverForSpan(project, gapSpan.start, gapSpan.end) : undefined
           const gapCut = gapReview?.kind === 'cut'
-          const headed = sceneAnchors.atWord.get(i) ?? []
           const tagStart = Boolean(tag && (!prev || prev.start < tag.start))
           const applied = word.deleted ? appliedForWord(project, word) : undefined
           const gapTag = prev ? tagAt(project.tags, (prev.end + word.start) / 2) : undefined
+          const showGapGuard = Boolean(gapTag && !gapReview && prev && gapTag.start >= prev.end - 0.08)
+          const showGapMarker = Boolean(
+            gapReview && gapTag?.kind !== 'demo' && (gap > 0.45 || leftoverAtGap)
+          )
           return (
             <Fragment key={word.id}>
-              {headed.map((scene) => renderScene(scene))}
               {tagStart && tag && renderGuardChip(tag)}
               <span className="word-wrap">
-              {(gap > 0.45 || leftoverAtGap || (gapTag && prev && gapTag.start >= prev.end - 0.08)) && prev && (
+              {(showGapGuard || showGapMarker) && prev && (
                 <span className="gap-cluster">
-                  {gapTag && gapTag.start >= prev.end - 0.08 &&
+                  {showGapGuard && gapTag &&
                     renderGuardChip(gapTag, {
                       hear: () => {
                         seekSource(gapTag.start)
@@ -1050,7 +1123,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                         selectGap({ start: gapTag.start, end: gapTag.end })
                       }
                     })}
-                  {gapReview && (
+                  {showGapMarker && gapReview && (
                   <button
                     type="button"
                     className="gap-chip"
@@ -1198,9 +1271,11 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                       return
                     }
 
-                    anchorRef.current = word.id
-                    selectWords([word.id])
-                    loopSentenceAt(word.id)
+                    const heard = nearestSpokenWord(words, i) ?? word
+                    anchorRef.current = heard.id
+                    selectWords([heard.id])
+                    if (heard.id === word.id) loopSentenceAt(word.id)
+                    else loopSelection([heard.id])
                     return
                   }}
                   onDoubleClick={() => {
@@ -1219,13 +1294,27 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                 </button>
               )}
               {popoverAnchor?.id === word.id && choices.length > 0 && (
-                <span className="word-popover" onMouseDown={(e) => e.stopPropagation()}>
-                  <span className="word-popover-copy">{choices[0].consequence}</span>
+                <span
+                  ref={popoverRef}
+                  className="word-popover"
+                  style={
+                    popoverPlacement?.anchorId === word.id
+                      ? {
+                          left: popoverPlacement.left,
+                          top: popoverPlacement.top,
+                          maxWidth: popoverPlacement.maxWidth,
+                          maxHeight: popoverPlacement.maxHeight,
+                          visibility: popoverPlacement.visible ? 'visible' : 'hidden'
+                        }
+                      : { visibility: 'hidden' }
+                  }
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
                   <span className="word-popover-actions">
-                    {choices.map((choice) => (
+                    {choices.slice(0, 2).map((choice, index) => (
                       <button
                         key={choice.id}
-                        className="chip"
+                        className={index === 0 ? 'chip word-popover-primary' : 'chip'}
                         title={choice.consequence}
                         onClick={() => {
                           if (choice.id === 'cut-prev') {
@@ -1248,38 +1337,63 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                         {choice.label}
                       </button>
                     ))}
-                    <button
-                      type="button"
-                      className="chip"
-                      title="Copy with the speaker and time. Paste into Slack or a deck."
-                      onClick={() => onToast?.(copyQuoteFromContext().toast)}
-                    >
-                      Copy quote
-                    </button>
-                    <button
-                      type="button"
-                      className="chip"
-                      title="Copy the picture and this line. Paste it into the write-up."
-                      onClick={() => void copyStillFromContext().then((result) => onToast?.(result.toast))}
-                    >
-                      Copy frame
-                    </button>
-                    <button
-                      type="button"
-                      className="chip"
-                      title="In–Out around these words. Then export the clip or hunt the next one."
-                      onClick={() => onToast?.(markClipFromContext().toast)}
-                    >
-                      Mark clip
-                    </button>
-                    <button
-                      type="button"
-                      className="chip"
-                      title="Split this chapter here and type the new heading."
-                      onClick={() => onToast?.(splitChapterFromContext().toast)}
-                    >
-                      Split
-                    </button>
+                    <OverflowMenu tone="chip" place="below" label="More" title="More actions for these words">
+                      {choices.slice(2).map((choice) => (
+                        <button
+                          key={choice.id}
+                          type="button"
+                          className="overflow-item"
+                          title={choice.consequence}
+                          onClick={() => {
+                            if (choice.id === 'cut-prev') {
+                              onToast?.(cutPreviousFromContext().toast)
+                              return
+                            }
+                            if (choice.id === 'cut-sentence') {
+                              onToast?.(cutThisFromContext().toast)
+                              return
+                            }
+                            if (choice.id === 'cut-paragraph') {
+                              onToast?.(cutParagraphFromContext().toast)
+                              return
+                            }
+                            dispatch(choice.command)
+                            const toast = toastForEdit(project, choice.command)
+                            if (toast) onToast?.(toast)
+                          }}
+                        >
+                          {choice.label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="overflow-item"
+                        onClick={() => onToast?.(copyQuoteFromContext().toast)}
+                      >
+                        Copy quote
+                      </button>
+                      <button
+                        type="button"
+                        className="overflow-item"
+                        onClick={() => void copyStillFromContext().then((result) => onToast?.(result.toast))}
+                      >
+                        Copy frame
+                      </button>
+                      <button
+                        type="button"
+                        className="overflow-item"
+                        onClick={() => onToast?.(markClipFromContext().toast)}
+                      >
+                        Mark clip
+                      </button>
+                      <button
+                        type="button"
+                        className="overflow-item"
+                        onClick={() => onToast?.(splitChapterFromContext().toast)}
+                      >
+                        Split chapter here
+                      </button>
+                    </OverflowMenu>
                   </span>
                 </span>
               )}
@@ -1287,14 +1401,28 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             </Fragment>
           )
         })}
-        {sceneAnchors.after.map((scene) => renderScene(scene))}
+              </div>
+            </section>
+          )
+        })}
+        {sceneAnchors.after.map((scene) => (
+          <section
+            key={scene.id}
+            className="transcript-chapter transcript-chapter-empty"
+            data-kind={scene.kind}
+            data-on={scene.id === selectedSceneId || undefined}
+          >
+            {renderScene(scene)}
+          </section>
+        ))}
         {words.length > 0 && (
           <p className="script-hint">
             {tool === 'guard'
               ? 'Drag across words to protect them. Done or Esc leaves this mode.'
-              : 'Click a word to hear it. Double-click a sentence. Triple-click a paragraph, then Remove paragraph hears the join.'}
+              : 'Click words to hear them. Select text to reveal editing actions.'}
           </p>
         )}
+        </div>
       </div>
       )}
       {marquee && (

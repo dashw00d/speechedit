@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { applyCommand } from './commands'
 import { createEmptyProject } from './demo'
+import { normalizeProject } from './normalize'
 import { parseAnyTranscript, parseTranscriptJson, takeWordsNeedReplace } from './transcript'
 
 const whisperCli = {
@@ -37,6 +38,15 @@ const whisperX = {
 }
 
 describe('drop / open transcript JSON', () => {
+  test('legacy BLANK_AUDIO project rows are removed when a reel opens', () => {
+    const project = createEmptyProject('legacy-blank')
+    project.transcript.words = [
+      { id: 'blank', text: '[BLANK_AUDIO]', start: 0, end: 1, speaker: 'ryan', deleted: false },
+      { id: 'hello', text: 'Hello', start: 1, end: 1.4, speaker: 'ryan', deleted: false }
+    ]
+    expect(normalizeProject(project).transcript.words.map((word) => word.text)).toEqual(['Hello'])
+  })
+
   test('SpeechEdit words[] and samples/transcript.json still land', () => {
     const sample = parseTranscriptJson(
       JSON.parse(readFileSync(new URL('../../../../samples/transcript.json', import.meta.url), 'utf8'))

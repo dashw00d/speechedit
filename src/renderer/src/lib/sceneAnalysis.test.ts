@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { applyCommand, programLength } from './commands'
 import { createDemoProject, createEmptyProject } from './demo'
-import { parseIntelligence } from './intelligence'
+import { parseIntelligence, runSceneIntelligence } from './intelligence'
 import { planIntent } from './intent'
 import { normalizeProject } from './normalize'
 import {
@@ -161,5 +161,36 @@ describe('scene grouping and retakes', () => {
     expect(planIntent(demo, 'Find scenes and mark retakes').commands[0]?.type).toBe('inferScenes')
     expect(planIntent(demo, 'rebuild intelligence').commands[0]?.type).toBe('rebuildIntelligence')
     expect(planIntent(demo, 'collapse retakes').commands[0]?.type).toBe('collapseRetakes')
+  })
+
+  test('model scene intelligence uses the supplied host completion path', async () => {
+    const demo = createDemoProject()
+    let called = false
+    const draft = await runSceneIntelligence(
+      demo,
+      { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', model: 'test', apiKey: '' },
+      'Find scenes',
+      async () => {
+        called = true
+        return JSON.stringify({
+          notes: 'Model analyzed the reel.',
+          scenes: [{ id: 'sc-model', start: 0, end: 8, title: 'Opening', summary: 'Intro', kind: 'talk' }]
+        })
+      }
+    )
+    expect(called).toBe(true)
+    expect(draft.notes).toBe('Model analyzed the reel.')
+    expect(draft.scenes[0]?.id).toBe('sc-model')
+  })
+
+  test('model failure is disclosed when scene intelligence falls back locally', async () => {
+    const draft = await runSceneIntelligence(
+      createDemoProject(),
+      { kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:11434/v1', model: 'missing', apiKey: '' },
+      undefined,
+      async () => { throw new Error('model unavailable') }
+    )
+    expect(draft.notes).toContain('Local intelligence')
+    expect(draft.notes).toContain('Model unavailable: model unavailable')
   })
 })

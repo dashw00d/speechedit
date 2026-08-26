@@ -118,7 +118,10 @@ export function buildEditBlocks(project: Project): EditBlock[] {
   for (const s of project.suggestions) {
     if (s.action === 'normalize' || s.type === 'pace') continue
     const start = sourceToProgramOf(project, s.start)
-    const end = sourceToProgramOf(project, s.end)
+    const mappedEnd = sourceToProgramOf(project, s.end)
+    // A ripple cut maps both source edges to the same program-time join. Keep a
+    // short marker at that join so applied edits stay visible and countable.
+    const end = s.applied && s.action === 'cut' && mappedEnd <= start ? start + 0.02 : mappedEnd
     if (end <= start) continue
     blocks.push({
       id: `sug-${s.id}`,

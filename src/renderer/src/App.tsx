@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ConfirmSheet } from './components/ConfirmSheet'
 import { ExportSheet } from './components/ExportSheet'
 import { PreferencesSheet } from './components/PreferencesSheet'
 import { ContextMenuHost, useContextMenu } from './components/ContextMenu'
-import { AgentPanel } from './components/AgentPanel'
 import { Inspector } from './components/Inspector'
 import { MenuBar } from './components/MenuBar'
 import { Monitor } from './components/Monitor'
@@ -56,20 +55,88 @@ import { cancelExport, cancelImport, mediaBusyToast } from './lib/mediaJobs'
 import { currentProgramDuration, flushWorkspace, useEditor, usePlayback } from './store'
 import { useClearSelection } from './useClearSelection'
 import { activeThemeId, subscribeTheme } from './lib/theme'
+import { host, isElectron } from './host'
+import { shouldPreventWindowClose } from './lib/windowClose'
+import { runTool } from './lib/mcpTools'
+import { loadSettings } from './lib/settings'
+import { currentEditorSession } from './lib/editorSession'
+import { openAssistant } from './lib/assistantNavigation'
 
 export function App() {
   const [, setThemeId] = useState(activeThemeId)
   const [toast, setToast] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
+  const [mobilePane, setMobilePane] = useState<'preview' | 'review' | 'script' | 'timeline'>('preview')
+  const mcpPolling = useRef(false)
   const { menu: contextMenu, closeMenu: closeContextMenu } = useContextMenu()
   useClearSelection()
   const exporting = useEditor((s) => s.exporting)
-  const agentOpen = useEditor((s) => s.agentOpen)
   const recoveryOffer = useEditor((s) => s.recoveryOffer)
   const missingAssets = useEditor((s) => s.missingAssets)
+  const selectedSuggestionId = useEditor((s) => s.selectedSuggestionId)
+  const emptyReel = useEditor(
+    (s) =>
+      s.project.sourceDuration <= 0 &&
+      Object.keys(s.project.assets).length === 0 &&
+      s.project.transcript.words.length === 0
+  )
 
   useEffect(() => subscribeTheme(setThemeId), [])
+
+  useEffect(() => {
+    if (!isElectron) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      if (stopped || mcpPolling.current) return
+      mcpPolling.current = true
+      try {
+        const requests = await host.pollMcp()
+        for (const request of requests) {
+          try {
+            const before = useEditor.getState().project
+            const result = await runTool(
+              before,
+              request.name,
+              request.args,
+              loadSettings().intelligence,
+              currentEditorSession()
+            )
+            if (result.project !== before) {
+              useEditor.getState().dispatch({ type: 'replaceProject', project: result.project })
+              setToast(`MCP · ${result.message}`)
+            }
+            await host.resolveMcp({ id: request.id, message: result.message, data: result.data })
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            await host.resolveMcp({ id: request.id, message, isError: true }).catch(() => undefined)
+            setToast(`MCP failed · ${message}`)
+          }
+        }
+      } catch {
+        /* bridge is optional */
+      } finally {
+        mcpPolling.current = false
+        if (!stopped) timer = setTimeout(() => void poll(), 400)
+      }
+    }
+    void poll()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (selectedSuggestionId) setMobilePane('review')
+  }, [selectedSuggestionId])
+
+  useEffect(() => {
+    const showAssistant = () => setMobilePane('review')
+    window.addEventListener('speechedit:assistant', showAssistant)
+    return () => window.removeEventListener('speechedit:assistant', showAssistant)
+  }, [])
 
   useEffect(() => {
     void hydrateWorkspace()
@@ -81,7 +148,8 @@ export function App() {
 
   useEffect(() => {
     const onLeave = (e: BeforeUnloadEvent) => {
-      if (!useEditor.getState().dirty) return
+      flushWorkspace()
+      if (!shouldPreventWindowClose(useEditor.getState().dirty, isElectron)) return
       e.preventDefault()
       e.returnValue = ''
     }
@@ -139,13 +207,33 @@ export function App() {
   }, [])
 
   return (
-    <div className="app">
+    <div className="app" data-empty={emptyReel || undefined} data-mobile-pane={mobilePane}>
       <MenuBar
         onToast={setToast}
         onExport={onExportClick}
         exporting={exporting}
         onShortcuts={() => setKeysOpen(true)}
       />
+      <nav className="mobile-workspace-nav" aria-label="Editor view">
+        {(
+          [
+            ['preview', 'Preview'],
+            ['review', 'Review'],
+            ['script', 'Script'],
+            ['timeline', 'Timeline']
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            data-on={mobilePane === id || undefined}
+            aria-pressed={mobilePane === id}
+            onClick={() => setMobilePane(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
       <div className="stage">
         {(recoveryOffer || missingAssets.length > 0) && (
           <div className="doc-banners">
@@ -213,10 +301,9 @@ export function App() {
         </main>
       </div>
       <Timeline onToast={setToast} />
+      {toast && <div className="toast">{toast}</div>}
       <Suggestions onToast={setToast} />
       <Palette onToast={setToast} />
-      {agentOpen && <AgentPanel variant="dock" onToast={setToast} />}
-      {toast && <div className="toast">{toast}</div>}
       <ConfirmSheet />
       <PreferencesSheet />
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
@@ -253,7 +340,7 @@ function useHotkeys(setToast: (msg: string) => void, toggleKeys: () => void) {
       }
       if (meta && e.key.toLowerCase() === 'j') {
         e.preventDefault()
-        editor.setAgentOpen(!editor.agentOpen)
+        openAssistant()
         return
       }
       if (e.code === 'Space' && !typing) {

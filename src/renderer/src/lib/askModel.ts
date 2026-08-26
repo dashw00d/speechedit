@@ -1,12 +1,13 @@
 import type { Project } from '../types'
 import { EMPTY_SESSION, type EditorSession } from './agentContext'
-import { runAgent, type AgentTurn } from './agent'
+import { runAgent, type AgentFollowUpContext, type AgentTurn } from './agent'
 import { loadSettings } from './settings'
 
 export async function askEditor(
   project: Project,
   intent: string,
-  session: EditorSession = EMPTY_SESSION
+  session: EditorSession = EMPTY_SESSION,
+  followUp?: AgentFollowUpContext
 ): Promise<AgentTurn> {
-  return runAgent(project, intent, session, loadSettings().intelligence)
+  return runAgent(project, intent, session, loadSettings().intelligence, undefined, followUp)
 }

@@ -4,13 +4,24 @@ import { projectToExportJob, type ProgramExportJob } from './lib/exportJob'
 import { projectForPlayback } from './lib/playbackProject'
 import { sampleProgram, type ProgramLook } from './lib/programLook'
 import { programToSourceOf, resolveProgram, segmentAtProgram } from './lib/resolver'
-import { boundPlayhead, readMediaClock, shouldHardSeek, shouldSeek, stepProgramPlayback } from './lib/seek'
+import {
+  boundPlayhead,
+  readMediaClock,
+  shouldHardSeek,
+  shouldSeek,
+  shouldSetMediaTime,
+  stepProgramPlayback
+} from './lib/seek'
 import { primaryAssetAt, sourceOffsetOf } from './lib/takes'
 import { useEditor, usePlayback } from './store'
 
 function applyGain(video: HTMLVideoElement | null, gain: number) {
   if (!video) return
-  video.muted = gain <= 0.0001
+  // Volume is the continuous program gain. Do not toggle the element's binary
+  // mute state at cuts/fades: Chromium may have to re-authorize audible media
+  // after an asynchronous seek. Keeping the audio path live also avoids a
+  // frame of accidental full-volume audio when a source loads.
+  video.muted = false
   video.volume = Math.min(1, Math.max(0, gain))
 }
 
@@ -30,7 +41,19 @@ function syncVideo(
   if (!video?.src) return
   video.playbackRate = speed * reviewRateOf()
   applyGain(video, gain)
-  if (shouldSeek(video.currentTime, sourceTime, playing && !hard, fps)) video.currentTime = sourceTime
+  if (
+    shouldSetMediaTime({
+      current: video.currentTime,
+      desired: sourceTime,
+      seeking: video.seeking,
+      readyState: video.readyState,
+      playing,
+      hard,
+      fps
+    })
+  ) {
+    video.currentTime = sourceTime
+  }
   if (playing && video.paused) void video.play().catch(() => undefined)
   if (!playing && !video.paused) video.pause()
 }
@@ -40,7 +63,7 @@ function syncBeds(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
     const id = item.bed.id ?? item.bed.path
     const el = document.querySelector(`audio[data-bed="${id}"]`) as HTMLAudioElement | null
     if (!el) continue
-    el.muted = item.gain <= 0.0001
+    el.muted = false
     el.volume = Math.min(1, Math.max(0, item.gain))
     el.playbackRate = reviewRateOf()
     if (!item.active || !playing) {
@@ -114,9 +137,14 @@ export function useEngine(
       }
     }
     window.addEventListener('pointerdown', prime)
+    // A Hear/review button updates the Zustand playback state in its click handler.
+    // Re-check on the bubbling click so video.play() still happens inside the
+    // same trusted gesture instead of relying on a later React effect.
+    window.addEventListener('click', prime)
     window.addEventListener('keydown', prime)
     return () => {
       window.removeEventListener('pointerdown', prime)
+      window.removeEventListener('click', prime)
       window.removeEventListener('keydown', prime)
     }
   }, [videoRef])
@@ -216,6 +244,7 @@ export function useEngine(
         requestedProgram: state.programTime,
         dt,
         mediaSource: clockRead.source,
+        mediaPresent: clockRead.present,
         sourceOffset: offset,
         resolved: resolveProgram(proj),
         fps

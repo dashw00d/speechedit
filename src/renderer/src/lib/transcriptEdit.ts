@@ -74,6 +74,20 @@ export function sentenceIds(words: Word[], index: number): string[] {
   return words.slice(lo, hi + 1).map((w) => w.id)
 }
 
+/** Punctuation can arrive as its own timed token. Resolve it to nearby speech for clicks. */
+export function nearestSpokenWord(words: Word[], index: number): Word | undefined {
+  const word = words[index]
+  if (!word) return undefined
+  if (/[\p{L}\p{N}]/u.test(word.text)) return word
+  for (let distance = 1; distance < words.length; distance++) {
+    const before = words[index - distance]
+    if (before && !before.deleted && /[\p{L}\p{N}]/u.test(before.text)) return before
+    const after = words[index + distance]
+    if (after && !after.deleted && /[\p{L}\p{N}]/u.test(after.text)) return after
+  }
+  return word
+}
+
 export function extendSelection(words: Word[], ids: string[], dir: -1 | 1): string[] {
   if (!ids.length) return ids
   const indexes = ids

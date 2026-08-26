@@ -1,8 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { host, isElectron } from '../host'
 import { wordsFromAsr } from '../lib/asr'
-import { askEditor } from '../lib/askModel'
-import { currentEditorSession } from '../lib/editorSession'
 import {
   INTEL_PRESETS,
   TRANSCRIPT_PRESETS,
@@ -11,9 +9,18 @@ import {
   type AppSettings
 } from '../lib/settings'
 import { presetIdFor } from '../../../shared/asr'
-import { applySafeFirstEdit, describeFirstEdit, findRetakesAndReview } from '../lib/firstEdit'
+import { applySafeFirstEdit, describeFirstEdit } from '../lib/firstEdit'
 import { busyMessage, isJobCancelled, whisperMissingMessage } from '../lib/mediaJobs'
 import { useEditor } from '../store'
+
+type IntelligenceModel = {
+  id: string
+  capabilities: string[]
+  parameterSize?: string
+  contextLength?: number
+  remote?: boolean
+  detail?: string
+}
 
 export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
@@ -23,18 +30,109 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   const setAnalyzing = useEditor((s) => s.setAnalyzing)
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [busy, setBusy] = useState<string | null>(null)
+  const [modelBusy, setModelBusy] = useState<'list' | 'test' | null>(null)
+  const [intelModels, setIntelModels] = useState<IntelligenceModel[]>([])
+  const [modelStatus, setModelStatus] = useState<{ state: 'ok' | 'info' | 'error'; message: string } | null>(null)
   const [pathStatus, setPathStatus] = useState<{ kind: string; available: boolean; found: string[] }[]>(
     []
   )
 
   useEffect(() => {
     void host.asrPath().then(setPathStatus).catch(() => undefined)
+    const endpoint = loadSettings().intelligence
+    if (endpoint.kind !== 'off') void inspectModels(endpoint, true)
   }, [])
 
   function update(next: AppSettings) {
     const saved = saveSettings(next)
     setSettings(saved)
     void host.syncSettings(saved).catch(() => undefined)
+    return saved
+  }
+
+  function useDiscoveredModel(model: string) {
+    setSettings((current) => {
+      const saved = saveSettings({
+        ...current,
+        intelligence: { ...current.intelligence, model }
+      })
+      void host.syncSettings(saved).catch(() => undefined)
+      return saved
+    })
+  }
+
+  async function inspectModels(endpoint = settings.intelligence, repair = false) {
+    if (endpoint.kind === 'openai-compatible' && !endpoint.baseUrl) return
+    setModelBusy('list')
+    setModelStatus({ state: 'info', message: 'Checking the model endpoint…' })
+    try {
+      const status = await host.listModels(endpoint)
+      setIntelModels(status.models)
+      if (!status.models.length) {
+        setModelStatus({ state: 'error', message: 'Connected, but this endpoint reports no models.' })
+        return
+      }
+      let selected =
+        endpoint.kind === 'codex-cli' || endpoint.kind === 'grok-cli'
+          ? status.models[0]
+          : status.models.find((model) => model.id === endpoint.model)
+      if (!selected && repair && endpoint.kind === 'openai-compatible') {
+        selected = status.models[0]
+        useDiscoveredModel(selected.id)
+      }
+      if (!selected) {
+        setModelStatus({
+          state: 'error',
+          message: `${endpoint.model || 'The selected model'} is not available. Choose one of the detected models.`
+        })
+        return
+      }
+      const facts = [
+        status.provider === 'ollama'
+          ? 'Ollama connected'
+          : status.provider === 'codex-cli'
+            ? 'Codex CLI ready'
+            : status.provider === 'grok-cli'
+              ? 'Grok CLI ready'
+              : 'Endpoint connected',
+        selected.detail || '',
+        selected.remote ? 'cloud' : '',
+        selected.parameterSize || '',
+        selected.contextLength ? `${Math.round(selected.contextLength / 1000)}k context` : '',
+        selected.capabilities.length ? selected.capabilities.join(' · ') : ''
+      ].filter(Boolean)
+      setModelStatus({ state: 'ok', message: facts.join(' · ') })
+    } catch (err) {
+      setIntelModels([])
+      setModelStatus({
+        state: 'error',
+        message: err instanceof Error ? err.message : 'Could not inspect the model endpoint.'
+      })
+    } finally {
+      setModelBusy(null)
+    }
+  }
+
+  async function testModel() {
+    setModelBusy('test')
+    setModelStatus({
+      state: 'info',
+      message: 'Running a real structured reply. Cloud models may take a minute…'
+    })
+    try {
+      const result = await host.testModel(settings.intelligence)
+      setModelStatus({
+        state: 'ok',
+        message: `${result.model} answered correctly in ${(result.latencyMs / 1000).toFixed(1)}s.`
+      })
+    } catch (err) {
+      setModelStatus({
+        state: 'error',
+        message: err instanceof Error ? err.message : 'The model test failed.'
+      })
+    } finally {
+      setModelBusy(null)
+    }
   }
 
   async function transcribeAgain() {
@@ -66,28 +164,6 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
     } finally {
       await host.endJob('import').catch(() => undefined)
       setAnalyzing(null)
-      setBusy(null)
-    }
-  }
-
-  async function ask(intent?: string) {
-    const promptIntent =
-      intent ?? window.prompt('What should SpeechEdit do? (scenes, retakes, or “cut the ums”)') ?? ''
-    if (!promptIntent) {
-      onToast('Type a request, or turn on a local/API model.')
-      return
-    }
-    setBusy('intel')
-    try {
-      const before = useEditor.getState().project
-      const result = await askEditor(before, promptIntent, currentEditorSession())
-      if (result.project !== before) {
-        dispatch({ type: 'replaceProject', project: result.project })
-      }
-      onToast(result.message)
-    } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Model failed.')
-    } finally {
       setBusy(null)
     }
   }
@@ -172,23 +248,49 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       )}
       <Field label="Intelligence">
         <select
-          value={settings.intelligence.kind === 'off' ? 'off' : settings.intelligence.baseUrl}
+          value={
+            settings.intelligence.kind === 'off'
+              ? 'off'
+              : settings.intelligence.kind === 'codex-cli' || settings.intelligence.kind === 'grok-cli'
+                ? settings.intelligence.kind
+                : settings.intelligence.baseUrl
+          }
           onChange={(e) => {
             const preset = INTEL_PRESETS.find((p) => p.id === e.target.value || p.baseUrl === e.target.value)
             if (!preset) return
-            update({
+            const saved = update({
               ...settings,
               intelligence: {
                 ...settings.intelligence,
                 kind: preset.kind,
-                baseUrl: preset.baseUrl || settings.intelligence.baseUrl,
-                model: preset.model || settings.intelligence.model
+                baseUrl:
+                  preset.kind === 'codex-cli' || preset.kind === 'grok-cli'
+                    ? ''
+                    : preset.baseUrl || settings.intelligence.baseUrl,
+                model:
+                  preset.kind === 'codex-cli' || preset.kind === 'grok-cli'
+                    ? preset.model
+                    : preset.model || settings.intelligence.model
               }
             })
+            setModelStatus(null)
+            setIntelModels([])
+            if (saved.intelligence.kind !== 'off') {
+              void inspectModels(saved.intelligence, preset.id === 'ollama')
+            }
           }}
         >
+          {settings.intelligence.kind === 'openai-compatible' &&
+            !INTEL_PRESETS.some((p) => p.baseUrl === settings.intelligence.baseUrl) && (
+              <option value={settings.intelligence.baseUrl}>Custom endpoint</option>
+            )}
           {INTEL_PRESETS.map((p) => (
-            <option key={p.id} value={p.id === 'off' ? 'off' : p.id === 'local' || p.id === 'ollama' ? p.baseUrl : p.id}>
+            <option
+              key={p.id}
+              value={
+                p.id === 'off' || p.kind === 'codex-cli' || p.kind === 'grok-cli' ? p.id : p.baseUrl
+              }
+            >
               {p.label}
             </option>
           ))}
@@ -199,32 +301,84 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           <Field label="LLM URL">
             <input
               value={settings.intelligence.baseUrl}
-              onChange={(e) =>
+              onChange={(e) => {
+                setModelStatus(null)
                 update({
                   ...settings,
                   intelligence: { ...settings.intelligence, baseUrl: e.target.value }
                 })
-              }
+              }}
             />
           </Field>
           <Field label="LLM model">
             <input
+              list="speechedit-intelligence-models"
               value={settings.intelligence.model}
-              onChange={(e) =>
+              onChange={(e) => {
+                setModelStatus(null)
                 update({ ...settings, intelligence: { ...settings.intelligence, model: e.target.value } })
-              }
+              }}
             />
+            <datalist id="speechedit-intelligence-models">
+              {intelModels.map((model) => <option key={model.id} value={model.id} />)}
+            </datalist>
           </Field>
           <Field label="LLM key">
             <input
               type="password"
               value={settings.intelligence.apiKey}
-              onChange={(e) =>
+              onChange={(e) => {
+                setModelStatus(null)
                 update({ ...settings, intelligence: { ...settings.intelligence, apiKey: e.target.value } })
-              }
+              }}
             />
           </Field>
         </>
+      )}
+      {(settings.intelligence.kind === 'codex-cli' || settings.intelligence.kind === 'grok-cli') && (
+        <Field label="CLI model (optional)">
+          <input
+            value={settings.intelligence.model}
+            placeholder="Use the CLI default"
+            onChange={(e) => {
+              setModelStatus(null)
+              update({ ...settings, intelligence: { ...settings.intelligence, model: e.target.value } })
+            }}
+          />
+        </Field>
+      )}
+      {settings.intelligence.kind !== 'off' && (
+        <div className="model-check" data-state={modelStatus?.state ?? 'idle'}>
+          <div>
+            <strong>Assistant model</strong>
+            <span>
+              {modelStatus?.message ??
+                (settings.intelligence.kind === 'openai-compatible'
+                  ? 'Check which models are available, then run one real reply.'
+                  : 'Check the installed CLI and account, then run one real reply.')}
+            </span>
+          </div>
+          <div className="script-tools" style={{ padding: 0 }}>
+            <button className="chip" type="button" disabled={Boolean(modelBusy)} onClick={() => void inspectModels()}>
+              {modelBusy === 'list'
+                ? 'Checking…'
+                : settings.intelligence.kind === 'openai-compatible'
+                  ? 'Refresh models'
+                  : 'Check CLI'}
+            </button>
+            <button
+              className="chip"
+              type="button"
+              disabled={
+                Boolean(modelBusy) ||
+                (settings.intelligence.kind === 'openai-compatible' && !settings.intelligence.model)
+              }
+              onClick={() => void testModel()}
+            >
+              {modelBusy === 'test' ? 'Testing…' : 'Test real reply'}
+            </button>
+          </div>
+        </div>
       )}
       <div className="script-tools" style={{ padding: 0 }}>
         <button
@@ -233,45 +387,6 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           onClick={() => void transcribeAgain()}
         >
           {busy === 'transcribe' ? 'Transcribing…' : 'Transcribe again'}
-        </button>
-        <button
-          className="chip"
-          type="button"
-          disabled={Boolean(busy)}
-          onClick={() => {
-            useEditor.getState().setInspectorTab('agent')
-            useEditor.getState().setAgentOpen(true)
-          }}
-        >
-          Ask in Agent…
-        </button>
-        <button
-          className="chip"
-          disabled={Boolean(busy)}
-          onClick={() => void ask('Find scenes and mark retakes. Do not cut yet.')}
-        >
-          Find scenes
-        </button>
-        <button
-          className="chip"
-          type="button"
-          disabled={Boolean(busy)}
-          onClick={() => {
-            onToast(findRetakesAndReview().toast)
-          }}
-        >
-          Local scenes
-        </button>
-        <button
-          className="chip"
-          type="button"
-          disabled={Boolean(busy)}
-          onClick={() => {
-            dispatch({ type: 'rebuildIntelligence' })
-            onToast('Rebuilt scenes and suggestions from the transcript.')
-          }}
-        >
-          Rebuild intelligence
         </button>
       </div>
       <p className="help">

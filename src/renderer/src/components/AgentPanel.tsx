@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { askEditor } from '../lib/askModel'
+import type { ModelQueueStatus } from '../../../shared/modelQueue'
+import { host } from '../host'
+import {
+  agentActivityState,
+  recordAgentTurn,
+  selectAgentTurn,
+  subscribeAgentActivity
+} from '../lib/agentActivity'
 import { renderAgentBrief } from '../lib/agentContext'
+import { askEditor } from '../lib/askModel'
 import { currentEditorSession } from '../lib/editorSession'
 import { planIntent } from '../lib/intent'
+import { MCP_TOOLS, type ToolDomain } from '../lib/mcpTools'
 import { formatClock } from '../lib/time'
 import { useEditor } from '../store'
-import type { AgentCall } from '../lib/agent'
 
 const QUICK = [
   { label: 'Auto-cut the reel', intent: 'auto-cut the reel' },
@@ -16,67 +24,161 @@ const QUICK = [
   { label: 'Put back silence', intent: 'put back silence' }
 ]
 
-export function AgentPanel({
-  onToast,
-  variant = 'inspector'
-}: {
-  onToast: (msg: string) => void
-  variant?: 'inspector' | 'dock'
-}) {
+const TOOL_DOMAIN_LABEL: Record<ToolDomain, string> = {
+  read_context: 'Read only',
+  timeline_edit: 'Timeline',
+  review_suggestions: 'Review',
+  annotations: 'Annotation',
+  scene_structure: 'Scene structure',
+  transcript_content: 'Transcript content',
+  visible_graphics: 'Visible graphics',
+  media_layers: 'Media layer',
+  picture_effects: 'Picture effect',
+  audio_mix: 'Audio mix',
+  internal_orchestration: 'Internal'
+}
+
+function elapsed(start: number | undefined, now: number): string {
+  if (start == null) return '0s'
+  const seconds = Math.max(0, Math.floor((now - start) / 1000))
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+export function AgentPanel({ onToast }: { onToast: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
   const dispatch = useEditor((s) => s.dispatch)
-  const setAgentOpen = useEditor((s) => s.setAgentOpen)
   const [intent, setIntent] = useState('')
   const [busy, setBusy] = useState(false)
-  const [log, setLog] = useState<{ q: string; a: string; calls: AgentCall[] }[]>([])
+  const [now, setNow] = useState(Date.now())
+  const [modelQueue, setModelQueue] = useState<ModelQueueStatus>({ active: false, pending: 0, jobs: [] })
+  const [activity, setActivity] = useState(agentActivityState)
   const input = useRef<HTMLTextAreaElement>(null)
   const inspectorTab = useEditor((s) => s.inspectorTab)
-  const retakes = (project.scenes ?? []).filter((s) => s.kind === 'retake').length
-  const demos = (project.scenes ?? []).filter((s) => s.kind === 'demo').length
+  const retakes = (project.scenes ?? []).filter((scene) => scene.kind === 'retake').length
+  const demos = (project.scenes ?? []).filter((scene) => scene.kind === 'demo').length
   const recipe = useMemo(() => (intent.trim() ? planIntent(project, intent) : null), [intent, project])
+  const followUp = activity.turns.find((turn) => turn.id === activity.selectedId)
+  const liveJobs = modelQueue.jobs.filter((job) => job.state === 'running' || job.state === 'waiting' || job.state === 'error')
 
   useEffect(() => {
-    if (variant === 'dock' || inspectorTab === 'agent') input.current?.focus()
-  }, [variant, inspectorTab])
+    if (inspectorTab === 'agent') input.current?.focus()
+  }, [inspectorTab])
+
+  useEffect(() => {
+    void host.modelQueueStatus().then(setModelQueue).catch(() => undefined)
+    return host.onModelQueue(setModelQueue)
+  }, [])
+
+  useEffect(() => subscribeAgentActivity(setActivity), [])
+
+  useEffect(() => {
+    if (followUp) input.current?.focus()
+  }, [followUp?.id])
+
+  useEffect(() => {
+    if (!modelQueue.active) return
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [modelQueue.active])
 
   async function run(text: string) {
-    const q = text.trim()
-    if (!q) return
+    const question = text.trim()
+    if (!question) return
     setBusy(true)
     try {
       const before = useEditor.getState().project
-      const result = await askEditor(before, q, currentEditorSession())
-      if (result.project !== before) {
-        dispatch({ type: 'replaceProject', project: result.project })
-      }
-      setLog((rows) => [...rows, { q, a: result.message, calls: result.calls }].slice(-8))
-      onToast(result.message)
+      const result = await askEditor(before, question, currentEditorSession(), followUp)
+      const changed = result.project !== before
+      if (changed) dispatch({ type: 'replaceProject', project: result.project })
+      const recorded = recordAgentTurn({
+        question,
+        answer: result.message,
+        calls: result.calls,
+        changed,
+        parentId: followUp?.id
+      })
+      if (followUp) selectAgentTurn(recorded.id)
+      onToast(`${changed ? 'Applied to reel' : 'No edit made'} · ${result.message}`)
       setIntent('')
     } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Agent failed.')
+      const message = err instanceof Error ? err.message : 'Agent failed.'
+      recordAgentTurn({ question, answer: message, calls: [], changed: false, failed: true, parentId: followUp?.id })
+      onToast(`Agent failed · ${message}`)
     } finally {
       setBusy(false)
     }
   }
 
-  const body = (
+  return (
     <div className="agent-panel">
-      {project.suggestions.filter((s) => !s.applied).length > 0 && (
-        <p className="help agent-hint">
-          {project.suggestions.filter((s) => !s.applied).length} open edits — try Auto-cut or ask why a suggestion is
-          protected.
-        </p>
+      <p className="help">
+        {formatClock(project.sourceDuration)} recording · {(project.scenes ?? []).length}{' '}
+        scene{(project.scenes ?? []).length === 1 ? '' : 's'}
+        {retakes ? ` · ${retakes} retake${retakes === 1 ? '' : 's'}` : ''}
+        {demos ? ` · ${demos} demo${demos === 1 ? '' : 's'}` : ''}
+      </p>
+
+      {(liveJobs.length > 0 || activity.turns.length > 0) && (
+        <section className="agent-activity-feed" aria-live="polite">
+          <header>
+            <strong>Activity</strong>
+            <span>{modelQueue.active ? 'Assistant is working' : `${activity.turns.length} completed`}</span>
+          </header>
+          {liveJobs.length > 0 && (
+            <ol className="agent-job-list">
+              {liveJobs.map((job, index) => (
+                <li key={job.id} data-state={job.state}>
+                  <span className="agent-status-dot" aria-hidden="true" />
+                  <span>
+                    <strong>{job.label}</strong>
+                    <small>
+                      {job.state === 'running'
+                        ? `Working · ${elapsed(job.startedAt, now)}`
+                        : job.state === 'waiting'
+                          ? `Waiting · #${index + 1}`
+                          : `Failed · ${job.error ?? 'Model error'}`}
+                    </small>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {activity.turns.length > 0 && (
+            <ol className="agent-turn-list">
+              {activity.turns.slice(0, 8).map((turn) => (
+                <li key={turn.id} data-state={turn.failed ? 'failed' : turn.changed ? 'applied' : 'unchanged'}>
+                  <button type="button" onClick={() => selectAgentTurn(turn.id)}>
+                    <span className="agent-turn-outcome">
+                      {turn.failed ? 'Failed' : turn.changed ? 'Applied to reel' : 'No edit made'}
+                    </span>
+                    <strong>{turn.question}</strong>
+                    <span>{turn.answer}</span>
+                    <small>Click to ask a contextual follow-up</small>
+                  </button>
+                  {turn.calls.length > 0 && (
+                    <details className="agent-details">
+                      <summary>{turn.calls.length} tool action{turn.calls.length === 1 ? '' : 's'}</summary>
+                      <ul className="agent-calls">
+                        {turn.calls.map((call, index) => (
+                          <li key={`${call.name}-${index}`}>
+                            <span className="agent-tool-domain">
+                              {TOOL_DOMAIN_LABEL[MCP_TOOLS.find((tool) => tool.name === call.name)?.contract.domain ?? 'internal_orchestration']}
+                            </span>
+                            <code>{call.name}</code>
+                            <span>{call.message}</span>
+                            {Object.keys(call.args).length > 0 && <small>{JSON.stringify(call.args)}</small>}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
       )}
-      <p className="help">
-        Same command bus as the mouse. Every tool call is an <code>applyCommand</code>. Undo (⌘Z) reverts the
-        whole turn.
-      </p>
-      <p className="help">
-        {formatClock(project.sourceDuration)} source · {(project.scenes ?? []).length} scenes
-        {retakes ? ` · ${retakes} retakes` : ''}
-        {demos ? ` · ${demos} demos` : ''} · {project.suggestions.filter((s) => !s.applied).length} open
-        edits
-      </p>
+
       <div className="script-tools" style={{ padding: 0 }}>
         {QUICK.map((item) => (
           <button key={item.label} className="chip" disabled={busy} onClick={() => void run(item.intent)}>
@@ -84,72 +186,42 @@ export function AgentPanel({
           </button>
         ))}
       </div>
+
       <label className="field">
-        <span>Ask</span>
+        <span>{followUp ? 'Follow-up' : 'Ask Assistant'}</span>
+        {followUp && (
+          <span className="agent-followup">
+            <span><small>Using context from</small><strong>{followUp.question}</strong></span>
+            <button type="button" aria-label="Start a new question" onClick={() => selectAgentTurn(null)}>×</button>
+          </span>
+        )}
         <textarea
           ref={input}
           rows={3}
-          placeholder='Remove the part where I fumble the product name…'
+          placeholder={followUp ? 'Ask a follow-up about that result…' : 'Remove the part where I fumble the product name…'}
           value={intent}
           disabled={busy}
-          onChange={(e) => setIntent(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
+          onChange={(event) => setIntent(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
               void run(intent)
-            }
-            if (e.key === 'Escape' && variant === 'dock') {
-              e.preventDefault()
-              setAgentOpen(false)
             }
           }}
         />
       </label>
-      {recipe && (
-        <p className="help agent-recipe" data-ready={recipe.commands.length > 0 || undefined}>
-          {recipe.commands.length > 0 ? `Will: ${recipe.note}` : recipe.note}
-        </p>
+      {recipe && recipe.commands.length > 0 && (
+        <p className="help agent-recipe" data-ready="true">Will apply: {recipe.note}</p>
       )}
-      <button className="chip" disabled={busy || !intent.trim()} onClick={() => void run(intent)}>
-        {busy ? 'Editing…' : 'Run tools'}
+      <button className="chip agent-submit" disabled={busy || !intent.trim()} onClick={() => void run(intent)}>
+        {busy ? (modelQueue.pending > 0 ? `Waiting · ${modelQueue.pending} ahead` : 'Assistant is working…') : followUp ? 'Ask follow-up' : 'Send request'}
       </button>
-      {log.length > 0 && (
-        <ol className="agent-log">
-          {log.map((row, i) => (
-            <li key={`${row.q}-${i}`}>
-              <strong>{row.q}</strong>
-              <span>{row.a}</span>
-              {row.calls.length > 0 && (
-                <ul className="agent-calls">
-                  {row.calls.map((call, j) => (
-                    <li key={`${call.name}-${j}`}>
-                      <code>{call.name}</code> {call.message}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ol>
-      )}
-      <pre className="agent-brief">{renderAgentBrief(project, currentEditorSession())}</pre>
-    </div>
-  )
+      <p className="help agent-apply-note">Successful edits apply immediately. Use Undo to reverse them.</p>
 
-  if (variant !== 'dock') return body
-
-  return (
-    <div className="agent-dock-back" onClick={() => setAgentOpen(false)}>
-      <div className="agent-dock" onClick={(e) => e.stopPropagation()}>
-        <header className="agent-dock-head">
-          <span>Agent</span>
-          <span className="help">⌘J · ⌘Z undoes the last turn</span>
-          <button className="chip" onClick={() => setAgentOpen(false)}>
-            Close
-          </button>
-        </header>
-        {body}
-      </div>
+      <details className="agent-details agent-context">
+        <summary>Editor context sent to Assistant</summary>
+        <pre className="agent-brief">{renderAgentBrief(project, currentEditorSession())}</pre>
+      </details>
     </div>
   )
 }

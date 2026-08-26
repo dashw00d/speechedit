@@ -6,6 +6,7 @@ import {
   coerceTranscriptKind,
   localTranscriptOrder,
   parseAsrPayload,
+  sanitizeAsrCues,
   shouldInstallLocalWhisper,
   transcriptionsUrl,
   type AsrCue,
@@ -23,6 +24,7 @@ import {
   whisperSpawnEnv
 } from './asrLocal'
 import { runChild, withTempDir } from './childJob'
+import { mediaToolMissingMessage, mediaToolPath } from './mediaTools'
 import type { ChildProcess } from 'node:child_process'
 import {
   asrChunkWindows,
@@ -65,14 +67,15 @@ type NoteFn = (
 let transcribeChildHook: ((child: ChildProcess) => void) | undefined
 
 function run(cmd: string, args: string[], signal?: AbortSignal): Promise<string> {
-  return runChild(cmd, args, {
+  const command = cmd === 'ffmpeg' || cmd === 'ffprobe' ? mediaToolPath(cmd) : cmd
+  return runChild(command, args, {
     signal,
     kind: 'import',
     onSpawn: transcribeChildHook,
     env: whisperSpawnEnv(cmd),
     missing:
       cmd === 'ffmpeg' || cmd === 'ffprobe'
-        ? 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
+        ? mediaToolMissingMessage(cmd, command)
         : `${cmd} did not start. Install whisper.cpp into ~/.speechedit, put a Whisper CLI on PATH, or pick an OpenAI-compatible endpoint in Models.`
   })
 }
@@ -420,7 +423,10 @@ async function loadAsrCache(
   extra = ''
 ): Promise<AsrCue[] | null> {
   const hit = await readJsonCache<AsrCacheDoc>(asrCachePath(file, kind, model, extra))
-  if (hit?.v === 1 && Array.isArray(hit.cues) && hit.cues.length) return hit.cues
+  if (hit?.v === 1 && Array.isArray(hit.cues) && hit.cues.length) {
+    const clean = sanitizeAsrCues(hit.cues)
+    return clean.length ? clean : null
+  }
   return null
 }
 
@@ -431,8 +437,9 @@ async function saveAsrCache(
   extra: string,
   cues: AsrCue[]
 ): Promise<void> {
-  if (!cues.length) return
-  await writeJsonCache(asrCachePath(file, kind, model, extra), { v: 1, kind, model, cues }).catch(
+  const clean = sanitizeAsrCues(cues)
+  if (!clean.length) return
+  await writeJsonCache(asrCachePath(file, kind, model, extra), { v: 1, kind, model, cues: clean }).catch(
     () => undefined
   )
 }

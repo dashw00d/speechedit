@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
-import { existsSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
+import { createReadStream, existsSync } from 'node:fs'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, extname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { Readable } from 'node:stream'
+import { fileURLToPath } from 'node:url'
 
 import {
   asMediaJobKind,
@@ -27,13 +28,25 @@ import {
   probeProxyGop,
   thumbnails,
   completeChat,
+  listChatModels,
+  testChatEndpoint,
   listAsrPath,
   transcribeMedia,
   waveform
 } from './ffmpeg'
 import { proxyCachePath } from './asrLocal'
+import { parseByteRange } from '../shared/mediaRange'
+import { ModelQueue, type ModelQueueStatus } from '../shared/modelQueue'
 
 const here = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url))
+
+function broadcastModelQueue(status: ModelQueueStatus): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('model:queue-changed', status)
+  }
+}
+
+const modelQueue = new ModelQueue(broadcastModelQueue)
 function preloadScript(): string {
   const mjs = join(here, '../preload/index.mjs')
   const js = join(here, '../preload/index.js')
@@ -53,6 +66,66 @@ protocol.registerSchemesAsPrivileged([
     }
   }
 ])
+
+function mediaContentType(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case '.mp4':
+    case '.m4v':
+      return 'video/mp4'
+    case '.mov':
+      return 'video/quicktime'
+    case '.webm':
+      return 'video/webm'
+    case '.mkv':
+      return 'video/x-matroska'
+    case '.wav':
+      return 'audio/wav'
+    case '.mp3':
+      return 'audio/mpeg'
+    case '.m4a':
+      return 'audio/mp4'
+    case '.aac':
+      return 'audio/aac'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+async function localMediaResponse(request: Request, filePath: string): Promise<Response> {
+  let size = 0
+  try {
+    size = (await stat(filePath)).size
+  } catch {
+    return new Response('media not found', { status: 404 })
+  }
+
+  const parsed = parseByteRange(request.headers.get('range'), size)
+  const common = {
+    'Accept-Ranges': 'bytes',
+    'Content-Type': mediaContentType(filePath)
+  }
+  if (parsed === 'unsatisfiable') {
+    return new Response(null, {
+      status: 416,
+      headers: { ...common, 'Content-Range': `bytes */${size}` }
+    })
+  }
+
+  const start = parsed?.start ?? 0
+  const end = parsed?.end ?? Math.max(0, size - 1)
+  const length = Math.max(0, end - start + 1)
+  const headers = {
+    ...common,
+    'Content-Length': String(length),
+    ...(parsed ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {})
+  }
+  if (request.method === 'HEAD' || length === 0) {
+    return new Response(null, { status: parsed ? 206 : 200, headers })
+  }
+
+  const body = Readable.toWeb(createReadStream(filePath, { start, end })) as unknown as BodyInit
+  return new Response(body, { status: parsed ? 206 : 200, headers })
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -110,7 +183,10 @@ app.whenReady().then(() => {
     const url = new URL(request.url)
     const filePath = url.searchParams.get('path')
     if (!filePath) return new Response('missing path', { status: 400 })
-    return net.fetch(pathToFileURL(filePath).href)
+    // Chromium seeks across edits with HTTP byte ranges. A plain file fetch can
+    // play from zero but advertises [0, 0] as seekable on Windows, so serve an
+    // explicit 206 response with the requested slice.
+    return localMediaResponse(request, filePath)
   })
   createWindow()
   app.on('activate', () => {
@@ -349,17 +425,93 @@ ipcMain.handle(
   }
 })
 ipcMain.handle('media:asrPath', async () => listAsrPath())
+
+function modelRequestLabel(req: {
+  label?: string
+  messages: { role: string; content: string }[]
+}): string {
+  if (req.label?.trim()) return req.label.trim().slice(0, 72)
+  const system = req.messages.find((message) => message.role === 'system')?.content ?? ''
+  const user = [...req.messages].reverse().find((message) => message.role === 'user')?.content ?? ''
+  const firstLine = user.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? ''
+  if (/editorial intelligence for SpeechEdit/i.test(system)) return 'Analyze scenes and retakes'
+  if (/edit a SpeechEdit reel by calling tools/i.test(system)) {
+    return firstLine ? `Plan edit · ${firstLine.slice(0, 50)}` : 'Plan an edit'
+  }
+  return firstLine ? `Assistant · ${firstLine.slice(0, 52)}` : 'Assistant request'
+}
+
 ipcMain.handle(
   'model:complete',
   async (
     _e,
-    req: { endpoint: { baseUrl?: string; model?: string; apiKey?: string }; messages: { role: string; content: string }[] }
-  ) => completeChat(req.endpoint, req.messages)
+    req: {
+      endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }
+      messages: { role: string; content: string }[]
+      label?: string
+    }
+  ) => modelQueue.enqueue(() => completeChat(req.endpoint, req.messages), { label: modelRequestLabel(req) })
+)
+ipcMain.handle('model:queue-status', () => modelQueue.status())
+ipcMain.handle(
+  'model:list',
+  async (_e, endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) => listChatModels(endpoint)
+)
+ipcMain.handle(
+  'model:test',
+  async (_e, endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+    modelQueue.enqueue(() => testChatEndpoint(endpoint), {
+      label: `Test connection · ${endpoint.model || endpoint.kind || 'model'}`
+    })
 )
 
 function syncDir(): string {
   return join(homedir(), '.speechedit')
 }
+
+function mcpBridgeDir(): string {
+  return join(syncDir(), 'mcp-bridge')
+}
+
+async function writeMcpHeartbeat(): Promise<void> {
+  if (!BrowserWindow.getAllWindows().some((window) => !window.isDestroyed())) return
+  const dir = mcpBridgeDir()
+  await mkdir(dir, { recursive: true })
+  await writeAtomic(join(dir, 'heartbeat.json'), JSON.stringify({ at: Date.now(), pid: process.pid }))
+}
+
+const mcpHeartbeat = setInterval(() => void writeMcpHeartbeat().catch(() => undefined), 1_000)
+mcpHeartbeat.unref()
+
+ipcMain.handle('mcp:poll', async () => {
+  await writeMcpHeartbeat()
+  const dir = mcpBridgeDir()
+  await mkdir(dir, { recursive: true })
+  const names = (await readdir(dir)).filter((name) => /^[a-f0-9-]+\.request\.json$/i.test(name)).sort()
+  const requests: { id: string; name: string; args: Record<string, unknown> }[] = []
+  for (const name of names) {
+    const id = name.slice(0, -'.request.json'.length)
+    const source = join(dir, name)
+    const processing = join(dir, `${id}.processing.json`)
+    try {
+      await rename(source, processing)
+      requests.push(JSON.parse(await readFile(processing, 'utf8')))
+    } catch {
+      /* another poll claimed it or the request was malformed */
+    }
+  }
+  return requests
+})
+
+ipcMain.handle(
+  'mcp:resolve',
+  async (_e, response: { id: string; message: string; data?: unknown; isError?: boolean }) => {
+    if (!/^[a-f0-9-]+$/i.test(response.id)) throw new Error('Invalid MCP bridge request id.')
+    const dir = mcpBridgeDir()
+    await writeAtomic(join(dir, `${response.id}.response.json`), JSON.stringify(response))
+    await rm(join(dir, `${response.id}.processing.json`), { force: true })
+  }
+)
 
 ipcMain.handle('project:sync', async (_e, project: unknown) => {
   const path = join(syncDir(), 'current.speechedit.json')

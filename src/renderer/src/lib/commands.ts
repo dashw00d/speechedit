@@ -1431,7 +1431,8 @@ export function applyCommand(project: Project, command: Command): Project {
         ...scene,
         id: uid('scene'),
         start: command.time,
-        title: `${scene.title} (cont.)`,
+        title: command.title?.trim() || `${scene.title} (cont.)`,
+        summary: command.summary?.trim() || scene.summary,
         takeOf: undefined,
         takeIndex: undefined
       })

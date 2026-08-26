@@ -8,6 +8,7 @@ import {
   droppedRetakeCount,
   hasUncollapsedRetakes,
   retakeReviewQueue,
+  retakeSceneDropped,
   uncollapsedRetakeCount
 } from './sceneAnalysis'
 import { takeDoneNext } from './leftoverDecide'
@@ -262,10 +263,10 @@ export function describeRetakeReview(
   return `Dropped ${dropped} false take${dropped === 1 ? '' : 's'}. Hear this one — Put back if it was the good line.`
 }
 
-/** Open review on the first live retake, or the first dropped take if first-edit already collapsed them. */
+/** Open review on the first retake that still needs a decision. */
 export function startRetakeReview(): EditorialScene | false {
   const project = useEditor.getState().project
-  const next = retakeReviewQueue(project)[0]
+  const next = retakeReviewQueue(project).find((row) => !retakeSceneDropped(project, row))
   if (!next) return false
   const editor = useEditor.getState()
   editor.setReviewing(true)

@@ -21,7 +21,7 @@ import {
 import { commandForScene } from './sceneAnalysis'
 import { leftoverHearQueue, suggestionsFromLoudness, suggestionsFromStatic } from './analysis'
 import { ffmpegImportBusy } from './mediaJobs'
-import { hasUncollapsedRetakes, retakeSceneDropped } from './sceneAnalysis'
+import { hasUncollapsedRetakes } from './sceneAnalysis'
 import { importMediaFromPath } from './fileActions'
 import { projectFromTake } from './importMedia'
 import { host } from '../host'
@@ -908,14 +908,12 @@ describe('safe first edit', () => {
     expect(usePlayback.getState().loopFrom).not.toBeNull()
   })
 
-  test('startRetakeReview hears a dropped take after first-edit collapse', () => {
+  test('startRetakeReview does not reopen a dropped take after first-edit collapse', () => {
     useEditor.getState().loadProject(createDemoProject(), { clean: true })
     expect(applySafeFirstEdit()?.retakes).toBeGreaterThan(0)
     const scene = startRetakeReview()
-    expect(scene).toBeTruthy()
-    expect(retakeSceneDropped(useEditor.getState().project, scene!)).toBe(true)
-    expect(useEditor.getState().selectedSceneId).toBe(scene!.id)
-    expect(describeRetakeReview(useEditor.getState().project, scene)).toMatch(/Dropped \d+ false take/)
+    expect(scene).toBe(false)
+    expect(useEditor.getState().selectedSceneId).toBeNull()
   })
 
   test('findRetakesAndReview infers scenes and hears the first take', () => {
@@ -934,7 +932,7 @@ describe('safe first edit', () => {
     }
     const { toast, job } = openReviewFromContext()
     expect(job).toBe('retake')
-    expect(toast).toMatch(/Use later take|Put back/)
+    expect(toast).toMatch(/needs a decision/)
     expect(useEditor.getState().reviewing).toBe(true)
     expect(useEditor.getState().selectedSceneId).toBe('sc_false')
     expect(usePlayback.getState().playing).toBe(true)

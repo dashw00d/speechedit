@@ -38,6 +38,7 @@ export function whisperCppOptDir(): string {
 }
 
 export function whisperLibraryDir(bin: string): string | undefined {
+  if (process.platform === 'win32') return undefined
   const dir = dirname(bin)
   if (existsSync(join(dir, 'libwhisper.so.1')) || existsSync(join(dir, 'libwhisper.so'))) return dir
   const opt = whisperCppOptDir()
@@ -62,11 +63,40 @@ export function defaultWhisperCppModel(): string | undefined {
 export function defaultWhisperCppBin(): string | undefined {
   const env = process.env.SPEECHEDIT_WHISPER_BIN?.trim()
   if (env && existsSync(env)) return env
-  const opt = join(whisperCppOptDir(), process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli')
-  if (existsSync(opt) && existsSync(join(whisperCppOptDir(), 'libwhisper.so.1'))) return opt
+  const opt = join(whisperCppOptDir(), whisperExecutableName(process.platform))
+  if (whisperRuntimeReady(whisperCppOptDir(), process.platform)) return opt
   const local = join(asrBinDir(), process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli')
-  if (existsSync(local) && whisperLibraryDir(local)) return local
+  if (existsSync(local) && (process.platform === 'win32' || whisperLibraryDir(local))) return local
   return undefined
+}
+
+export function whisperExecutableName(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli'
+}
+
+export function whisperArchiveExtension(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? 'zip' : 'tar.gz'
+}
+
+export function whisperExtractFlag(platform: NodeJS.Platform): '-xf' | '-xzf' {
+  return platform === 'win32' ? '-xf' : '-xzf'
+}
+
+export function whisperReleaseDirectory(platform: NodeJS.Platform, arch: string): string {
+  if (platform === 'win32') return 'Release'
+  return `whisper-bin-ubuntu-${arch}`
+}
+
+export function whisperRuntimeReady(
+  dir: string,
+  platform: NodeJS.Platform,
+  exists: (path: string) => boolean = existsSync
+): boolean {
+  if (!exists(join(dir, whisperExecutableName(platform)))) return false
+  if (platform === 'win32') {
+    return exists(join(dir, 'whisper.dll')) && exists(join(dir, 'ggml.dll')) && exists(join(dir, 'ggml-base.dll'))
+  }
+  return exists(join(dir, 'libwhisper.so.1')) || exists(join(dir, 'libwhisper.so'))
 }
 
 export function hasBin(name: string): Promise<boolean> {
@@ -181,29 +211,41 @@ export async function ensureLocalWhisper(opts?: { sample?: boolean; signal?: Abo
   await mkdir(asrBinDir(), { recursive: true })
   await mkdir(join(asrHome(), 'models'), { recursive: true })
   await mkdir(join(asrHome(), 'opt'), { recursive: true })
-  const archive = join(asrHome(), `whisper-${WHISPER_CPP_RELEASE}.tgz`)
+  const archive = join(
+    asrHome(),
+    `whisper-${WHISPER_CPP_RELEASE}.${whisperArchiveExtension(process.platform)}`
+  )
   if (!existsSync(archive)) await downloadTo(url, archive, opts?.signal)
   const modelDest = join(asrHome(), 'models', MODEL_NAME)
   if (!existsSync(modelDest)) await downloadTo(MODEL_URL, modelDest, opts?.signal)
 
-  const optBin = join(whisperCppOptDir(), 'whisper-cli')
-  if (!existsSync(optBin) || !existsSync(join(whisperCppOptDir(), 'libwhisper.so.1'))) {
-    const staging = join(asrHome(), 'opt')
-    await execFileAsync('tar', ['-xzf', archive, '-C', staging])
-    const unpacked = join(staging, 'whisper-bin-ubuntu-x64')
-    if (existsSync(unpacked) && unpacked !== whisperCppOptDir()) {
+  const optBin = join(whisperCppOptDir(), whisperExecutableName(process.platform))
+  if (!whisperRuntimeReady(whisperCppOptDir(), process.platform)) {
+    const staging = join(asrHome(), 'opt', `.whisper-${WHISPER_CPP_RELEASE}-${process.pid}`)
+    await rm(staging, { recursive: true, force: true })
+    await mkdir(staging, { recursive: true })
+    try {
+      await execFileAsync('tar', [whisperExtractFlag(process.platform), archive, '-C', staging])
+      const unpacked = join(staging, whisperReleaseDirectory(process.platform, process.arch))
+      if (!whisperRuntimeReady(unpacked, process.platform)) {
+        throw new Error('Downloaded whisper.cpp did not contain the expected runtime files.')
+      }
       await rm(whisperCppOptDir(), { recursive: true, force: true })
       await rename(unpacked, whisperCppOptDir())
+    } finally {
+      await rm(staging, { recursive: true, force: true })
     }
     if (!existsSync(optBin)) throw new Error('Could not unpack whisper-cli into ~/.speechedit/opt/whisper-cpp')
-    await chmod(optBin, 0o755)
+    if (process.platform !== 'win32') await chmod(optBin, 0o755)
   }
-  const wrapper = join(asrBinDir(), 'whisper-cli')
-  await writeFile(
-    wrapper,
-    `#!/bin/sh\nDIR="${whisperCppOptDir()}"\nexport LD_LIBRARY_PATH="$DIR\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$DIR/whisper-cli" "$@"\n`
-  )
-  await chmod(wrapper, 0o755)
+  if (process.platform !== 'win32') {
+    const wrapper = join(asrBinDir(), 'whisper-cli')
+    await writeFile(
+      wrapper,
+      `#!/bin/sh\nDIR="${whisperCppOptDir()}"\nexport LD_LIBRARY_PATH="$DIR\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$DIR/whisper-cli" "$@"\n`
+    )
+    await chmod(wrapper, 0o755)
+  }
 
   throwIfAborted(opts?.signal, 'import')
   if (opts?.sample && !existsSync(samplePath)) await downloadTo(JFK_URL, samplePath, opts.signal)

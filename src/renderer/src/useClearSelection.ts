@@ -32,11 +32,6 @@ export function useClearSelection() {
         editor.setPalette(false)
         return
       }
-      if (editor.agentOpen) {
-        e.preventDefault()
-        editor.setAgentOpen(false)
-        return
-      }
       if (editor.reviewing) {
         e.preventDefault()
         editor.setReviewing(false)

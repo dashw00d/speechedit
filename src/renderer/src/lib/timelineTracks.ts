@@ -18,7 +18,8 @@ export function revealStackTrack(track: Track): Track {
 
 /** Strip V1/A2 prefixes so the lane reads Captions / Overlay / Picture / Voice. */
 export function trackLaneName(track: Pick<Track, 'name'>): string {
-  return track.name.replace(/^[VA]\d+\s+/, '') || track.name
+  const plain = track.name.replace(/^[VA]\d+\s+/, '') || track.name
+  return plain === 'Overlay' ? 'Graphics' : plain
 }
 
 /** Hidden overlay/caption — a filled lane you hid, then the empty default stack. */

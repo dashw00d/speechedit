@@ -1,8 +1,8 @@
 import type { Command, Project } from '../types'
 import { EMPTY_SESSION, type EditorSession, renderAgentBrief } from './agentContext'
 import { planIntent } from './intent'
-import { MCP_TOOLS, runTool } from './mcpTools'
-import { endpointReady, extractJson } from './providers'
+import { MCP_TOOLS, assistantToolsForIntent, runTool, type ToolDomain } from './mcpTools'
+import { endpointReady, extractJson, type ChatMessage } from './providers'
 import type { ModelEndpoint } from './settings'
 import { sentenceRange, wordsMatchingPhrase } from './transcriptEdit'
 
@@ -56,6 +56,10 @@ export function commandToTool(command: Command): PlannedCall {
       return { name: 'set_word_text', args: { wordId: command.wordId, text: command.text } }
     case 'splitAt':
       return { name: 'split_at', args: { time: command.time } }
+    case 'splitScene':
+      return { name: 'split_scene', args: { time: command.time, title: command.title, summary: command.summary } }
+    case 'mergeScenes':
+      return { name: 'merge_scenes', args: { sceneId: command.sceneId, otherId: command.otherId } }
     case 'rippleDelete':
       return { name: 'ripple_delete', args: { start: command.start, end: command.end } }
     case 'rippleDeleteMarks':
@@ -204,37 +208,57 @@ export function planToolCalls(
 function summarize(note: string, calls: AgentCall[]): string {
   const writes = calls.filter((c) => !READ_TOOLS.has(c.name))
   if (!writes.length) return note
+  if (note.trim()) return note
   const bits = writes.map((c) => c.message).filter(Boolean)
-  return bits.length ? `${note} · ${bits.join(' · ')}` : note
+  return bits.join(' · ')
+}
+
+export interface AgentFollowUpContext {
+  question: string
+  answer: string
+  calls: AgentCall[]
+}
+
+export type AgentComplete = (endpoint: ModelEndpoint, messages: ChatMessage[], label?: string) => Promise<string>
+
+async function completeFromHost(endpoint: ModelEndpoint, messages: ChatMessage[], label?: string): Promise<string> {
+  const { host } = await import('../host')
+  return host.complete({ endpoint, messages, label })
 }
 
 async function executeCalls(
   project: Project,
   planned: PlannedCall[],
   intel: ModelEndpoint | undefined,
-  session: EditorSession
+  session: EditorSession,
+  complete: AgentComplete
 ): Promise<{ project: Project; calls: AgentCall[] }> {
   let current = project
   const calls: AgentCall[] = []
   for (const call of planned) {
     if (call.name === 'edit_with_intent') continue
-    const result = await runTool(current, call.name, call.args, intel, session)
+    const result = await runTool(current, call.name, call.args, intel, session, complete)
     calls.push({ name: call.name, args: call.args, message: result.message })
     current = result.project
   }
   return { project: current, calls }
 }
 
-function parseToolDraft(raw: unknown): { note: string; calls: PlannedCall[] } {
+function parseToolDraft(raw: unknown, allowedNames = new Set(MCP_TOOLS.map((tool) => tool.name))): { note: string; calls: PlannedCall[] } {
   const data = raw as { note?: string; calls?: PlannedCall[]; tools?: PlannedCall[] }
   const list = Array.isArray(data.calls) ? data.calls : Array.isArray(data.tools) ? data.tools : []
-  const allowed = new Set(MCP_TOOLS.map((t) => t.name))
+  const rejected = list
+    .filter((call) => call && typeof call.name === 'string' && !allowedNames.has(call.name))
+    .map((call) => call.name)
   const calls = list.flatMap((call) => {
-    if (!call || typeof call.name !== 'string' || !allowed.has(call.name)) return []
+    if (!call || typeof call.name !== 'string' || !allowedNames.has(call.name)) return []
     if (call.name === 'edit_with_intent') return []
     return [{ name: call.name, args: (call.args ?? {}) as Record<string, unknown> }]
   })
-  return { note: String(data.note ?? ''), calls }
+  const note = rejected.length
+    ? `No edit made — blocked tool${rejected.length === 1 ? '' : 's'} outside this content domain: ${[...new Set(rejected)].join(', ')}.`
+    : String(data.note ?? '')
+  return { note, calls }
 }
 
 async function planWithModel(
@@ -242,18 +266,48 @@ async function planWithModel(
   intent: string,
   session: EditorSession,
   intel: ModelEndpoint,
-  prior: AgentCall[]
+  prior: AgentCall[],
+  complete: AgentComplete,
+  followUp?: AgentFollowUpContext
 ): Promise<{ note: string; calls: PlannedCall[] }> {
-  const tools = MCP_TOOLS.filter((t) => t.name !== 'edit_with_intent')
-    .map((t) => `- ${t.name}: ${t.description}`)
-    .join('\n')
+  const domainLabels: Record<ToolDomain, string> = {
+    read_context: 'READ ONLY — inspect project state',
+    timeline_edit: 'TIMELINE EDITS — cuts, timing, speed, and marks only',
+    review_suggestions: 'REVIEW SUGGESTIONS — apply, dismiss, or revert suggestions only',
+    annotations: 'ANNOTATIONS — keep/demo/note tags only',
+    scene_structure: 'SCENE STRUCTURE — transcript chapters, names, summaries, and retakes only',
+    transcript_content: 'TRANSCRIPT CONTENT — spoken words and speaker identity only',
+    visible_graphics: 'VISIBLE GRAPHICS — on-screen captions, titles, lower thirds, and zooms only',
+    media_layers: 'MEDIA LAYERS — B-roll, music, overlays, and extra timeline clips only',
+    picture_effects: 'PICTURE EFFECTS — zoom, crop, transform, redaction, and canvas only',
+    audio_mix: 'AUDIO MIX — volume automation only',
+    internal_orchestration: 'INTERNAL — unavailable to Assistant'
+  }
+  const selectedTools = assistantToolsForIntent(
+    intent,
+    [...prior.map((call) => call.name), ...(followUp?.calls.map((call) => call.name) ?? [])]
+  )
+  const allowedNames = new Set(selectedTools.map((tool) => tool.name))
+  const tools = [...new Set(selectedTools.map((tool) => tool.contract.domain))]
+    .map((domain) => {
+      const rows = selectedTools
+        .filter((tool) => tool.contract.domain === domain)
+        .map((tool) => `- ${tool.name} [${tool.contract.timebase} time]: ${tool.description}`)
+        .join('\n')
+      return `### ${domainLabels[domain]}\n${rows}`
+    })
+    .join('\n\n')
   const priorText = prior.length
     ? `\nPrior tool results:\n${prior.map((c) => `${c.name} → ${c.message}`).join('\n')}`
     : ''
-  const { host } = await import('../host')
-  const text = await host.complete({
-    endpoint: intel,
-    messages: [
+  const conversationText = followUp
+    ? `\nPrevious agent turn:\nUser: ${followUp.question}\nAgent: ${followUp.answer}\nActions: ${
+        followUp.calls.length
+          ? followUp.calls.map((call) => `${call.name} (${call.message})`).join('; ')
+          : 'none'
+      }\nThe request below is a follow-up to that turn. Use its context, but inspect the current editor state before changing anything.\n`
+    : ''
+  const text = await complete(intel, [
       {
         role: 'system',
         content: `You edit a SpeechEdit reel by calling tools. Every write tool wraps applyCommand, so undo works.
@@ -261,27 +315,37 @@ Return ONLY JSON: {"note":"what changed","calls":[{"name":"tool_name","args":{}}
 Times are SOURCE seconds unless a tool says program time.
 Honor keep/demo tags. Auto-cut like Auto-Editor while skipping a tagged silent demo = apply_safe_edits (guards already punch holes).
 To remove a fumbled product name: search_transcript, then delete_range or cut_words.
+"Caption" can mean the user's transcript or spoken section. If they ask to split a caption/transcript into mini scenes, beats, chapters, or sections, use split_scene with the existing scene id/title, exact beforeText from Transcript by scene, and a meaningful title. The tool enforces natural sentence boundaries. Never use add_title, add_lower_thirds, or add_caption unless they explicitly request visible on-screen graphics or subtitles.
+Content domains are hard boundaries. A scene-structure request may change only scene headings, summaries, boundaries, and retake relationships. It must never create visible graphics. A visible-graphics request must never reorganize transcript scenes. Transcript-content tools change words or speakers, not timing. Timeline tools change playback timing, not transcript wording. Media-layer tools place or move B-roll/music/overlays; picture-effects tools change how visuals look; audio-mix tools change only sound.
+Use the narrowest tool that matches the requested content. Generic command escape hatches and duplicate aliases are intentionally unavailable.
 Do not invent a second project format. Do not call edit_with_intent.
 Tools:\n${tools}`
       },
       {
         role: 'user',
-        content: `${intent}\n\n${renderAgentBrief(project, session)}${priorText}`
+        content: `${conversationText}\nCurrent request:\n${intent}\n\n${renderAgentBrief(project, session)}${priorText}`
       }
-    ]
-  })
-  return parseToolDraft(extractJson(text))
+    ], `Plan edit · ${intent.slice(0, 54)}`)
+  try {
+    return parseToolDraft(extractJson(text), allowedNames)
+  } catch {
+    const note = text.trim()
+    if (!note) throw new Error('Model returned an empty reply.')
+    return { note, calls: [] }
+  }
 }
 
 export async function runAgent(
   project: Project,
   intent: string,
   session: EditorSession = EMPTY_SESSION,
-  intel?: ModelEndpoint
+  intel?: ModelEndpoint,
+  complete: AgentComplete = completeFromHost,
+  followUp?: AgentFollowUpContext
 ): Promise<AgentTurn> {
   const local = planToolCalls(project, intent, session)
-  if (local.calls.length) {
-    const ran = await executeCalls(project, local.calls, intel, session)
+  if (local.calls.length && !followUp) {
+    const ran = await executeCalls(project, local.calls, intel, session, complete)
     return { project: ran.project, calls: ran.calls, message: summarize(local.note, ran.calls) }
   }
 
@@ -289,7 +353,7 @@ export async function runAgent(
     let current = project
     const calls: AgentCall[] = []
     for (let round = 0; round < 3; round++) {
-      const draft = await planWithModel(current, intent, session, intel, calls)
+      const draft = await planWithModel(current, intent, session, intel, calls, complete, followUp)
       if (!draft.calls.length) {
         return {
           project: current,
@@ -297,14 +361,23 @@ export async function runAgent(
           message: summarize(draft.note || local.note, calls)
         }
       }
-      const ran = await executeCalls(current, draft.calls, intel, session)
+      const beforeRound = current
+      const ran = await executeCalls(current, draft.calls, intel, session, complete)
       calls.push(...ran.calls)
       current = ran.project
       if (draft.calls.some((c) => !READ_TOOLS.has(c.name))) {
+        if (current === beforeRound) continue
         return { project: current, calls, message: summarize(draft.note || 'Model edited the reel.', calls) }
       }
     }
-    return { project: current, calls, message: summarize('Read context; no edit.', calls) }
+    const failedWrites = calls.filter((call) => !READ_TOOLS.has(call.name)).map((call) => call.message)
+    return {
+      project: current,
+      calls,
+      message: failedWrites.length
+        ? `No edit made. ${failedWrites.join(' · ')}`
+        : summarize('Read context; no edit.', calls)
+    }
   }
 
   return { project, calls: [], message: local.note }

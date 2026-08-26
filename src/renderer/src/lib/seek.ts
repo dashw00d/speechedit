@@ -15,6 +15,24 @@ export function shouldSeek(current: number, desired: number, playing: boolean, f
   return Math.abs(current - desired) > seekSlop(playing, fps)
 }
 
+/**
+ * A media seek is asynchronous. Reassigning currentTime on every animation
+ * frame while Chromium is still seeking starves the decoder (and its audio
+ * clock), especially at ripple-cut boundaries.
+ */
+export function shouldSetMediaTime(input: {
+  current: number
+  desired: number
+  seeking: boolean
+  readyState: number
+  playing: boolean
+  hard: boolean
+  fps?: number
+}): boolean {
+  if (input.seeking || input.readyState === 0) return false
+  return shouldSeek(input.current, input.desired, input.playing && !input.hard, input.fps)
+}
+
 /** A cut, loop, or user jump — not decoder drift. Snap even while playing. */
 export function mediaJumped(prevSource: number, nextSource: number, dt: number, speed = 1, fps = 30): boolean {
   const expected = prevSource + dt * Math.max(0.01, speed)
@@ -128,6 +146,7 @@ export function stepProgramPlayback(input: {
   requestedProgram: number
   dt: number
   mediaSource: number | null
+  mediaPresent?: boolean
   sourceOffset?: number
   resolved: ResolvedProgram
   fps?: number
@@ -146,6 +165,12 @@ export function stepProgramPlayback(input: {
       return { program: fromMedia, clock: 'media', hard: false }
     }
     return { program: wallProgram, clock: 'wall', hard: true }
+  }
+  // The first frame inside a cut advances to the next kept source and starts a
+  // hard seek. While that seek is pending, hold this program frame instead of
+  // moving the target and issuing a fresh seek every RAF.
+  if (source == null && input.mediaPresent) {
+    return { program: input.lastProgram, clock: 'hold', hard: false }
   }
   return { program: wallProgram, clock: 'wall', hard: true }
 }

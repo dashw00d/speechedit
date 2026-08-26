@@ -71,7 +71,6 @@ function cropBottomOf(crop: Crop) {
 }
 import { AgentPanel } from './AgentPanel'
 import { ModelsPanel } from './ModelsPanel'
-import { StartGuide } from './StartGuide'
 
 export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const project = useEditor((s) => s.project)
@@ -102,6 +101,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const setShowNowWord = useEditor((s) => s.setShowNowWord)
 
   const [advanced, setAdvanced] = useState(false)
+  const [projectOpen, setProjectOpen] = useState(false)
   const [encoders, setEncoders] = useState<EncoderOption[]>([
     { id: 'libx264', label: 'x264 (CPU)', hardware: false }
   ])
@@ -132,7 +132,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     clipKind
   })
   const tabs = inspectorTabs(focus)
-  const pane = tab === 'agent' ? 'agent' : focus
+  const pane = tab === 'agent' ? 'agent' : projectOpen ? 'project' : focus
   const wordsDetail = wordsInspectorDetail(project, selectedWordIds)
   const sceneDetail = selectedSceneId ? sceneInspectorDetail(project, selectedSceneId) : null
   const scenePrev = selectedSceneId ? neighborScene(project.scenes ?? [], selectedSceneId, -1) : undefined
@@ -171,6 +171,12 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
     }
   }
 
+  function advanceAfterSuggestion(suggestionId: string) {
+    const next = suggestionInspectorDetail(useEditor.getState().project, suggestionId)?.next
+    if (next) goToNext(next)
+    else clearSelection()
+  }
+
   function compareTakes() {
     if (!selectedSceneId) return
     const family = takeFamily(project.scenes ?? [], selectedSceneId)
@@ -200,11 +206,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   }, [overlayClip?.id, overlayClip?.text])
 
   useEffect(() => {
-    if (tab !== 'agent') return
-    if (focus === 'words' || focus === 'suggestion' || focus === 'gap' || focus === 'scene') setTab('project')
-    else if (focus === 'clip') setTab('transform')
-    else if (focus === 'caption') setTab('caption')
-  }, [focus, selectedWordIds, selectedSceneId, selectedSuggestionId, selectedClipId, selectedGap, tab, setTab])
+    setProjectOpen(false)
+  }, [focus, selectedWordIds, selectedSceneId, selectedSuggestionId, selectedClipId, selectedGap])
 
   const panelTitle =
     pane === 'words' && wordsDetail
@@ -218,28 +221,40 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
         : pane === 'job'
           ? 'Job'
           : pane === 'agent'
-            ? 'Agent'
-            : projectDetail.title
+            ? 'Assistant'
+            : projectDetail.title === 'Project'
+              ? 'Reel'
+              : projectDetail.title
 
   return (
     <aside className="panel inspector">
-      <div className="panel-head">{panelTitle}</div>
-      <div className="tabs">
-        {tabs.map((item) => (
-          <button
-            key={item.id}
-            className="tab"
-            data-on={pane === item.id}
-            onClick={() => {
-              if (item.id === 'agent') setTab('agent')
-              else if (item.id === 'caption') setTab('caption')
-              else if (item.id === 'clip') setTab('transform')
-              else setTab('project')
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+      <div className="inspector-head" aria-label={`${panelTitle} details`}>
+        <div className="panel-head">Details</div>
+        <div className="tabs">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              className="tab"
+              data-on={pane === item.id}
+              onClick={() => {
+                if (item.id === 'agent') {
+                  setProjectOpen(false)
+                  setTab('agent')
+                } else if (item.id === 'project') {
+                  setProjectOpen(true)
+                  setTab('project')
+                } else {
+                  setProjectOpen(false)
+                  if (item.id === 'caption') setTab('caption')
+                  else if (item.id === 'clip') setTab('transform')
+                  else setTab('project')
+                }
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="fields">
         {pane === 'agent' && <AgentPanel onToast={onToast ?? (() => undefined)} />}
@@ -281,7 +296,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             />
             <p className="helper-excerpt">"{wordsDetail.excerpt}"</p>
             <HelperActions dispatch={dispatch} onToast={onToast} actions={wordsDetail.actions} onNavigate={compareTakes} />
-            <div className="chips">
+            <div className="chips inspector-utility-actions" aria-label="Copy selection">
+              <span className="inspector-action-label">Copy</span>
               <button
                 className="chip"
                 type="button"
@@ -612,42 +628,90 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
           </>
         )}
         {pane === 'suggestion' && suggestionDetail && (
-          <>
-            <HelperHead
-              headline={suggestionDetail.headline}
-              detail={suggestionDetail.clock}
-              onClear={() => clearSelection()}
-              onHear={() => {
-                const sug = project.suggestions.find((s) => s.id === selectedSuggestionId)
-                if (sug) hearSource(sug.start, sug.end)
-              }}
-            />
-            <p className="help">{suggestionDetail.explanation}</p>
-            {suggestionDetail.excerpt && <p className="helper-excerpt">"{suggestionDetail.excerpt}"</p>}
-            <HelperActions dispatch={dispatch} onToast={onToast} actions={suggestionDetail.actions} onNavigate={compareTakes} />
-            {suggestionDetail.similarCount > 0 && (
-              <p className="help">
-                {suggestionDetail.similarSafeCount} of {suggestionDetail.similarCount} similar{' '}
-                {suggestionDetail.title} edits are safe.
-              </p>
+          <div className="suggestion-review-panel">
+            <section className="suggestion-summary">
+              <div className="suggestion-meta-row">
+                <span className="suggestion-category">{suggestionDetail.category}</span>
+                <span className="suggestion-meta-detail">
+                  <span className="suggestion-state">
+                    <i aria-hidden />
+                    {suggestionDetail.status}
+                  </span>
+                  <span className="suggestion-clock">{suggestionDetail.clock}</span>
+                </span>
+              </div>
+              <h2 className="suggestion-prompt">{suggestionDetail.prompt}</h2>
+              <p className="suggestion-explanation">{suggestionDetail.explanation}</p>
+              <div className="suggestion-summary-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sug = project.suggestions.find((s) => s.id === selectedSuggestionId)
+                    if (sug) hearSource(sug.start, sug.end)
+                  }}
+                >
+                  ▶ Hear again
+                </button>
+                <button type="button" onClick={() => clearSelection()}>
+                  Close
+                </button>
+              </div>
+            </section>
+            {suggestionDetail.excerpt && (
+              <div className="suggestion-evidence">
+                <span>Transcript</span>
+                <q>{suggestionDetail.excerpt}</q>
+              </div>
             )}
-            {suggestionDetail.nextHint && <HelperNext hint={suggestionDetail.nextHint} />}
-            {suggestionDetail.next && (
-              <HelperNext hint={suggestionDetail.next.label} onClick={() => goToNext(suggestionDetail.next!)} />
-            )}
-          </>
+            <section className="suggestion-decision-section">
+              <div className="suggestion-decision-heading">
+                <h3>Choose one</h3>
+                <span>Applies immediately</span>
+              </div>
+              <HelperActions
+                variant="decision"
+                dispatch={dispatch}
+                onToast={onToast}
+                actions={suggestionDetail.actions}
+                onNavigate={compareTakes}
+                onAfterAction={selectedSuggestionId ? () => advanceAfterSuggestion(selectedSuggestionId) : undefined}
+              />
+            </section>
+            {suggestionDetail.next ? (
+              <button
+                className="suggestion-next"
+                type="button"
+                onClick={() => goToNext(suggestionDetail.next!)}
+              >
+                <span>
+                  <strong>Next issue</strong>
+                  <small>{suggestionDetail.nextHint ?? 'Continue through the review queue.'}</small>
+                </span>
+                <b aria-hidden>→</b>
+              </button>
+            ) : suggestionDetail.nextHint ? (
+              <p className="suggestion-queue-status">{suggestionDetail.nextHint}</p>
+            ) : null}
+          </div>
         )}
         {(pane === 'project' || pane === 'job') && (
           <>
-            {projectDetail.isEmpty && pane === 'project' && <StartGuide compact onToast={onToast} />}
             <HelperHead headline={projectDetail.headline} />
             {projectDetail.pendingByType.length > 0 && (
-              <HelperSection title="Waiting">
+              <HelperSection title="Issues & suggestions">
                 {projectDetail.pendingByType.map((row) => (
                   <div key={row.type} className="helper-row static">
-                    <span>{row.type}</span>
+                    <span>
+                      {{
+                        silence: 'Pauses',
+                        loud: 'Loud audio',
+                        filler: 'Filler words',
+                        repeat: 'Repeated takes',
+                        model: 'Suggestions'
+                      }[row.type] ?? row.type}
+                    </span>
                     <span className="helper-row-meta">
-                      {row.safe ? `${row.safe} safe` : ''}
+                      {row.safe ? `${row.safe} ready` : ''}
                       {row.safe && row.count > row.safe ? ' · ' : ''}
                       {row.count > row.safe
                         ? `${row.count - row.safe} review`
@@ -658,7 +722,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                   </div>
                 ))}
                 <button className="chip" type="button" onClick={() => setReviewing(true)}>
-                  Open review
+                  Review issues
                 </button>
               </HelperSection>
             )}
@@ -676,12 +740,12 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               />
             </Field>
             <p className="help">
-              Program {formatClock(programLength(project))} · source {formatClock(project.sourceDuration)} ·{' '}
-              {project.transcript.words.filter((w) => !w.deleted).length} live words · {project.cuts.length}{' '}
-              cuts · {project.suggestions.filter((s) => !s.applied).length} open edits
+              {formatClock(programLength(project))} reel ·{' '}
+              {project.transcript.words.filter((w) => !w.deleted).length} words ·{' '}
+              {project.suggestions.filter((s) => !s.applied).length} edits left to review
             </p>
-            <Field label="Document">
-              <input type="text" readOnly value={documentPath || 'Unsaved — click Save'} />
+            <Field label="Saved file">
+              <input type="text" readOnly value={documentPath || 'Not saved yet'} />
             </Field>
             {(dirty || !documentPath) && (
               <button
@@ -887,7 +951,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             )}
             </>
             )}
-            {projectDetail.showMcpHint && pane === 'project' && (
+            {advanced && projectDetail.showMcpHint && pane === 'project' && (
               <p className="help mcp-hint">
                 Cursor MCP: <code>bun run mcp</code> — tools read/write the live reel.
               </p>
@@ -1584,18 +1648,26 @@ function HelperHead({
     <div className="helper-head">
       <div className="helper-head-row">
         <p className="helper-headline">{headline}</p>
-        {onHear && (
-          <button className="chip" type="button" title="Hear this" onClick={onHear}>
-            Hear
-          </button>
-        )}
-        {onClear && (
-          <button className="chip" type="button" title="Deselect (Esc)" onClick={onClear}>
-            Clear
-          </button>
-        )}
       </div>
-      {detail && <p className="help">{detail}</p>}
+      {(detail || onHear || onClear) && (
+        <div className="helper-head-meta">
+          {detail ? <p className="help">{detail}</p> : <span />}
+          {(onHear || onClear) && (
+            <span className="helper-head-controls" aria-label="Selection controls">
+              {onHear && (
+                <button className="chip" type="button" title="Play this selection" onClick={onHear}>
+                  ▶ Hear
+                </button>
+              )}
+              {onClear && (
+                <button className="chip" type="button" title="Clear selection (Esc)" onClick={onClear}>
+                  × Clear
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1639,21 +1711,26 @@ function HelperActions({
   actions,
   dispatch,
   onNavigate,
-  onToast
+  onAfterAction,
+  onToast,
+  variant = 'list'
 }: {
   actions: InspectorAction[]
   dispatch: (command: Command) => void
   onNavigate?: () => void
+  onAfterAction?: (action: InspectorAction) => void
   onToast?: (msg: string) => void
+  variant?: 'list' | 'decision'
 }) {
   if (!actions.length) return null
   return (
-    <div className="helper-actions">
+    <div className={variant === 'decision' ? 'suggestion-actions' : 'helper-actions'}>
       {actions.map((action) => (
         <button
           key={action.id}
-          className="helper-action"
+          className={variant === 'decision' ? 'suggestion-action' : 'helper-action'}
           data-primary={action.primary || undefined}
+          data-bulk={variant === 'decision' && action.id === 'apply-similar' ? true : undefined}
           type="button"
           title={action.consequence}
           onClick={() => {
@@ -1671,15 +1748,56 @@ function HelperActions({
               dispatch(action.command)
               const toast = toastForEdit(before, action.command)
               if (toast) onToast?.(toast)
+              onAfterAction?.(action)
             }
           }}
         >
-          <span className="helper-action-label">{action.label}</span>
-          <span className="helper-action-copy">{action.consequence}</span>
+          {variant === 'decision' ? (
+            <>
+              <span className="suggestion-action-mark" aria-hidden>
+                {decisionIconForAction(action)}
+              </span>
+              <span className="suggestion-action-body">
+                <span className="helper-action-label">{action.label}</span>
+                <span className="helper-action-copy">{decisionCopyForAction(action)}</span>
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="helper-action-label">{action.label}</span>
+              <span className="helper-action-copy">{action.consequence}</span>
+            </>
+          )}
         </button>
       ))}
     </div>
   )
+}
+
+function decisionIconForAction(action: InspectorAction): string {
+  if (action.id === 'demo') return '◎'
+  if (action.id === 'speed' || action.label.startsWith('Speed')) return '»'
+  if (action.id === 'cut' || action.label === 'Cut') return '×'
+  if (action.id === 'keep') return '✓'
+  if (action.id === 'put-back') return '↶'
+  if (action.id === 'skip') return '→'
+  if (action.id === 'apply-similar') return '≋'
+  if (action.label === 'Quiet') return '−'
+  return '✓'
+}
+
+function decisionCopyForAction(action: InspectorAction): string {
+  if (action.id === 'demo') return 'Keep it and protect it from Auto Edit.'
+  if (action.id === 'speed') return 'Keep it, but shorten the wait.'
+  if (action.id === 'cut') return 'Remove this section and close the gap.'
+  if (action.id === 'keep') return 'Leave it unchanged and protect it.'
+  if (action.id === 'put-back') return 'Restore the original section.'
+  if (action.id === 'skip') return 'Leave it open and move on.'
+  if (action.id === 'apply-similar') return 'Use this choice on the matching safe edits.'
+  if (action.label === 'Cut') return 'Remove this section and close the gap.'
+  if (action.label === 'Quiet') return 'Reduce the loudness of this section.'
+  if (action.label.startsWith('Speed')) return 'Keep it, but play it faster.'
+  return action.consequence
 }
 
 function HelperSection({ title, children }: { title: string; children: ReactNode }) {
@@ -1695,11 +1813,11 @@ function HelperNext({ hint, onClick }: { hint: string; onClick?: () => void }) {
   if (onClick) {
     return (
       <button className="helper-next helper-next-btn" type="button" onClick={onClick}>
-        → {hint}
+        {hint}
       </button>
     )
   }
-  return <p className="helper-next">→ {hint}</p>
+  return <p className="helper-next">{hint}</p>
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

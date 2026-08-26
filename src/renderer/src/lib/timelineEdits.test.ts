@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { suggestionsFromLoudness, suggestionsFromSilence, suggestionsFromStatic } from './analysis'
+import { applyCommand } from './commands'
 import { createDemoProject } from './demo'
 import { buildEditBlocks, editBlockCounts, filterEditBlocks } from './timelineEdits'
 import {
@@ -46,6 +47,15 @@ describe('timeline edits filters', () => {
     expect(withKeep.some((b) => b.label === 'Protected')).toBe(true)
     expect(withKeep.some((b) => b.detail.includes('Auto Edit skips this'))).toBe(true)
     expect(blocks.every((b) => b.detail !== `${b.label} · blocked by a guard`)).toBe(true)
+  })
+
+  test('keeps applied ripple cuts visible as join markers', () => {
+    const project = applyCommand(createDemoProject(), { type: 'applySafeSuggestions' })
+    const visibleApplied = project.suggestions.filter(
+      (suggestion) => suggestion.applied && suggestion.action !== 'normalize' && suggestion.type !== 'pace'
+    )
+    expect(editBlockCounts(buildEditBlocks(project)).applied).toBe(visibleApplied.length)
+    expect(visibleApplied.length).toBeGreaterThan(1)
   })
 })
 

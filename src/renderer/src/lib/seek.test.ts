@@ -12,6 +12,7 @@ import {
   seekSlop,
   shouldHardSeek,
   shouldSeek,
+  shouldSetMediaTime,
   sourceDiscontinuity,
   stepProgramPlayback
 } from './seek'
@@ -31,6 +32,31 @@ describe('paused seek vs playback slop', () => {
     expect(mediaJumped(5.0, 5.016, 0.016, 1, 30)).toBe(false)
     expect(mediaJumped(5.0, 5.032, 0.016, 2, 30)).toBe(false)
     expect(mediaJumped(1.2, 0.4, 0.016, 1, 30)).toBe(true)
+  })
+
+  test('an in-flight decoder seek is never retargeted every animation frame', () => {
+    expect(
+      shouldSetMediaTime({
+        current: 1,
+        desired: 1.6,
+        seeking: true,
+        readyState: 4,
+        playing: true,
+        hard: true,
+        fps: 30
+      })
+    ).toBe(false)
+    expect(
+      shouldSetMediaTime({
+        current: 1,
+        desired: 1.6,
+        seeking: false,
+        readyState: 4,
+        playing: true,
+        hard: true,
+        fps: 30
+      })
+    ).toBe(true)
   })
 
   test('a 100ms source cut jumps incoming source across the play slop', () => {
@@ -288,6 +314,47 @@ describe('program-master playback across cuts', () => {
     expect(drifted.clock).toBe('wall')
     expect(drifted.hard).toBe(true)
     expect(drifted.program).toBeCloseTo(0.516, 5)
+  })
+
+  test('holds one post-cut target while Chromium completes the audio/video seek', () => {
+    const project = videoAssetProject()
+    const resolved = resolveProgram(project)
+    const crossed = stepProgramPlayback({
+      lastProgram: 0.99,
+      requestedProgram: 0.99,
+      dt: 0.016,
+      mediaSource: 1.05,
+      mediaPresent: true,
+      resolved,
+      fps: 30
+    })
+    expect(crossed.clock).toBe('wall')
+    expect(crossed.hard).toBe(true)
+
+    const waiting = stepProgramPlayback({
+      lastProgram: crossed.program,
+      requestedProgram: crossed.program,
+      dt: 0.016,
+      mediaSource: null,
+      mediaPresent: true,
+      resolved,
+      fps: 30
+    })
+    expect(waiting).toEqual({ program: crossed.program, clock: 'hold', hard: false })
+
+    const desiredSource = programToSourceOf(project, waiting.program)
+    const resumed = stepProgramPlayback({
+      lastProgram: waiting.program,
+      requestedProgram: waiting.program,
+      dt: 0.016,
+      mediaSource: desiredSource + 0.016,
+      mediaPresent: true,
+      resolved,
+      fps: 30
+    })
+    expect(resumed.clock).toBe('media')
+    expect(resumed.hard).toBe(false)
+    expect(resumed.program).toBeGreaterThan(waiting.program)
   })
 
   test('200 ripple cuts never ask the decoder for a deleted source time', () => {

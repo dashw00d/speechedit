@@ -9,6 +9,7 @@ import {
   livePreviousSentence,
   PARAGRAPH_GAP,
   isParagraphSelection,
+  nearestSpokenWord,
   paragraphIds,
   restartBeforeWord,
   shrinkSelection
@@ -49,6 +50,24 @@ describe('paragraph select', () => {
     expect(words[1].start - words[0].end).toBeCloseTo(PARAGRAPH_GAP, 5)
     expect(paragraphIds(words, 0)).toEqual(['a', 'b'])
     expect(paragraphIds(words, 1)).toEqual(['a', 'b'])
+  })
+})
+
+describe('punctuation click target', () => {
+  test('uses the nearest live spoken word instead of treating grammar as a sentence from zero', () => {
+    const words = [
+      w('a', 'Ready', 5.2, 5.7),
+      w('q', '?', 5.7, 5.71),
+      w('b', 'Next', 7, 7.4)
+    ]
+    expect(nearestSpokenWord(words, 1)?.id).toBe('a')
+    expect(nearestSpokenWord(words, 2)?.id).toBe('b')
+  })
+
+  test('skips a deleted neighbor and can resolve forward', () => {
+    const words = [w('a', 'Old', 1, 1.4), w('p', '.', 1.4, 1.41), w('b', 'Live', 2, 2.4)]
+    words[0].deleted = true
+    expect(nearestSpokenWord(words, 1)?.id).toBe('b')
   })
 })
 

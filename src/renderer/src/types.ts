@@ -383,7 +383,7 @@ export type Command =
   | { type: 'removeClips'; clipIds: string[] }
   | { type: 'setSceneBounds'; sceneId: string; start?: number; end?: number }
   | { type: 'setCanvas'; width: number; height: number }
-  | { type: 'splitScene'; sceneId: string; time: number }
+  | { type: 'splitScene'; sceneId: string; time: number; title?: string; summary?: string }
   | { type: 'mergeScenes'; sceneId: string; otherId: string }
   | { type: 'addTag'; start: number; end: number; kind: TagKind; label?: string }
   | { type: 'setTagLabel'; tagId: string; label: string }

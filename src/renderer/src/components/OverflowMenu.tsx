@@ -7,9 +7,9 @@ export function OverflowMenu({
   place = 'above',
   children
 }: {
-  label?: string
+  label?: ReactNode
   title?: string
-  tone?: 'bar' | 'chip'
+  tone?: 'bar' | 'chip' | 'track'
   place?: 'above' | 'below'
   children: ReactNode
 }) {
@@ -37,7 +37,7 @@ export function OverflowMenu({
     <div className="overflow-menu" ref={root}>
       <button
         type="button"
-        className={tone === 'chip' ? 'chip' : 'review-btn'}
+        className={tone === 'chip' ? 'chip' : tone === 'track' ? 'track-flag' : 'review-btn'}
         aria-expanded={open}
         aria-haspopup="menu"
         title={title}

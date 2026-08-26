@@ -94,4 +94,22 @@ describe('transcript defaults', () => {
       else process.env.SPEECHEDIT_TRANSCRIBE_BASE_URL = prevUrl
     }
   })
+
+  test('CLI intelligence providers survive settings normalization', () => {
+    withMemoryStorage(() => {
+      const codex = saveSettings({
+        ...DEFAULT_SETTINGS,
+        intelligence: { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' }
+      })
+      expect(codex.intelligence.kind).toBe('codex-cli')
+      expect(loadSettings().intelligence.kind).toBe('codex-cli')
+
+      const grok = saveSettings({
+        ...DEFAULT_SETTINGS,
+        intelligence: { kind: 'grok-cli', baseUrl: '', model: 'grok-4', apiKey: '' }
+      })
+      expect(grok.intelligence.kind).toBe('grok-cli')
+      expect(loadSettings().intelligence.model).toBe('grok-4')
+    })
+  })
 })

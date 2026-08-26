@@ -4,6 +4,7 @@ import { quoteFromSelection } from './quote'
 import { programToSourceOf } from './resolver'
 import { formatYoutubeClock } from './time'
 import { sentenceIds } from './transcriptEdit'
+import { stillDefaults } from './theme'
 import type { Project } from '../types'
 import { zoomPlacement, type ZoomBasis } from './zoom'
 
@@ -119,19 +120,20 @@ export function paintStill(
   canvas.height = height
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  ctx.fillStyle = '#1c1914'
+  const colors = stillDefaults()
+  ctx.fillStyle = colors.background
   ctx.fillRect(0, 0, width, height)
   if (hasPicture) ctx.drawImage(video!, 0, 0, width, height)
   else {
-    ctx.fillStyle = '#f4efe4'
+    ctx.fillStyle = colors.foreground
     ctx.font = `600 ${Math.round(height * 0.06)}px system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.fillText(opts.title || 'Audio only', width / 2, height * 0.42)
   }
   const bar = Math.round(height * 0.22)
-  ctx.fillStyle = 'rgba(12, 10, 8, 0.78)'
+  ctx.fillStyle = colors.bar
   ctx.fillRect(0, height - bar, width, bar)
-  ctx.fillStyle = '#f4efe4'
+  ctx.fillStyle = colors.foreground
   ctx.textAlign = 'left'
   ctx.font = `600 ${Math.round(height * 0.035)}px system-ui, sans-serif`
   const pad = Math.round(width * 0.04)

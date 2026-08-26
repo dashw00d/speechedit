@@ -238,7 +238,7 @@
   --layout-timeline-max-height: 280px;
   --layout-app-rows: var(--layout-menubar-height) minmax(0, 1fr) minmax(var(--layout-timeline-min-height), var(--layout-timeline-max-height)) auto;
   --layout-workspace-columns: minmax(280px, 1.05fr) minmax(420px, 1.4fr) minmax(250px, 0.85fr);
-  --layout-track-label-width: 156px;
+  --layout-track-label-width: 184px;
   --timeline-edits-height: 32px;
   --timeline-ruler-height: 26px;
   --timeline-lane-video: 50px;
@@ -380,6 +380,13 @@
   --color-disabled-menu: color-mix(in srgb, var(--accent-400) 45%, transparent);
   --color-spark: var(--brand-500);
   --color-suggest-copy: var(--accent-500);
+  --color-cue-bg: var(--accent-900);
+  --color-cue-fg: var(--white);
+  --color-cue-accent: var(--brand-300);
+  --color-cue-border: color-mix(in srgb, var(--accent-900) 82%, var(--brand-400));
+  --color-cue-action-bg: color-mix(in srgb, var(--white) 10%, transparent);
+  --color-cue-action-hover-bg: color-mix(in srgb, var(--white) 17%, transparent);
+  --color-cue-primary-bg: var(--brand-500);
   --color-timeline-hint: var(--accent-400);
   --color-wave-fill: var(--timeline-wave-fill);
   --color-wave-stroke: var(--timeline-wave-stroke);

@@ -22,6 +22,7 @@ export interface ChatMessage {
 }
 
 export function endpointReady(endpoint: ModelEndpoint): boolean {
+  if (endpoint.kind === 'codex-cli' || endpoint.kind === 'grok-cli') return true
   return endpoint.kind === 'openai-compatible' && Boolean(endpoint.baseUrl && endpoint.model)
 }
 
@@ -31,6 +32,7 @@ export async function completeOpenAI(
   json = true
 ): Promise<string> {
   if (!endpointReady(endpoint)) throw new Error('Intelligence endpoint is not configured.')
+  if (endpoint.kind !== 'openai-compatible') throw new Error('CLI model providers require the desktop app.')
   const url = `${endpoint.baseUrl.replace(/\/$/, '')}/chat/completions`
   const body: Record<string, unknown> = {
     model: endpoint.model,
@@ -40,10 +42,36 @@ export async function completeOpenAI(
   if (json) body.response_format = { type: 'json_object' }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) })
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180_000)
+    })
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error('Model timed out after 180 seconds.')
+    }
+    throw err
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => res.statusText)
-    throw new Error(`Model ${res.status}: ${detail.slice(0, 240)}`)
+    const formatRejected =
+      json && (res.status === 400 || res.status === 422) && /response[_ -]?format|json_object/i.test(detail)
+    if (!formatRejected) throw new Error(`Model ${res.status}: ${detail.slice(0, 240)}`)
+    delete body.response_format
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(180_000)
+    })
+    if (!res.ok) {
+      const retryDetail = await res.text().catch(() => res.statusText)
+      throw new Error(`Model ${res.status}: ${retryDetail.slice(0, 240)}`)
+    }
   }
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] }
   const text = data.choices?.[0]?.message?.content?.trim()

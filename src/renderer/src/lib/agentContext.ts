@@ -236,8 +236,19 @@ export function renderAgentBrief(project: Project, session: EditorSession = EMPT
   const sceneLines = ctx.scenes
     .map(
       (s) =>
-        `- ${s.title} (${formatClock(s.start)}–${formatClock(s.end)}) ${s.kind}${s.takeIndex ? ` take ${s.takeIndex}` : ''}${s.takeOf ? ` retake of ${s.takeOf}` : ''}: ${s.summary}`
+        `- [${s.id}] ${s.title} (source ${s.start.toFixed(2)}s–${s.end.toFixed(2)}s) ${s.kind}${s.takeIndex ? ` take ${s.takeIndex}` : ''}${s.takeOf ? ` retake of ${s.takeOf}` : ''}: ${s.summary}`
     )
+    .join('\n')
+  const sceneTranscriptLines = ctx.scenes
+    .map((scene) => {
+      const text = project.transcript.words
+        .filter((word) => !word.deleted && word.end > scene.start && word.start < scene.end)
+        .map((word) => word.text)
+        .join(' ')
+        .replace(/\s+([,.;!?])/g, '$1')
+        .trim()
+      return `- [${scene.id}] ${scene.title}: ${text || '(no spoken words)'}`
+    })
     .join('\n')
   const tagLines = ctx.tags
     .map((t) => `- ${t.kind} ${formatClock(t.start)}–${formatClock(t.end)} ${t.label}`)
@@ -265,6 +276,7 @@ export function renderAgentBrief(project: Project, session: EditorSession = EMPT
     `Speakers: ${ctx.speakers.map((s) => s.name).join(', ') || 'none'}`,
     `Guards:\n${tagLines || '- none'}`,
     `Scenes:\n${sceneLines || '- none yet'}`,
+    `Transcript by scene (use exact opening words with split_scene.beforeText):\n${sceneTranscriptLines || '- none yet'}`,
     `Open suggestions:\n${open || '- none'}`,
     `Transcript (~~cut~~, [gaps]):\n${ctx.transcript}`
   ].join('\n\n')

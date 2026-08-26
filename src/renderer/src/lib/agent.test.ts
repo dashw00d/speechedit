@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { programLength } from './commands'
 import { createDemoProject } from './demo'
-import { buildAgentContext, compactSnapshot } from './agentContext'
+import { buildAgentContext, compactSnapshot, EMPTY_SESSION } from './agentContext'
 import { commandToTool, findProductFumble, planToolCalls, runAgent } from './agent'
 import { COMMAND_BUS, MCP_TOOLS, runTool } from './mcpTools'
 import { planIntent } from './intent'
@@ -36,6 +36,160 @@ describe('agent context pack', () => {
 })
 
 describe('agent tool loop', () => {
+  test('an injected CLI completion plans through the same reversible tool bus', async () => {
+    const demo = createDemoProject()
+    const turn = await runAgent(
+      demo,
+      'make the voice half as loud from source 5 to 10 seconds',
+      undefined,
+      { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' },
+      async () => JSON.stringify({
+        note: 'Quiet the selected span.',
+        calls: [{ name: 'set_range_volume', args: { start: 5, end: 10, volume: 0.5 } }]
+      })
+    )
+    expect(turn.calls.map((call) => call.name)).toEqual(['set_range_volume'])
+    expect(turn.project).not.toBe(demo)
+    expect(turn.message).toContain('Quiet')
+  })
+
+  test('a clicked result is included as context in a follow-up model turn', async () => {
+    const demo = createDemoProject()
+    let userPrompt = ''
+    const turn = await runAgent(
+      demo,
+      'Could you make that less aggressive?',
+      undefined,
+      { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' },
+      async (_endpoint, messages) => {
+        userPrompt = messages.find((message) => message.role === 'user')?.content ?? ''
+        return JSON.stringify({ note: 'Kept the pause this time.', calls: [] })
+      },
+      {
+        question: 'Remove the long pause',
+        answer: 'Removed 4.2 seconds.',
+        calls: [{ name: 'delete_range', args: { start: 5, end: 9.2 }, message: 'Deleted range.' }]
+      }
+    )
+    expect(userPrompt).toContain('Previous agent turn:')
+    expect(userPrompt).toContain('Remove the long pause')
+    expect(userPrompt).toContain('Removed 4.2 seconds.')
+    expect(userPrompt).toContain('Could you make that less aggressive?')
+    expect(turn.message).toContain('Kept the pause')
+  })
+
+  test('a plain-language read-only model answer is a successful no-edit turn', async () => {
+    const before = createDemoProject()
+    const result = await runAgent(
+      before,
+      'What is the strongest opening? Do not edit.',
+      EMPTY_SESSION,
+      { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' },
+      async () => 'The thesis is the strongest opening because it states the editing promise immediately.'
+    )
+    expect(result.project).toBe(before)
+    expect(result.calls).toEqual([])
+    expect(result.message).toContain('thesis is the strongest opening')
+  })
+
+  test('split my caption into mini scenes changes scene structure, never visible titles or captions', async () => {
+    const demo = createDemoProject()
+    const beforeSceneCount = demo.scenes.length
+    const beforeTracks = demo.tracks.map((track) => ({
+      id: track.id,
+      clips: track.clips.map((clip) => clip.id)
+    }))
+    let systemPrompt = ''
+    const turn = await runAgent(
+      demo,
+      'split my caption into mini scenes',
+      undefined,
+      { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' },
+      async (_endpoint, messages) => {
+        systemPrompt = messages.find((message) => message.role === 'system')?.content ?? ''
+        return JSON.stringify({
+          note: 'Split the opening transcript into three mini scenes.',
+          calls: [
+            { name: 'split_scene', args: { sceneId: 'Walk the editor', beforeText: 'Like this one', title: 'Quick example' } },
+            { name: 'split_scene', args: { sceneId: 'Keep this take', beforeText: 'Cut speech like text', title: 'Core promise' } }
+          ]
+        })
+      }
+    )
+    expect(systemPrompt).toContain('Never use add_title, add_lower_thirds, or add_caption')
+    expect(turn.calls.map((call) => call.name)).toEqual(['split_scene', 'split_scene'])
+    expect(turn.project.scenes).toHaveLength(beforeSceneCount + 2)
+    expect(turn.project.scenes.some((scene) => scene.title === 'Quick example' && scene.start === 22.72)).toBe(true)
+    expect(turn.project.scenes.some((scene) => scene.title === 'Core promise' && scene.start === 33.82)).toBe(true)
+    expect(turn.project.tracks.map((track) => ({ id: track.id, clips: track.clips.map((clip) => clip.id) }))).toEqual(beforeTracks)
+  })
+
+  test('split_scene refuses mid-sentence damage and derives useful copy at a real boundary', async () => {
+    const demo = createDemoProject()
+    const rejected = await runTool(demo, 'split_scene', {
+      sceneId: 'Thesis',
+      time: 3.44,
+      title: 'Local editor'
+    })
+    expect(rejected.project).toBe(demo)
+    expect(rejected.message).toContain('not split mid-sentence')
+
+    const accepted = await runTool(demo, 'split_scene', {
+      sceneId: 'Walk the editor',
+      time: 19.54
+    })
+    expect(accepted.project.scenes).toHaveLength(demo.scenes.length + 1)
+    const continuation = accepted.project.scenes.find((scene) => scene.start === 22.72)
+    expect(continuation?.title).toBe('Filler example')
+    expect(continuation?.title).not.toContain('(cont.)')
+    expect(continuation?.summary).toBe('Like this one')
+  })
+
+  test('the model gets tool feedback and retries when a write makes no change', async () => {
+    const demo = createDemoProject()
+    let rounds = 0
+    const turn = await runAgent(
+      demo,
+      'split the transcript into mini scenes',
+      EMPTY_SESSION,
+      { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' },
+      async (_endpoint, messages) => {
+        rounds += 1
+        if (rounds === 1) {
+          return JSON.stringify({
+            note: 'Tried the opening.',
+            calls: [{ name: 'split_scene', args: { sceneId: 'Thesis', time: 3.44, title: 'Value' } }]
+          })
+        }
+        expect(messages.find((message) => message.role === 'user')?.content).toContain('not split mid-sentence')
+        return JSON.stringify({
+          note: 'Split at the next real sentence.',
+          calls: [{ name: 'split_scene', args: { sceneId: 'Keep this take', beforeText: 'Cut speech like text', title: 'Core promise' } }]
+        })
+      }
+    )
+    expect(rounds).toBe(2)
+    expect(turn.project.scenes).toHaveLength(demo.scenes.length + 1)
+    expect(turn.project.scenes.some((scene) => scene.title === 'Core promise')).toBe(true)
+  })
+
+  test('a structural request blocks hallucinated visible-graphics tools', async () => {
+    const demo = createDemoProject()
+    const turn = await runAgent(
+      demo,
+      'split my caption into mini scenes',
+      EMPTY_SESSION,
+      { kind: 'codex-cli', baseUrl: '', model: '', apiKey: '' },
+      async () => JSON.stringify({
+        note: 'Added title cards.',
+        calls: [{ name: 'add_title', args: { start: 0, text: 'Part one' } }]
+      })
+    )
+    expect(turn.project).toBe(demo)
+    expect(turn.calls).toEqual([])
+    expect(turn.message).toContain('blocked tool outside this content domain: add_title')
+  })
+
   test('fumble-the-product-name plans a deleteRange through the bus', async () => {
     const demo = createDemoProject()
     expect(findProductFumble(demo)?.text).toBe('Shotcut')
@@ -66,6 +220,7 @@ describe('agent tool loop', () => {
     expect(commandToTool({ type: 'rebuildIntelligence' }).name).toBe('rebuild_intelligence')
     expect(commandToTool({ type: 'generateCaptions', maxWords: 5 }).name).toBe('generate_captions')
     expect(commandToTool({ type: 'addLowerThirds' }).name).toBe('add_lower_thirds')
+    expect(commandToTool({ type: 'splitScene', sceneId: 'sc1', time: 3 }).name).toBe('split_scene')
   })
 })
 

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { constants as osConstants, setPriority, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { JobCancelled, throwIfAborted, type MediaJobKind, type ParkableChild } from '../shared/mediaJob'
 
 /** Freeze a linger child so export can take the CPU. SIGSTOP on Unix; low priority on Windows. */
@@ -74,6 +74,9 @@ export interface RunChildOptions {
   missing?: string
   fail?: (code: number | null, stderr: string, stdout: string) => Error
   env?: NodeJS.ProcessEnv
+  stdin?: string
+  /** Most media CLIs write useful output to stderr. Set false for clean model responses. */
+  combineStderr?: boolean
 }
 
 export function runChild(cmd: string, args: string[], opts: RunChildOptions = {}): Promise<string> {
@@ -85,9 +88,10 @@ export function runChild(cmd: string, args: string[], opts: RunChildOptions = {}
       return
     }
     const child = spawn(cmd, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [opts.stdin == null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: opts.env ? { ...process.env, ...opts.env } : undefined
     })
+    if (opts.stdin != null) child.stdin?.end(opts.stdin)
     opts.onSpawn?.(child)
     let stdout = ''
     let stderr = ''
@@ -132,7 +136,11 @@ export function runChild(cmd: string, args: string[], opts: RunChildOptions = {}
           return
         }
         if (code === 0 || opts.allowFailure) {
-          resolve(cmd === 'ffprobe' ? stdout : stderr + stdout)
+          resolve(
+            basename(cmd).toLowerCase().startsWith('ffprobe') || opts.combineStderr === false
+              ? stdout
+              : stderr + stdout
+          )
           return
         }
         reject(opts.fail?.(code, stderr, stdout) ?? new Error(`${cmd} exited ${code}: ${stderr.slice(-400)}`))

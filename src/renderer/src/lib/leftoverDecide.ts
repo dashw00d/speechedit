@@ -100,6 +100,7 @@ export function leftoverDoneNext(project: Project): string {
   if (task.applyLabel) return `${task.applyLabel} is next.`
   if (task.collapseRetakes) return 'Collapse retakes is next.'
   if (task.findRetakes) return 'Find retakes is next.'
+  if (task.showBreaths) return `${leftoverHearLabel(task.breathCount)} is next.`
   if (task.reviewCount > 0) return `${task.reviewLabel} is next.`
   if (task.showWatch) return 'Watch the edited reel is next.'
   return 'Nothing leftover.'
@@ -111,6 +112,8 @@ export function takeDoneNext(project: Project): string {
   if (task.applyLabel) return `${task.applyLabel} is next.`
   if (task.collapseRetakes) return 'Collapse retakes is next.'
   if (task.fillerCount > 0) return `Cut ${task.fillerCount} fillers is next.`
+  if (task.showBreaths) return `${leftoverHearLabel(task.breathCount)} is next.`
+  if (task.reviewCount > 0) return `${task.reviewLabel} is next.`
   if (task.showWatch) return 'Watch the edited reel is next.'
   return 'That take is decided.'
 }

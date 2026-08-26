@@ -1,0 +1,28 @@
+appId: com.speechedit.desktop
+productName: SpeechEdit
+asar: true
+npmRebuild: false
+
+directories:
+  output: release
+
+files:
+  - out/**/*
+  - package.json
+
+extraResources:
+  - from: vendor/win32-x64
+    to: bin
+    filter:
+      - ffmpeg.exe
+      - ffprobe.exe
+      - LICENSE.ffmpeg.txt
+      - SOURCE.ffmpeg.txt
+
+win:
+  executableName: SpeechEdit
+  target:
+    - target: zip
+      arch:
+        - x64
+  artifactName: SpeechEdit-${version}-windows-${arch}.${ext}

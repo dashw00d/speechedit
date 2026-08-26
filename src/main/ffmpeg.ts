@@ -49,6 +49,8 @@ import {
   proxyVideoArgs
 } from '../shared/proxy'
 import { killChild, runChild, withTempDir } from './childJob'
+import { mediaToolMissingMessage, mediaToolPath, type MediaTool } from './mediaTools'
+import { completeCliModel, inspectCliModel, isCliModelKind } from './modelCli'
 import type { ModelEndpointOpts } from './transcribe'
 
 export type { ModelEndpointOpts, TranscribeProgress } from './transcribe'
@@ -82,18 +84,22 @@ export interface SilenceGap {
   end: number
 }
 
-const FFMPEG_MISSING = 'FFmpeg did not start. Install ffmpeg 4.4+ (and ffprobe) and keep them on PATH.'
+const FFMPEG_MISSING = mediaToolMissingMessage('ffmpeg')
 
 /** Waveform, thumbs, silence, scenes, and loudness share this. Proxy and Whisper do not. */
 export const importLookLane = new WorkLane(LOOK_LANE_LIMIT)
 
 function toolMissing(cmd: string): string {
-  if (cmd === 'ffmpeg' || cmd === 'ffprobe') return FFMPEG_MISSING
+  if (cmd === 'ffmpeg' || cmd === 'ffprobe') return mediaToolMissingMessage(cmd, mediaToolPath(cmd))
   return `${cmd} did not start. Install it and keep it on PATH.`
 }
 
+function resolvedTool(cmd: string): string {
+  return cmd === 'ffmpeg' || cmd === 'ffprobe' ? mediaToolPath(cmd as MediaTool) : cmd
+}
+
 function run(cmd: string, args: string[], signal?: AbortSignal, kind?: MediaJobKind): Promise<string> {
-  return runChild(cmd, args, {
+  return runChild(resolvedTool(cmd), args, {
     signal,
     kind,
     allowFailure: cmd === 'ffmpeg',
@@ -102,7 +108,7 @@ function run(cmd: string, args: string[], signal?: AbortSignal, kind?: MediaJobK
 }
 
 function runStrict(cmd: string, args: string[], signal?: AbortSignal, kind?: MediaJobKind): Promise<string> {
-  return runChild(cmd, args, { signal, kind, missing: toolMissing(cmd) })
+  return runChild(resolvedTool(cmd), args, { signal, kind, missing: toolMissing(cmd) })
 }
 
 function parseFfmpegTime(line: string): number | null {
@@ -117,10 +123,11 @@ function runFfmpeg(
   signal?: AbortSignal,
   kind: MediaJobKind = 'export'
 ): Promise<string> {
-  return runChild('ffmpeg', args, {
+  const command = mediaToolPath('ffmpeg')
+  return runChild(command, args, {
     signal,
     kind,
-    missing: FFMPEG_MISSING,
+    missing: mediaToolMissingMessage('ffmpeg', command),
     fail: (_code, stderr) => new Error(explainExportError(stderr)),
     onStderr: (text) => {
       if (!onTime) return
@@ -358,7 +365,8 @@ function windowPeaks(floats: Float32Array, windows: number): number[] {
 
 function ffmpegPcm(args: string[], signal?: AbortSignal): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', args)
+    const command = mediaToolPath('ffmpeg')
+    const child = spawn(command, args)
     const chunks: Buffer[] = []
     const onAbort = () => killChild(child)
     signal?.addEventListener('abort', onAbort, { once: true })
@@ -370,7 +378,7 @@ function ffmpegPcm(args: string[], signal?: AbortSignal): Promise<Float32Array> 
     child.on('error', (err) =>
       finish(() => {
         if (signal?.aborted) reject(new JobCancelled('import'))
-        else reject(new Error(FFMPEG_MISSING + ` (${err.message})`))
+        else reject(new Error(mediaToolMissingMessage('ffmpeg', command) + ` (${err.message})`))
       })
     )
     child.on('close', (code, sig) => {
@@ -797,22 +805,147 @@ export async function completeChat(
   opts: ModelEndpointOpts,
   messages: { role: string; content: string }[]
 ): Promise<string> {
+  if (isCliModelKind(opts.kind)) return completeCliModel(opts, messages)
   if (!opts.baseUrl || !opts.model) throw new Error('Intelligence endpoint is not configured.')
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`
-  const res = await fetch(`${opts.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: opts.model,
-      messages,
-      temperature: 0.2,
-      response_format: { type: 'json_object' }
-    })
-  })
-  if (!res.ok) throw new Error(`Model ${res.status}: ${(await res.text()).slice(0, 240)}`)
+  const url = `${opts.baseUrl.replace(/\/$/, '')}/chat/completions`
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    messages,
+    temperature: 0.2,
+    response_format: { type: 'json_object' }
+  }
+  let res = await modelFetch(url, { method: 'POST', headers, body: JSON.stringify(body) }, 180_000)
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText)
+    const formatRejected =
+      (res.status === 400 || res.status === 422) && /response[_ -]?format|json_object/i.test(detail)
+    if (!formatRejected) throw new Error(`Model ${res.status}: ${detail.slice(0, 240)}`)
+    delete body.response_format
+    res = await modelFetch(url, { method: 'POST', headers, body: JSON.stringify(body) }, 180_000)
+    if (!res.ok) throw new Error(`Model ${res.status}: ${(await res.text()).slice(0, 240)}`)
+  }
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] }
   const text = data.choices?.[0]?.message?.content?.trim()
   if (!text) throw new Error('Model returned an empty reply.')
   return text
+}
+
+export interface ChatModelInfo {
+  id: string
+  capabilities: string[]
+  parameterSize?: string
+  contextLength?: number
+  remote?: boolean
+  detail?: string
+}
+
+export interface ChatEndpointStatus {
+  provider: 'ollama' | 'openai-compatible' | 'codex-cli' | 'grok-cli'
+  models: ChatModelInfo[]
+}
+
+async function modelFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`Model timed out after ${Math.round(timeoutMs / 1000)} seconds.`)
+    }
+    const detail = err instanceof Error ? err.message : String(err)
+    throw new Error(`Could not reach the model endpoint: ${detail}`)
+  }
+}
+
+function modelHeaders(opts: ModelEndpointOpts): Record<string, string> {
+  return opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}
+}
+
+function isOllamaUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl)
+    return url.port === '11434' || /\bollama\b/i.test(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+/** Inspect the configured endpoint without loading a model into memory. */
+export async function listChatModels(opts: ModelEndpointOpts): Promise<ChatEndpointStatus> {
+  if (isCliModelKind(opts.kind)) {
+    const cli = await inspectCliModel(opts)
+    return {
+      provider: opts.kind,
+      models: [
+        {
+          id: cli.id,
+          capabilities: ['completion', 'thinking', 'tools'],
+          remote: true,
+          detail: `${cli.label} · ${cli.version}`
+        }
+      ]
+    }
+  }
+  if (!opts.baseUrl) throw new Error('Intelligence endpoint is not configured.')
+  const baseUrl = opts.baseUrl.replace(/\/$/, '')
+  const headers = modelHeaders(opts)
+  const res = await modelFetch(`${baseUrl}/models`, { headers }, 12_000)
+  if (!res.ok) throw new Error(`Model list ${res.status}: ${(await res.text()).slice(0, 240)}`)
+  const payload = (await res.json()) as { data?: Array<{ id?: string }> }
+  const generic = (payload.data ?? []).flatMap((model) =>
+    typeof model.id === 'string' && model.id ? [{ id: model.id, capabilities: [] }] : []
+  )
+  if (!isOllamaUrl(baseUrl)) return { provider: 'openai-compatible', models: generic }
+
+  try {
+    const origin = new URL(baseUrl).origin
+    const tagsRes = await modelFetch(`${origin}/api/tags`, { headers }, 12_000)
+    if (!tagsRes.ok) return { provider: 'ollama', models: generic }
+    const tags = (await tagsRes.json()) as {
+      models?: Array<{
+        name?: string
+        remote_model?: string
+        details?: { parameter_size?: string; context_length?: number }
+        capabilities?: string[]
+      }>
+    }
+    const models = (tags.models ?? []).flatMap((model) => {
+      if (!model.name) return []
+      return [
+        {
+          id: model.name,
+          capabilities: Array.isArray(model.capabilities) ? model.capabilities : [],
+          parameterSize: model.details?.parameter_size,
+          contextLength: model.details?.context_length,
+          remote: Boolean(model.remote_model)
+        }
+      ]
+    })
+    return { provider: 'ollama', models: models.length ? models : generic }
+  } catch {
+    return { provider: 'ollama', models: generic }
+  }
+}
+
+/** Make a real structured completion so a listed-but-unusable model cannot appear healthy. */
+export async function testChatEndpoint(
+  opts: ModelEndpointOpts
+): Promise<{ model: string; latencyMs: number; reply: string }> {
+  const started = Date.now()
+  const reply = await completeChat(opts, [
+    { role: 'system', content: 'Return only a JSON object.' },
+    { role: 'user', content: 'Return {"status":"SPEECHEDIT_MODEL_OK"}.' }
+  ])
+  try {
+    const start = reply.indexOf('{')
+    const end = reply.lastIndexOf('}')
+    const parsed = JSON.parse(reply.slice(start, end + 1)) as { status?: unknown }
+    if (parsed.status !== 'SPEECHEDIT_MODEL_OK') throw new Error('wrong status')
+  } catch {
+    throw new Error('Model replied, but failed the structured JSON test.')
+  }
+  const model =
+    opts.model || (opts.kind === 'codex-cli' ? 'Codex CLI' : opts.kind === 'grok-cli' ? 'Grok CLI' : '')
+  return { model, latencyMs: Date.now() - started, reply }
 }

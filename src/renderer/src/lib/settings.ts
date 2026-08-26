@@ -5,17 +5,25 @@ import {
   type TranscriptKind
 } from '../../../shared/asr'
 
-export type ProviderKind = TranscriptKind
+export type IntelligenceKind = 'off' | 'openai-compatible' | 'codex-cli' | 'grok-cli'
+export type ProviderKind = TranscriptKind | 'codex-cli' | 'grok-cli'
 
-export interface ModelEndpoint {
-  kind: ProviderKind
+interface EndpointBase {
   baseUrl: string
   model: string
   apiKey: string
 }
 
+export interface TranscriptEndpoint extends EndpointBase {
+  kind: TranscriptKind
+}
+
+export interface ModelEndpoint extends EndpointBase {
+  kind: ProviderKind
+}
+
 export interface AppSettings {
-  transcript: ModelEndpoint
+  transcript: TranscriptEndpoint
   intelligence: ModelEndpoint
 }
 
@@ -45,6 +53,20 @@ export const TRANSCRIPT_PRESETS = TRANSCRIPT_PROVIDERS.map((p) => ({
 
 export const INTEL_PRESETS = [
   { id: 'off', label: 'Off', kind: 'off' as const, baseUrl: '', model: '' },
+  {
+    id: 'codex-cli',
+    label: 'Codex CLI',
+    kind: 'codex-cli' as const,
+    baseUrl: '',
+    model: ''
+  },
+  {
+    id: 'grok-cli',
+    label: 'Grok CLI',
+    kind: 'grok-cli' as const,
+    baseUrl: '',
+    model: ''
+  },
   {
     id: 'ollama',
     label: 'Ollama (local)',
@@ -78,7 +100,7 @@ export const INTEL_PRESETS = [
 const KEY = 'speechedit:settings'
 
 /** Old factory default: Whisper CLI + OpenAI model name, never a real user choice. */
-export function isLegacyFactoryTranscript(patch?: Partial<ModelEndpoint>): boolean {
+export function isLegacyFactoryTranscript(patch?: Partial<TranscriptEndpoint>): boolean {
   if (!patch) return true
   if (patch.kind && patch.kind !== 'whisper-cli') return false
   const model = patch.model ?? 'whisper-1'
@@ -93,8 +115,8 @@ export function loadSettings(): AppSettings {
     const next = {
       transcript: isLegacyFactoryTranscript(parsed.transcript)
         ? { ...DEFAULT_SETTINGS.transcript }
-        : normalizeEndpoint(DEFAULT_SETTINGS.transcript, parsed.transcript),
-      intelligence: normalizeEndpoint(DEFAULT_SETTINGS.intelligence, parsed.intelligence)
+        : normalizeTranscriptEndpoint(DEFAULT_SETTINGS.transcript, parsed.transcript),
+      intelligence: normalizeIntelligenceEndpoint(DEFAULT_SETTINGS.intelligence, parsed.intelligence)
     }
     if (isLegacyFactoryTranscript(parsed.transcript)) persistSettings(next)
     return next
@@ -118,18 +140,27 @@ function persistSettings(settings: AppSettings): void {
   }
 }
 
-function normalizeEndpoint(base: ModelEndpoint, patch?: Partial<ModelEndpoint>): ModelEndpoint {
+export function coerceIntelligenceKind(value: unknown): IntelligenceKind {
+  return value === 'codex-cli' || value === 'grok-cli' || value === 'openai-compatible' ? value : 'off'
+}
+
+function normalizeTranscriptEndpoint(
+  base: TranscriptEndpoint,
+  patch?: Partial<TranscriptEndpoint>
+): TranscriptEndpoint {
   const next = { ...base, ...patch }
-  return {
-    ...next,
-    kind: coerceTranscriptKind(next.kind)
-  }
+  return { ...next, kind: coerceTranscriptKind(next.kind) }
+}
+
+function normalizeIntelligenceEndpoint(base: ModelEndpoint, patch?: Partial<ModelEndpoint>): ModelEndpoint {
+  const next = { ...base, ...patch }
+  return { ...next, kind: coerceIntelligenceKind(next.kind) }
 }
 
 export function saveSettings(settings: AppSettings): AppSettings {
   const next = {
-    transcript: normalizeEndpoint(DEFAULT_SETTINGS.transcript, settings.transcript),
-    intelligence: normalizeEndpoint(DEFAULT_SETTINGS.intelligence, settings.intelligence)
+    transcript: normalizeTranscriptEndpoint(DEFAULT_SETTINGS.transcript, settings.transcript),
+    intelligence: normalizeIntelligenceEndpoint(DEFAULT_SETTINGS.intelligence, settings.intelligence)
   }
   persistSettings(next)
   return next
@@ -148,7 +179,7 @@ export function settingsFromEnv(): AppSettings {
       apiKey: env.SPEECHEDIT_TRANSCRIBE_API_KEY || ''
     },
     intelligence: {
-      kind: coerceTranscriptKind(
+      kind: coerceIntelligenceKind(
         env.SPEECHEDIT_LLM_KIND || (env.SPEECHEDIT_LLM_BASE_URL ? 'openai-compatible' : 'off')
       ),
       baseUrl: env.SPEECHEDIT_LLM_BASE_URL || DEFAULT_SETTINGS.intelligence.baseUrl,

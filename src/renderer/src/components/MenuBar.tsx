@@ -62,6 +62,7 @@ import { setNormalizeFromContext } from '../lib/loudness'
 import { protectFromContext, protectRange } from '../lib/protect'
 import { generateCaptionsFromContext } from '../lib/captionGenerate'
 import { useEditor, usePlayback } from '../store'
+import { openAssistant } from '../lib/assistantNavigation'
 
 interface Props {
   onToast: (msg: string) => void
@@ -283,7 +284,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
             Trim end to playhead (W)
           </Item>
         </Menu>
-        <Menu label="Sequence">
+        <Menu label="Timeline">
           <Item
             onClick={() => {
               const { toast } = applyTitleFromContext()
@@ -376,7 +377,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           </Item>
           <Item
             onClick={() => {
-              useEditor.getState().setAgentOpen(true)
+              openAssistant()
             }}
           >
             Ask agent… ⌘J
@@ -487,12 +488,11 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           }}
         >
           {analyzing
-            ? `Analyze · ${analyzing}`
+            ? `Working · ${analyzing}`
             : dirty || !documentPath
-              ? 'Unsaved'
+              ? 'Not saved'
               : 'Saved'}{' '}
-          · {documentPath ? currentDocumentTitle() : project.name} · {project.fps} fps · {project.width}×
-          {project.height}
+          · {documentPath ? currentDocumentTitle() : project.name} · {Math.max(1, Math.round(project.sourceDuration))} sec
         </span>
         <button
           className="export-btn"

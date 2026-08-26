@@ -4,6 +4,7 @@ import {
   coerceTranscriptKind,
   expandAsrCues,
   localTranscriptOrder,
+  isAsrNonSpeechMarker,
   shouldInstallLocalWhisper,
   looksWordLevel,
   parseAsrPayload,
@@ -160,6 +161,37 @@ describe('ASR parse — word timestamps win', () => {
     expect(result?.cues[0]).toEqual({ text: 'Hi', start: 0.2, end: 0.4 })
     expect(result?.wordLevel).toBe(true)
   })
+
+  test('drops Whisper non-speech markers from every payload shape', () => {
+    expect(isAsrNonSpeechMarker('[BLANK_AUDIO]')).toBe(true)
+    expect(isAsrNonSpeechMarker('BLANK_AUDIO')).toBe(true)
+    expect(isAsrNonSpeechMarker('<|nospeech|>')).toBe(true)
+    expect(isAsrNonSpeechMarker('blank audio is a useful phrase')).toBe(false)
+
+    const top = parseAsrPayload({
+      words: [
+        { word: '[BLANK_AUDIO]', start: 0, end: 1 },
+        { word: 'Hello', start: 1, end: 1.4 }
+      ]
+    })
+    expect(top?.cues.map((cue) => cue.text)).toEqual(['Hello'])
+
+    const phrases = parseAsrPayload({
+      segments: [
+        { text: '[BLANK_AUDIO]', start: 0, end: 1 },
+        { text: 'Hello there', start: 1, end: 2 }
+      ]
+    })
+    expect(phrases?.cues.map((cue) => cue.text)).toEqual(['Hello there'])
+
+    const cpp = parseAsrPayload({
+      transcription: [
+        { text: '[BLANK_AUDIO]', offsets: { from: 0, to: 1000 }, tokens: [] },
+        { text: 'Hello', offsets: { from: 1000, to: 1400 }, tokens: [] }
+      ]
+    })
+    expect(cpp?.cues.map((cue) => cue.text)).toEqual(['Hello'])
+  })
 })
 
 describe('cues → Word[]', () => {
@@ -200,5 +232,14 @@ describe('cues → Word[]', () => {
     expect(wordsFromAsr(null)).toEqual([])
     expect(wordsFromAsr([])).toEqual([])
     expect(parseAsrPayload({ text: 'no times' })).toBeNull()
+  })
+
+  test('old cached marker cues cannot become project words', () => {
+    expect(
+      wordsFromAsr([
+        { text: '[BLANK_AUDIO]', start: 0, end: 2 },
+        { text: 'Hello', start: 2, end: 2.4 }
+      ]).map((word) => word.text)
+    ).toEqual(['Hello'])
   })
 })

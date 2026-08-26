@@ -11,11 +11,12 @@ import { findRevealableStackTrack, hiddenLaneTracks, trackLaneName } from '../li
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { Asset, Clip, TagKind, Track, Word } from '../types'
-import { IconHide, IconLock, IconMute, IconSelectAll, IconSolo } from './Icons'
+import { IconHide, IconLock, IconMore, IconMute, IconSelectAll, IconSolo } from './Icons'
+import { OverflowMenu } from './OverflowMenu'
 
 const PPS_MIN = 18
 const PPS_MAX = 280
-const LABEL_WIDTH = 132
+const LABEL_WIDTH = 184
 
 export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) {
   const project = useEditor((s) => s.project)
@@ -60,9 +61,18 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   const editCounts = useMemo(() => editBlockCounts(editBlocks), [editBlocks])
   const filteredEditBlocks = useMemo(() => filterEditBlocks(editBlocks, editFilter), [editBlocks, editFilter])
   const showEditFilters = editBlocks.length > 0
-  const showEditSummary = editBlocks.length > 10
   const visibleTracks = useMemo(() => project.tracks.filter((track) => !track.hidden), [project.tracks])
   const hiddenLanes = useMemo(() => hiddenLaneTracks(project.tracks), [project.tracks])
+
+  useEffect(() => {
+    if (tool !== 'guard') return
+    const dismissOutsideTimeline = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Element && !target.closest('.timeline-panel')) setTool('select')
+    }
+    document.addEventListener('pointerdown', dismissOutsideTimeline, true)
+    return () => document.removeEventListener('pointerdown', dismissOutsideTimeline, true)
+  }, [tool, setTool])
 
   const ticks = useMemo(() => {
     const step = pps > 100 ? 1 : pps > 50 ? 2 : pps > 24 ? 5 : 10
@@ -143,8 +153,8 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   }
 
   const scrollLeft = useMemo(() => scrollRef.current?.scrollLeft ?? 0, [scrollTick])
-  const overlayLeft = LABEL_WIDTH + programTime * pps - scrollLeft
-  const overlayLeftAt = (t: number) => LABEL_WIDTH + t * pps - scrollLeft
+  const overlayLeft = programTime * pps - scrollLeft
+  const overlayLeftAt = (t: number) => t * pps - scrollLeft
 
   function startPaint(clientX: number, opts: { erase: boolean; shift: boolean }) {
     const t0 = timeAt(clientX)
@@ -214,7 +224,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   return (
     <section className="timeline-panel">
       <header className="timeline-toolbar">
-        <div className="timeline-toolbar-group">
+        <div className="timeline-toolbar-group timeline-view-controls" data-label="Zoom" aria-label="Timeline zoom">
           <button className="timeline-btn" type="button" title="Zoom out" onClick={() => zoomAroundPlayhead(pps - 12)}>
             −
           </button>
@@ -231,7 +241,6 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           <button className="timeline-btn" type="button" title="Zoom in" onClick={() => zoomAroundPlayhead(pps + 12)}>
             +
           </button>
-          <span className="timeline-zoom-label">{zoomPct}%</span>
           <button
             className="timeline-btn"
             type="button"
@@ -239,10 +248,10 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             title="Fit the whole reel in view (\\)"
             onClick={fitTape}
           >
-            Fit
+            Fit all
           </button>
         </div>
-        <div className="timeline-toolbar-group">
+        <div className="timeline-toolbar-group timeline-mode-controls" data-label="Behavior" aria-label="Editing behavior">
           <button
             className="timeline-btn"
             type="button"
@@ -250,7 +259,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             onClick={() => setSnap(!snap)}
             title={snap ? 'Snap on — playhead and trims stick to words and clip edges' : 'Snap off — free placement'}
           >
-            {snap ? 'Snap on' : 'Snap'}
+            {snap ? 'Snap to clips' : 'Free move'}
           </button>
           <button
             className="timeline-btn"
@@ -263,15 +272,17 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             }
             onClick={() => setRipple(!ripple)}
           >
-            {ripple ? 'Ripple on' : 'Lift'}
+            {ripple ? 'Close gaps' : 'Leave gaps'}
           </button>
+        </div>
+        <div className="timeline-toolbar-group timeline-edit-controls" data-label="Tools" aria-label="Timeline editing tools">
           <button
             className="timeline-btn"
             type="button"
             title="Insert a 1s hold at the playhead. Later clips slide right."
             onClick={() => dispatch({ type: 'insertGap', time: programTime, duration: 1 })}
           >
-            Gap
+            Add gap
           </button>
           <button
             className="timeline-btn"
@@ -358,20 +369,14 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             </>
           )}
         </div>
-        {showEditSummary && (
-          <div className="timeline-toolbar-group edit-summary" title="Edits lane totals">
-            {editCounts.pending} open · {editCounts.applied} applied · {editCounts.scenes} scenes · {editCounts.guards}{' '}
-            protected
-          </div>
-        )}
         {showEditFilters && (
-          <div className="timeline-toolbar-group edit-filters">
+          <div className="timeline-toolbar-group edit-filters" data-label="Show" aria-label="Filter timeline markers">
             {(
               [
                 ['all', 'All'],
                 ['pending', 'Open'],
                 ['applied', 'Applied'],
-                ['scenes', 'Scenes'],
+                ['scenes', 'Chapters'],
                 ['guards', 'Protected'],
                 ['notes', 'Notes']
               ] as const
@@ -402,35 +407,36 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             ))}
           </div>
         )}
-        <div className="timeline-toolbar-group">
-          <button
-            className="timeline-btn"
-            type="button"
-            title="Show a hidden overlay lane, or add one"
-            onClick={() => revealOrAddTrack('overlay')}
-          >
-            + Overlay
-          </button>
-          <button
-            className="timeline-btn"
-            type="button"
-            title="Add a music or sound-effects lane"
-            onClick={() => dispatch({ type: 'addTrack', trackType: 'audio' })}
-          >
-            + Audio
-          </button>
-          <button
-            className="timeline-btn"
-            type="button"
-            title="Show a hidden captions lane, or add one"
-            onClick={() => revealOrAddTrack('caption')}
-          >
-            + Captions
-          </button>
+        <div className="timeline-toolbar-group timeline-track-controls" data-label="Tracks" aria-label="Add or reveal tracks">
+          <OverflowMenu tone="chip" place="below" label="+ Add track" title="Add a graphics, audio, or captions track">
+            <button
+              className="overflow-item"
+              type="button"
+              title="Show a hidden graphics track, or add one"
+              onClick={() => revealOrAddTrack('overlay')}
+            >
+              Graphics
+            </button>
+            <button
+              className="overflow-item"
+              type="button"
+              title="Add a music or sound-effects track"
+              onClick={() => dispatch({ type: 'addTrack', trackType: 'audio' })}
+            >
+              Audio
+            </button>
+            <button
+              className="overflow-item"
+              type="button"
+              title="Show a hidden captions track, or add one"
+              onClick={() => revealOrAddTrack('caption')}
+            >
+              Captions
+            </button>
           {hiddenLanes.map((track) => (
             <button
               key={track.id}
-              className="timeline-btn"
+              className="overflow-item"
               type="button"
               title={`Show ${trackLaneName(track)} on the timeline`}
               onClick={() => dispatch({ type: 'setTrackFlag', trackId: track.id, patch: { hidden: false } })}
@@ -438,7 +444,10 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
               Show {trackLaneName(track)}
             </button>
           ))}
-          {io && (
+          </OverflowMenu>
+        </div>
+        {io && (
+          <div className="timeline-toolbar-group timeline-mark-controls" data-label="Marked clip" aria-label="Actions for the marked clip">
             <>
               <button
                 className="timeline-btn"
@@ -495,8 +504,8 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
                 Clear marks
               </button>
             </>
-          )}
-        </div>
+          </div>
+        )}
       </header>
 
       <div className="timeline-scroll-wrap">
@@ -705,25 +714,6 @@ function TrackLabel({
         <button
           className="track-flag"
           type="button"
-          title="Select every clip on this track"
-          aria-label="Select all clips on track"
-          onClick={onSelectAll}
-        >
-          <IconSelectAll />
-        </button>
-        <button
-          className="track-flag"
-          type="button"
-          data-active={track.solo}
-          title={track.solo ? 'Unsolo — hear every lane again' : 'Solo — hear only this lane'}
-          aria-label={track.solo ? 'Unsolo track' : 'Solo track'}
-          onClick={() => onFlag({ solo: !track.solo })}
-        >
-          <IconSolo />
-        </button>
-        <button
-          className="track-flag"
-          type="button"
           data-active={track.muted}
           title={track.muted ? 'Unmute track' : 'Mute — silence this track in export'}
           aria-label={track.muted ? 'Unmute track' : 'Mute track'}
@@ -751,11 +741,29 @@ function TrackLabel({
         >
           <IconLock />
         </button>
-        {canRemove && (
-          <button className="track-flag track-remove" type="button" title="Remove empty track" onClick={onRemove}>
-            ×
+        <OverflowMenu
+          tone="track"
+          place={track.type === 'caption' || track.type === 'overlay' ? 'below' : 'above'}
+          label={<IconMore />}
+          title={`More options for ${trackLaneName(track)}`}
+        >
+          <button className="overflow-item" type="button" onClick={onSelectAll}>
+            <IconSelectAll /> Select all clips
           </button>
-        )}
+          <button
+            className="overflow-item"
+            type="button"
+            data-active={track.solo}
+            onClick={() => onFlag({ solo: !track.solo })}
+          >
+            <IconSolo /> {track.solo ? 'Unsolo track' : 'Solo track'}
+          </button>
+          {canRemove && (
+            <button className="overflow-item track-remove" type="button" onClick={onRemove}>
+              Remove empty track
+            </button>
+          )}
+        </OverflowMenu>
       </span>
     </div>
   )

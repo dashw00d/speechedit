@@ -205,11 +205,51 @@ function speakerOf(value: unknown): string | undefined {
   return label || undefined
 }
 
+const NON_SPEECH_MARKERS = new Set([
+  'blankaudio',
+  'nospeech',
+  'silence',
+  'music',
+  'applause',
+  'laughter',
+  'inaudible'
+])
+
+/** Provider control/non-verbal labels are metadata, never transcript copy. */
+export function isAsrNonSpeechMarker(value: unknown): boolean {
+  const text = String(value ?? '').trim()
+  if (!text) return false
+  const decorated =
+    /^\[[^\]]+\]$/.test(text) ||
+    /^\([^\)]+\)$/.test(text) ||
+    /^<\|[^>]+\|>$/.test(text) ||
+    text.includes('_') ||
+    text === text.toUpperCase()
+  if (!decorated) return false
+  const key = text
+    .replace(/^\[|\]$/g, '')
+    .replace(/^\(|\)$/g, '')
+    .replace(/^<\||\|>$/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '')
+  return NON_SPEECH_MARKERS.has(key)
+}
+
+export function sanitizeAsrCues(cues: AsrCue[]): AsrCue[] {
+  return cues.filter(
+    (row) =>
+      Boolean(row) &&
+      !isAsrNonSpeechMarker(row.text) &&
+      Number.isFinite(row.start) &&
+      Number.isFinite(row.end)
+  )
+}
+
 function cue(text: unknown, start: unknown, end: unknown, speaker?: unknown): AsrCue | null {
   const trimmed = String(text ?? '').trim()
   const t0 = num(start)
   const t1 = num(end)
-  if (!trimmed || t0 == null || t1 == null) return null
+  if (!trimmed || isAsrNonSpeechMarker(trimmed) || t0 == null || t1 == null) return null
   const who = speakerOf(speaker)
   return who
     ? { text: trimmed, start: t0, end: Math.max(t1, t0), speaker: who }
@@ -354,9 +394,10 @@ export function expandAsrCues(
   cues: AsrCue[],
   wordLevel?: boolean
 ): AsrCue[] {
-  const keepTimes = wordLevel ?? looksWordLevel(cues)
+  const clean = sanitizeAsrCues(cues)
+  const keepTimes = wordLevel ?? looksWordLevel(clean)
   if (keepTimes) {
-    return cues
+    return clean
       .map((c) => ({
         text: c.text.trim(),
         start: c.start,
@@ -366,7 +407,7 @@ export function expandAsrCues(
       .filter((c) => c.text)
   }
   const out: AsrCue[] = []
-  for (const seg of cues) {
+  for (const seg of clean) {
     const tokens = seg.text.split(/\s+/).filter(Boolean)
     const span = Math.max(0, seg.end - seg.start)
     const n = Math.max(1, tokens.length)

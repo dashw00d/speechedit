@@ -11,6 +11,7 @@ import { annotateProtected } from './analysis'
 import { defaultSpeakerColor } from './theme'
 import { normalizeScenes } from './sceneAnalysis'
 import { ensurePrimaryOffsets } from './takes'
+import { isAsrNonSpeechMarker } from '../../../shared/asr'
 
 function normalizeTransform(t?: Partial<Transform>): Transform {
   return {
@@ -43,10 +44,12 @@ export function normalizeProject(project: Project): Project {
       loudness: project.analysis?.loudness ?? DEFAULT_ANALYSIS.loudness
     },
     transcript: {
-      words: (project.transcript?.words ?? []).map((w) => ({
-        ...w,
-        speaker: w.speaker || 'ryan'
-      })),
+      words: (project.transcript?.words ?? [])
+        .filter((word) => !isAsrNonSpeechMarker(word.text))
+        .map((w) => ({
+          ...w,
+          speaker: w.speaker || 'ryan'
+        })),
       speakers: project.transcript?.speakers?.length
         ? project.transcript.speakers
         : [{ id: 'ryan', name: 'Speaker 1', color: defaultSpeakerColor() }]

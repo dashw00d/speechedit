@@ -49,6 +49,7 @@ import { clearMarksFromContext, markClipFromContext, tightenMarksFromContext } f
 import { setNormalizeFromContext } from '../lib/loudness'
 import { protectFromContext } from '../lib/protect'
 import { useEditor, usePlayback } from '../store'
+import { openAssistant } from '../lib/assistantNavigation'
 
 export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
   const open = useEditor((s) => s.palette)
@@ -117,7 +118,7 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
       {
         name: 'Open agent (⌘J)',
         group: 'edit',
-        run: () => useEditor.getState().setAgentOpen(true)
+        run: openAssistant
       },
       {
         name: 'Find scenes and retakes',

@@ -49,6 +49,7 @@ const SELECT_NEW_CLIP = new Set([
   'pasteClip'
 ])
 let lastCoalesce: { type: string; clipId?: string; at: number } | null = null
+let resetPlaybackForProjectChange: () => void = () => undefined
 
 function firstAddedClipId(before: Project, after: Project): string | undefined {
   const beforeIds = new Set(before.tracks.flatMap((track) => track.clips.map((clip) => clip.id)))
@@ -77,7 +78,6 @@ export interface EditorState {
   previewSafeCuts: boolean
   showNowWord: boolean
   palette: boolean
-  agentOpen: boolean
   dirty: boolean
   analyzing: string | null
   exporting: boolean
@@ -111,7 +111,6 @@ export interface EditorState {
   followPlayhead: boolean
   setFollowPlayhead: (value: boolean) => void
   setPalette: (value: boolean) => void
-  setAgentOpen: (value: boolean) => void
   setAnalyzing: (value: string | null) => void
   setExporting: (value: boolean) => void
   setSnap: (value: boolean) => void
@@ -354,7 +353,6 @@ export const useEditor = create<EditorState>((set, get) => ({
   showNowWord: bootShowNowWord(),
   followPlayhead: bootFollowPlayhead(),
   palette: false,
-  agentOpen: false,
   dirty: false,
   analyzing: null,
   exporting: false,
@@ -556,7 +554,6 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ followPlayhead: value })
   },
   setPalette: (value) => set({ palette: value }),
-  setAgentOpen: (value) => set({ agentOpen: value }),
   setAnalyzing: (value) => set({ analyzing: value }),
   setExporting: (value) => set({ exporting: value }),
   setSnap: (value) => set({ snap: value }),
@@ -576,6 +573,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         persistNow: true
       })
     )
+    resetPlaybackForProjectChange()
   },
   newProject: () => {
     set(
@@ -586,6 +584,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         persistNow: true
       })
     )
+    resetPlaybackForProjectChange()
   },
   loadDemo: () => {
     set(
@@ -596,6 +595,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         persistNow: true
       })
     )
+    resetPlaybackForProjectChange()
   },
   loadTranscript: (words) => {
     get().dispatch({ type: 'setTranscript', words })
@@ -731,6 +731,8 @@ export const usePlayback = create<PlaybackState>((set, get) => ({
   },
   tickTo: (time) => set({ programTime: time })
 }))
+
+resetPlaybackForProjectChange = () => usePlayback.getState().seekProgram(0)
 
 export function currentSourceTime(): number {
   return programToSourceOf(useEditor.getState().project, usePlayback.getState().programTime)

@@ -16,6 +16,9 @@ export interface ThemeJs {
   speakers: readonly [string, string, string, string, string, string]
   captionFill: string
   captionStroke: string
+  stillBackground: string
+  stillForeground: string
+  stillBar: string
 }
 
 export interface ThemeMeta {
@@ -47,12 +50,18 @@ export const THEMES: Record<ThemeId, ThemeJs> = {
   dashwood: {
     speakers: ['#B02E2E', '#417094', '#2B7E72', '#D88D2A', '#036564', '#B69563'],
     captionFill: '#FBF6ED',
-    captionStroke: '#011725'
+    captionStroke: '#011725',
+    stillBackground: '#1C1914',
+    stillForeground: '#F4EFE4',
+    stillBar: 'rgba(12, 10, 8, 0.78)'
   },
   party: {
     speakers: ['#8452A1', '#6B4283', '#478466', '#8A5A1F', '#3A2E23', '#B290C1'],
     captionFill: '#F2EADB',
-    captionStroke: '#1B130D'
+    captionStroke: '#1B130D',
+    stillBackground: '#1B130D',
+    stillForeground: '#F2EADB',
+    stillBar: 'rgba(20, 13, 8, 0.8)'
   }
 }
 
@@ -123,6 +132,11 @@ export function defaultSpeakerColor() {
 export function captionDefaults() {
   const js = activeJs()
   return { fill: js.captionFill, stroke: js.captionStroke }
+}
+
+export function stillDefaults() {
+  const js = activeJs()
+  return { background: js.stillBackground, foreground: js.stillForeground, bar: js.stillBar }
 }
 
 /** @deprecated use speakerPalette() / defaultSpeakerColor() */

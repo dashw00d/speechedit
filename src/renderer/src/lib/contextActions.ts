@@ -3,7 +3,6 @@ import { blockedByLabel, leftoverForSpan, leftoverItems, leftoverKind, reviewGap
 import { safeEditCandidates } from './firstEdit'
 import {
   commandForScene,
-  droppedRetakeCount,
   hasUncollapsedRetakes,
   suggestionForScene,
   takeFamily,
@@ -314,19 +313,11 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
 
 function retakeTaskCopy(project: Project): { headline: string; reviewLabel: string; reviewCount: number } | null {
   const live = uncollapsedRetakeCount(project)
-  const dropped = droppedRetakeCount(project)
   if (live > 0) {
     return {
       headline: `${live} retake${live === 1 ? '' : 's'}. Hear the first, then Use later take.`,
       reviewLabel: `Review ${live} retake${live === 1 ? '' : 's'}`,
       reviewCount: live
-    }
-  }
-  if (dropped > 0) {
-    return {
-      headline: `Dropped ${dropped} false take${dropped === 1 ? '' : 's'}. Put one back if that was the good line.`,
-      reviewLabel: `Review ${dropped} take${dropped === 1 ? '' : 's'}`,
-      reviewCount: dropped
     }
   }
   return null
@@ -430,8 +421,8 @@ function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport
     }
     if (safe.length) {
       return {
-        headline: `Pauses found. ${safe.length} safe to clean · transcribing…`,
-        applyLabel: `Clean ${safe.length} pauses`,
+        headline: `${safe.length} safe edit${safe.length === 1 ? '' : 's'} ready · transcribing…`,
+        applyLabel: `Apply ${safe.length} safe edits`,
         reviewLabel: review.length ? `Review ${review.length}` : 'Review',
         reviewCount: review.length,
         safeCount: safe.length,
@@ -465,8 +456,8 @@ function buildSuggestTask(project: Project): Omit<SuggestTask, 'showMarkedExport
   }
   if (!applied.length && safe.length) {
     return {
-      headline: `Transcript ready. ${safe.length} safe to clean${review.length ? ` · ${review.length} need review` : ''}.`,
-      applyLabel: `Clean ${safe.length} pauses`,
+      headline: `Transcript ready. ${safe.length} safe edit${safe.length === 1 ? '' : 's'} ready${review.length ? ` · ${review.length} need review` : ''}.`,
+      applyLabel: `Apply ${safe.length} safe edits`,
       reviewLabel: review.length ? `Review ${review.length}` : 'Review',
       reviewCount: review.length,
       safeCount: safe.length,
@@ -616,6 +607,9 @@ export interface WordsInspectorDetail {
 
 export interface SuggestionInspectorDetail {
   title: string
+  category: string
+  status: string
+  prompt: string
   headline: string
   clock: string
   explanation: string
@@ -705,23 +699,23 @@ function suggestionSafetyExplanation(project: Project, suggestion: EditSuggestio
   }
   if (!suggestion.safe) {
     if (suggestion.type === 'static') {
-      return 'The picture barely moves and no one is talking — a loading screen or hold. Hear it, then Speed or Keep.'
+      return 'The picture barely moves and no one is talking. This may be a loading screen or a deliberate hold.'
     }
     if (suggestion.type === 'low-motion') {
       return 'Talking over a still screen — speeding would chipmunk the voice. Keep it, or cut in the transcript.'
     }
     if (leftoverKind(suggestion) === 'loud') {
-      return 'This stretch is hotter than the rest of the reel. Hear it, then Quiet or Keep.'
+      return 'This stretch is louder than the rest of the reel.'
     }
     if (suggestion.type === 'repeat') return 'Possible retake — pick which attempt to keep.'
     if (leftoverKind(suggestion) === 'activity') {
-      return 'The picture changed while no one was talking — a click-through, or a fidget. Hear it, then Silent demo, Speed, or Cut.'
+      return 'The picture changed while no one was talking. This may be a useful walkthrough, a wait to shorten, or dead air.'
     }
     if (leftoverKind(suggestion) === 'still') {
-      return 'The picture is still while the room is quiet — a silent demo hold, or dead air. Hear it, then Cut, Silent demo, or Speed.'
+      return 'The picture stayed still while the room was quiet. This may be a deliberate hold or dead air.'
     }
     if (leftoverKind(suggestion) === 'breath') {
-      return 'A short breath between words. Hear it — Cut if it hisses, Keep if the line should still breathe.'
+      return 'A short breath between words. Decide whether the line sounds more natural with it.'
     }
     if (suggestion.action === 'review') return 'Flagged for manual review before applying.'
     if (suggestion.type === 'silence') return 'Long or unusual pause — worth a quick listen.'
@@ -1122,6 +1116,7 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
   if (!suggestion) return null
 
   const dur = Math.max(0, suggestion.end - suggestion.start)
+  const kind = leftoverKind(suggestion)
   const blockedLabel = blockedByLabel(project.tags, suggestion.blockedBy)
   const similar = project.suggestions.filter(
     (s) => s.id !== suggestion.id && s.type === suggestion.type && !s.applied && s.action === suggestion.action
@@ -1269,25 +1264,79 @@ export function suggestionInspectorDetail(project: Project, suggestionId: string
   }
   const nextSug = nextPendingSuggestionAfter(project, suggestion.id)
 
+  const category =
+    kind === 'activity'
+      ? 'Silent activity'
+      : kind === 'still'
+        ? 'Silent still'
+        : kind === 'breath'
+          ? 'Breath'
+          : kind === 'static'
+            ? 'Static screen'
+            : kind === 'low-motion'
+              ? 'Still picture with speech'
+              : kind === 'loud'
+                ? 'Loud audio'
+                : suggestion.type === 'repeat'
+                  ? 'Possible retake'
+                  : suggestion.type === 'filler'
+                    ? 'Filler word'
+                    : suggestion.type === 'silence'
+                      ? 'Pause'
+                      : suggestion.type === 'pace'
+                        ? 'Pacing'
+                        : 'Suggestion'
+
+  const prompt = suggestion.applied
+    ? 'Keep this edit or put it back?'
+    : kind === 'activity'
+      ? 'Was this a walkthrough or dead air?'
+      : kind === 'still'
+        ? 'Is this a useful hold or dead air?'
+        : kind === 'breath'
+          ? 'Does this breath sound natural?'
+          : kind === 'static'
+            ? 'Should this screen move faster?'
+            : kind === 'low-motion'
+              ? 'Keep this section at normal speed?'
+              : kind === 'loud'
+                ? 'Should this loud spot be reduced?'
+                : suggestion.type === 'repeat'
+                  ? 'Which take should stay?'
+                  : suggestion.type === 'filler'
+                    ? 'Remove this filler word?'
+                    : suggestion.type === 'silence'
+                      ? 'Keep this pause or remove it?'
+                      : suggestion.label
+
   return {
     title:
-      leftoverKind(suggestion) === 'activity'
+      kind === 'activity'
         ? 'Quiet picture change'
-        : leftoverKind(suggestion) === 'still'
+        : kind === 'still'
           ? 'Silent still'
-          : leftoverKind(suggestion) === 'static'
+          : kind === 'static'
             ? 'Static screen'
-            : leftoverKind(suggestion) === 'low-motion'
+            : kind === 'low-motion'
               ? 'Talking over still'
-              : leftoverKind(suggestion) === 'loud'
+              : kind === 'loud'
                 ? 'Hot audio'
-                : leftoverKind(suggestion) === 'breath'
+                : kind === 'breath'
                   ? 'Breath'
                   : suggestion.type === 'silence'
                     ? 'Pause'
                     : suggestion.type,
+    category,
+    status: suggestion.blockedBy
+      ? 'Protected'
+      : suggestion.applied
+        ? 'Applied'
+        : suggestion.safe
+          ? 'Ready to apply'
+          : 'Needs decision',
+    prompt,
     headline: suggestion.label,
-    clock: `${formatClock(suggestion.start)}–${formatClock(suggestion.end)}${suggestion.safe ? ' · safe' : ' · review'}`,
+    clock: `${formatClock(suggestion.start)}–${formatClock(suggestion.end)}`,
     explanation: suggestionSafetyExplanation(project, suggestion),
     blockedLabel,
     actions,
@@ -1328,7 +1377,7 @@ export function projectInspectorDetail(project: Project): ProjectInspectorDetail
 
   const agentHint =
     pendingCount > 0
-      ? `${pendingCount} open edit${pendingCount === 1 ? '' : 's'} — Agent can batch-apply safe cuts or explain what's protected.`
+      ? `${pendingCount} open edit${pendingCount === 1 ? '' : 's'} — Assistant can apply safe cuts or explain what's protected.`
       : undefined
 
   return {
@@ -1344,16 +1393,20 @@ export function projectInspectorDetail(project: Project): ProjectInspectorDetail
 }
 
 export function inspectorTabs(focus: InspectorFocus): Array<{ id: InspectorFocus | 'agent'; label: string }> {
+  const assistant = { id: 'agent' as const, label: 'Assistant' }
+  const project = { id: 'project' as const, label: 'Project' }
   if (focus === 'clip') {
     return [
       { id: 'clip', label: 'Picture' },
-      { id: 'agent', label: 'Agent' }
+      project,
+      assistant
     ]
   }
   if (focus === 'caption') {
     return [
       { id: 'caption', label: 'Caption' },
-      { id: 'agent', label: 'Agent' }
+      project,
+      assistant
     ]
   }
   if (focus === 'words' || focus === 'suggestion' || focus === 'gap' || focus === 'scene') {
@@ -1365,12 +1418,13 @@ export function inspectorTabs(focus: InspectorFocus): Array<{ id: InspectorFocus
     }
     return [
       { id: focus, label: labels[focus] },
-      { id: 'agent', label: 'Agent' }
+      project,
+      assistant
     ]
   }
   return [
-    { id: focus === 'job' ? 'job' : 'project', label: focus === 'job' ? 'Job' : 'Project' },
-    { id: 'agent', label: 'Agent' }
+    ...(focus === 'job' ? [{ id: 'job' as const, label: 'Progress' }, project] : [project]),
+    assistant
   ]
 }
 

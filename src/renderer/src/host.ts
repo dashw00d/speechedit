@@ -1,4 +1,5 @@
 import { JobGate } from '../../shared/mediaJob'
+import { ModelQueue, type ModelQueueStatus } from '../../shared/modelQueue'
 import type { TranscribeProgress } from '../../shared/asr'
 
 export interface SpeechHost {
@@ -49,9 +50,30 @@ export interface SpeechHost {
     { kind: string; binaries: string[]; found: string[]; available: boolean }[]
   >
   complete: (req: {
-    endpoint: { baseUrl?: string; model?: string; apiKey?: string }
+    endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }
     messages: { role: string; content: string }[]
+    label?: string
   }) => Promise<string>
+  listModels: (endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) => Promise<{
+    provider: 'ollama' | 'openai-compatible' | 'codex-cli' | 'grok-cli'
+    models: {
+      id: string
+      capabilities: string[]
+      parameterSize?: string
+      contextLength?: number
+      remote?: boolean
+      detail?: string
+    }[]
+  }>
+  testModel: (endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) => Promise<{
+    model: string
+    latencyMs: number
+    reply: string
+  }>
+  modelQueueStatus: () => Promise<ModelQueueStatus>
+  onModelQueue: (fn: (status: ModelQueueStatus) => void) => () => void
+  pollMcp: () => Promise<{ id: string; name: string; args: Record<string, unknown> }[]>
+  resolveMcp: (response: { id: string; message: string; data?: unknown; isError?: boolean }) => Promise<void>
   syncProject: (project: unknown) => Promise<string>
   syncSettings: (settings: unknown) => Promise<string>
   syncPath: () => Promise<string>
@@ -120,6 +142,10 @@ function pickBrowserFile(accept: string): Promise<{ name: string; text: string }
 
 const electronHost = typeof window !== 'undefined' ? window.speech : undefined
 const webJobs = new JobGate()
+const webModelListeners = new Set<(status: ModelQueueStatus) => void>()
+const webModelQueue = new ModelQueue((status) => {
+  for (const listener of webModelListeners) listener(status)
+})
 
 export const host: SpeechHost = electronHost ?? {
   openMedia: missing,
@@ -223,17 +249,73 @@ export const host: SpeechHost = electronHost ?? {
   transcribe: async () => null,
   asrPath: async () => [],
   complete: async (req) => {
+    if (req.endpoint.kind === 'codex-cli' || req.endpoint.kind === 'grok-cli') {
+      throw new Error('CLI model providers require the desktop app.')
+    }
     const { completeOpenAI } = await import('./lib/providers')
-    return completeOpenAI(
-      {
-        kind: 'openai-compatible',
-        baseUrl: req.endpoint.baseUrl || '',
-        model: req.endpoint.model || '',
-        apiKey: req.endpoint.apiKey || ''
-      },
-      req.messages as { role: 'system' | 'user' | 'assistant'; content: string }[]
+    return webModelQueue.enqueue(() =>
+      completeOpenAI(
+        {
+          kind: 'openai-compatible',
+          baseUrl: req.endpoint.baseUrl || '',
+          model: req.endpoint.model || '',
+          apiKey: req.endpoint.apiKey || ''
+        },
+        req.messages as { role: 'system' | 'user' | 'assistant'; content: string }[]
+      ),
+      { label: req.label }
     )
   },
+  listModels: async (endpoint) => {
+    if (endpoint.kind === 'codex-cli' || endpoint.kind === 'grok-cli') {
+      throw new Error('CLI model providers require the desktop app.')
+    }
+    if (!endpoint.baseUrl) throw new Error('Intelligence endpoint is not configured.')
+    const headers: Record<string, string> = {}
+    if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`
+    const res = await fetch(`${endpoint.baseUrl.replace(/\/$/, '')}/models`, { headers })
+    if (!res.ok) throw new Error(`Model list ${res.status}: ${(await res.text()).slice(0, 240)}`)
+    const data = (await res.json()) as { data?: { id?: string }[] }
+    return {
+      provider: 'openai-compatible' as const,
+      models: (data.data ?? []).flatMap((model) =>
+        model.id ? [{ id: model.id, capabilities: [] as string[] }] : []
+      )
+    }
+  },
+  testModel: async (endpoint) => {
+    if (endpoint.kind === 'codex-cli' || endpoint.kind === 'grok-cli') {
+      throw new Error('CLI model providers require the desktop app.')
+    }
+    const started = Date.now()
+    const { completeOpenAI } = await import('./lib/providers')
+    const reply = await webModelQueue.enqueue(() =>
+      completeOpenAI(
+        { kind: 'openai-compatible', baseUrl: endpoint.baseUrl || '', model: endpoint.model || '', apiKey: endpoint.apiKey || '' },
+        [
+          { role: 'system', content: 'Return only a JSON object.' },
+          { role: 'user', content: 'Return {"status":"SPEECHEDIT_MODEL_OK"}.' }
+        ]
+      ),
+      { label: `Test connection · ${endpoint.model || endpoint.kind || 'model'}` }
+    )
+    try {
+      const start = reply.indexOf('{')
+      const end = reply.lastIndexOf('}')
+      const parsed = JSON.parse(reply.slice(start, end + 1)) as { status?: unknown }
+      if (parsed.status !== 'SPEECHEDIT_MODEL_OK') throw new Error('wrong status')
+    } catch {
+      throw new Error('Model replied, but failed the structured JSON test.')
+    }
+    return { model: endpoint.model || '', latencyMs: Date.now() - started, reply }
+  },
+  modelQueueStatus: async () => webModelQueue.status(),
+  onModelQueue: (fn) => {
+    webModelListeners.add(fn)
+    return () => webModelListeners.delete(fn)
+  },
+  pollMcp: async () => [],
+  resolveMcp: async () => undefined,
   syncProject: async (project) => host.syncWorkspace({
     project,
     recovery: project,

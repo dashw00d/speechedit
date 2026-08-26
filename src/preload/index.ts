@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ModelQueueStatus } from '../shared/modelQueue'
 
 const api = {
   openMedia: () => ipcRenderer.invoke('dialog:openMedia') as Promise<string | null>,
@@ -54,9 +55,41 @@ const api = {
     ipcRenderer.invoke('media:transcribe', file, opts),
   asrPath: () => ipcRenderer.invoke('media:asrPath'),
   complete: (req: {
-    endpoint: { baseUrl?: string; model?: string; apiKey?: string }
+    endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }
     messages: { role: string; content: string }[]
+    label?: string
   }) => ipcRenderer.invoke('model:complete', req) as Promise<string>,
+  listModels: (endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+    ipcRenderer.invoke('model:list', endpoint) as Promise<{
+      provider: 'ollama' | 'openai-compatible' | 'codex-cli' | 'grok-cli'
+      models: {
+        id: string
+        capabilities: string[]
+        parameterSize?: string
+        contextLength?: number
+        remote?: boolean
+        detail?: string
+      }[]
+    }>,
+  testModel: (endpoint: { kind?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+    ipcRenderer.invoke('model:test', endpoint) as Promise<{
+      model: string
+      latencyMs: number
+      reply: string
+    }>,
+  modelQueueStatus: () =>
+    ipcRenderer.invoke('model:queue-status') as Promise<ModelQueueStatus>,
+  onModelQueue: (fn: (status: ModelQueueStatus) => void) => {
+    const listener = (_e: unknown, status: ModelQueueStatus) => fn(status)
+    ipcRenderer.on('model:queue-changed', listener)
+    return () => ipcRenderer.removeListener('model:queue-changed', listener)
+  },
+  pollMcp: () =>
+    ipcRenderer.invoke('mcp:poll') as Promise<
+      { id: string; name: string; args: Record<string, unknown> }[]
+    >,
+  resolveMcp: (response: { id: string; message: string; data?: unknown; isError?: boolean }) =>
+    ipcRenderer.invoke('mcp:resolve', response) as Promise<void>,
   syncProject: (project: unknown) => ipcRenderer.invoke('project:sync', project) as Promise<string>,
   syncSettings: (settings: unknown) => ipcRenderer.invoke('settings:sync', settings) as Promise<string>,
   syncPath: () => ipcRenderer.invoke('project:syncPath') as Promise<string>,

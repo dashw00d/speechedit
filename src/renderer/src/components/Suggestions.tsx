@@ -5,18 +5,17 @@ import {
   reviewDecisionScenes,
   reviewDrawerCopy,
   reviewJob,
+  reviewJobCount,
   reviewOtherPending
 } from '../lib/reviewDrawer'
 import { PACE_PRESETS, paceFromMargin, suggestTask, toastForEdit } from '../lib/contextActions'
 import {
   describeBreathReview,
-  describeRetakeReview,
   describeTakeDecision,
   findRetakesAndReview,
   nextLeftoverToHear,
   openReviewFromContext,
-  startBreathReview,
-  startRetakeReview
+  startBreathReview
 } from '../lib/firstEdit'
 import { applyTitleFromContext } from '../lib/title'
 import { addSceneLowerThirdsFromContext, applyLowerThirdFromContext } from '../lib/lowerThird'
@@ -61,7 +60,8 @@ import {
   commandForScene,
   retakeReviewQueue,
   retakeSceneDropped,
-  takeFamily
+  takeFamily,
+  uncollapsedRetakeCount
 } from '../lib/sceneAnalysis'
 import { sourceToProgramOf } from '../lib/resolver'
 import { formatClock } from '../lib/time'
@@ -238,10 +238,41 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
   const selectionOn = Boolean(
     selectedWordIds.length || selectedSceneId || selected || selectedClipId || selectedGap
   )
+  const reviewCopy = reviewDrawerCopy(project)
+  const issueCount = reviewJobCount(project)
+  const selectedReviewScene = reviewing && selectedSceneId
+    ? project.scenes.find((scene) => scene.id === selectedSceneId)
+    : undefined
+  const cueCopy = activeLeftover?.label ?? selectedReviewScene?.title ?? task.headline
+  const cueKicker = activeLeftover || selectedReviewScene
+    ? 'Current issue'
+    : barJob === 'selection'
+      ? 'Selected'
+      : barJob === 'marked'
+        ? 'Marked'
+        : 'Up next'
 
-  function hearSuggestion(s: EditSuggestion) {
+  function hearSuggestion(s: EditSuggestion, currentProject = useEditor.getState().project) {
     selectSuggestion(s.id)
-    playLoop(sourceToProgramOf(project, s.start), sourceToProgramOf(project, s.end))
+    playLoop(sourceToProgramOf(currentProject, s.start), sourceToProgramOf(currentProject, s.end))
+  }
+
+  function continueReview(currentProject: typeof project): EditorialScene | undefined {
+    const job = reviewJob(currentProject)
+    if (job === 'leftover' || job === 'breath') {
+      const next = nextLeftoverToHear(currentProject)
+      if (next) hearSuggestion(next, currentProject)
+      return undefined
+    }
+    if (job === 'retake') {
+      const next = retakeReviewQueue(currentProject).find((row) => !retakeSceneDropped(currentProject, row))
+      if (next) hearScene(next, currentProject)
+      return next
+    }
+    clearSelection()
+    usePlayback.getState().pause()
+    if (job === 'applied' || job === 'empty') setReviewing(false)
+    return undefined
   }
 
   function resolveLeftover(command: Command) {
@@ -249,13 +280,12 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
     dispatch(command)
     const toast = toastForEdit(before, command)
     if (toast) onToast?.(toast)
-    const next = nextLeftoverToHear(useEditor.getState().project)
-    if (next) hearSuggestion(next)
+    continueReview(useEditor.getState().project)
   }
 
-  function hearScene(scene: EditorialScene) {
+  function hearScene(scene: EditorialScene, currentProject = useEditor.getState().project) {
     selectScene(scene.id)
-    playLoop(sourceToProgramOf(project, scene.start), sourceToProgramOf(project, scene.end))
+    playLoop(sourceToProgramOf(currentProject, scene.start), sourceToProgramOf(currentProject, scene.end))
   }
 
   function openReview() {
@@ -271,13 +301,8 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
       command.type === 'revertSuggestion' || command.type === 'restoreRange'
         ? dropped[0]
         : live.find((row) => row.id !== scene.id) ?? live[0]
-    if (next) hearScene(next)
-    else {
-      setReviewing(false)
-      clearSelection()
-      usePlayback.getState().pause()
-    }
-    onToast?.(describeTakeDecision(nextProject, next))
+    const continued = next ? (hearScene(next, nextProject), next) : continueReview(nextProject)
+    onToast?.(describeTakeDecision(nextProject, continued))
   }
 
   function sceneKindChip(kind: string, takeIndex?: number) {
@@ -287,7 +312,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
   }
 
   function barAction(id: BarActionId, inMenu = false) {
-    const className = inMenu ? 'overflow-item' : id === 'export-marked' ? 'safe-btn' : 'review-btn'
+    const className = inMenu ? 'overflow-item' : id === 'export' || id === 'export-marked' ? 'safe-btn' : 'review-btn'
     const button = (label: string, title: string, onClick: () => void, extra?: { active?: boolean }) => (
       <button
         key={id}
@@ -308,7 +333,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
               'Loop this breath. Cut if it hisses, Keep if it should stay.',
               () => onToast?.(leftoverHearFromContext().toast)
             )
-          : button('Hear leftover', 'Loop this leftover. Silent demo, Speed, Cut, or Keep land on the bar.', () =>
+          : button('Review next issue', 'Play the next section that needs a decision.', () =>
               onToast?.(leftoverHearFromContext().toast)
             )
       case 'silent-demo':
@@ -322,7 +347,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
           ? button('Cut breath', 'Remove this hiss and close the gap. Undo puts it back.', () =>
               onToast?.(leftoverCutFromContext().toast)
             )
-          : button('Cut leftover', 'Remove this leftover fidget and close the gap. Undo puts it back.', () =>
+          : button('Cut', 'Remove this leftover fidget and close the gap. Undo puts it back.', () =>
               onToast?.(leftoverCutFromContext().toast)
             )
       case 'keep-leftover':
@@ -330,11 +355,11 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
           ? button('Keep breath', 'Leave this air in the reel so the line still breathes.', () =>
               onToast?.(leftoverKeepFromContext().toast)
             )
-          : button('Keep leftover', 'Protect this leftover. Auto Edit will skip it.', () =>
+          : button('Keep', 'Protect this leftover. Auto Edit will skip it.', () =>
               onToast?.(leftoverKeepFromContext().toast)
             )
       case 'quiet-leftover':
-        return button('Quiet leftover', 'Lower this leftover spike toward -16 LUFS. Length stays.', () =>
+        return button('Quiet', 'Lower this leftover spike toward -16 LUFS. Length stays.', () =>
           onToast?.(leftoverQuietFromContext().toast)
         )
       case 'protect-pause':
@@ -371,10 +396,12 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
           onToast?.(findRetakesAndReview().toast)
         )
       case 'collapse-retakes':
-        return button('Collapse retakes', 'Drop every superseded take. You can put them back from Review.', () => {
+        return button('Collapse retakes', 'Drop every superseded take. Undo, or use Put back retakes in Auto Edit.', () => {
+          const count = uncollapsedRetakeCount(useEditor.getState().project)
           dispatch({ type: 'collapseRetakes' })
-          const scene = startRetakeReview()
-          onToast?.(describeRetakeReview(useEditor.getState().project, scene))
+          clearSelection()
+          usePlayback.getState().pause()
+          onToast?.(`Dropped ${count} false take${count === 1 ? '' : 's'}. Undo to put ${count === 1 ? 'it' : 'them'} back.`)
         })
       case 'review':
         return button(task.reviewLabel, 'Open the review drawer. Close it with ×, outside, or Esc.', () =>
@@ -530,14 +557,17 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
   return (
     <>
       <footer className="suggest-bar">
-        <span className="spark">✦</span>
-        <span className="suggest-copy">{task.headline}</span>
-        <div className="chips">
-          {task.showPreviewToggle && (
-            <>
+        <div className="suggest-cue">
+          <span className="suggest-kicker">{cueKicker}</span>
+          <span className="suggest-copy">{cueCopy}</span>
+        </div>
+        {!selectionOn && (task.showPreviewToggle || task.showPace) && (
+          <OverflowMenu label="Preview & pace" title="Compare the original, preview cuts, and choose pause spacing">
+            {task.showPreviewToggle && (
+              <>
               <button
                 type="button"
-                className="chip"
+                className="overflow-item"
                 data-active={!previewSafeCuts}
                 title="Hear the raw recording before applying safe cuts"
                 onClick={() => setPreviewSafeCuts(false)}
@@ -546,20 +576,20 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
               </button>
               <button
                 type="button"
-                className="chip"
+                className="overflow-item"
                 data-active={previewSafeCuts}
                 title="Preview how safe cuts will sound — undo still works after apply"
                 onClick={() => setPreviewSafeCuts(true)}
               >
                 With cuts
               </button>
-            </>
-          )}
-          {task.showPace &&
+              </>
+            )}
+            {task.showPace &&
             PACE_PRESETS.map((preset) => (
               <button
                 key={preset.id}
-                className="chip"
+                className="overflow-item"
                 data-active={pace === preset.id}
                 title={preset.hint}
                 onClick={() => dispatch({ type: 'setCutMargin', margin: preset.margin })}
@@ -567,7 +597,8 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
                 {preset.label}
               </button>
             ))}
-        </div>
+          </OverflowMenu>
+        )}
         <div className="suggest-actions">
           {barNow.map((id) => barAction(id))}
           {barMore.length > 0 && (
@@ -586,12 +617,12 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
             </button>
           )}
         </div>
-        {primaryApply && (
+        {primaryApply && !selectionOn && (
           <button className="safe-btn" onClick={() => dispatch({ type: 'applySafeSuggestions' })}>
             {task.applyLabel}
           </button>
         )}
-        {primaryReview && !reviewing && (
+        {primaryReview && !reviewing && !selectionOn && (
           <button className="safe-btn" onClick={openReview}>
             {task.reviewLabel}
           </button>
@@ -606,10 +637,12 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
           aria-label="Review"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <div className="drawer-row drawer-head">
-            <span className="kind">{reviewDrawerCopy(project).kicker}</span>
-            <span>{reviewDrawerCopy(project).detail}</span>
-            <span />
+          <header className="drawer-overview">
+            <div className="drawer-overview-copy">
+              <span className="drawer-eyebrow">{reviewCopy.kicker}</span>
+              <strong>{reviewCopy.detail}</strong>
+              <span className="drawer-progress">{issueCount ? `${issueCount} ${issueCount === 1 ? 'item' : 'items'} left in this step` : 'Review complete'}</span>
+            </div>
             <span className="drawer-head-actions">
               {reviewJob(project) === 'pending' && reviewOtherPending(project).length > 0 && (
                 <button
@@ -631,7 +664,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
                 ×
               </button>
             </span>
-          </div>
+          </header>
           {reviewJob(project) === 'retake' && reviewDecisionScenes(project).map((scene) => {
             const family = takeFamily(project.scenes, scene.id)
             const dropped = retakeSceneDropped(project, scene)
@@ -711,7 +744,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
                   <section className="drawer-group">
                     <div className="drawer-row drawer-head">
                       <span className="kind">Quiet picture</span>
-                      <span>{activities.length} need a listen</span>
+                      <span>Picture changed during silence</span>
                       <span />
                       <span />
                     </div>
@@ -747,7 +780,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
                   <section className="drawer-group">
                     <div className="drawer-row drawer-head">
                       <span className="kind">Silent stills</span>
-                      <span>{stills.length} need a listen</span>
+                      <span>No visible movement</span>
                       <span />
                       <span />
                     </div>
@@ -1029,17 +1062,17 @@ function SuggestionRow({
           {s.blockedBy
             ? 'protected'
             : leftover === 'activity'
-              ? 'activity'
+              ? 'picture change'
               : leftover === 'still'
-              ? 'still'
+              ? 'still frame'
               : leftover === 'breath'
                 ? 'breath'
                 : leftover === 'static'
-                  ? 'static'
+                  ? 'static screen'
                   : leftover === 'low-motion'
-                    ? 'talking'
+                    ? 'slow picture'
                     : leftover === 'loud'
-                      ? 'hot'
+                      ? 'loud audio'
                       : s.type === 'repeat'
                       ? 'retake'
                       : s.type}

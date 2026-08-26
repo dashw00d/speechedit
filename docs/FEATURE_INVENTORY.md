@@ -685,34 +685,32 @@ These appear based on selection. Each row is one button label the user may see.
 | Select intelligence (LLM) preset | Models → Intelligence dropdown | ✅ | **Cursor** — model picker (UI). |
 | Set LLM URL / model / key | Models fields | ✅ | **Ollama** — endpoint config (functional). |
 | Re-transcribe current media (force) | Models → Transcribe again | ✅ | **Descript** — re-transcribe (functional). |
-| Ask model freeform (prompt) | Models → Ask in Agent… (opens Agent, focuses Ask) | ✅ | **Descript** — Underlord prompt (functional). **Cursor** — agent box, not `window.prompt` (UI). |
-| Ask model: find scenes only | Models → Find scenes | ✅ | **Descript** — scene detection (functional). |
-| Run local scene heuristic (no LLM) | Models → Local scenes; Auto Edit menu; palette | ✅ | **Premiere** — scene detect (functional; different signal). |
-| Rebuild intelligence from Models panel | Models → Rebuild intelligence | ✅ | **Descript** — re-analyze (functional). |
+| Open Assistant | Inspector → Assistant; Edit → Ask Assistant; command palette; Ctrl/Cmd+J | ✅ | **Descript** — Underlord prompt (functional). **Cursor** — one persistent agent surface (UI). |
 
 ### Audit notes — §24 (2026-08-25)
 
-**What a headache user hit:** **Ask model…** opened a browser `prompt()`. Local heuristic sounded like a research paper.
+**What a headache user hit:** Assistant actions were split between settings and an overlay, so it was unclear where requests, progress, results, and follow-ups lived.
 
 **What we shipped:**
-- **Ask in Agent…** opens the Agent pane and focuses Ask.
-- **Local scenes** toasts that this is from the transcript, no model.
-- Rebuild intelligence toasts when it finishes.
+- Advanced contains only provider configuration, discovery, testing, and re-transcription.
+- Every Assistant entry point opens the Inspector's Assistant tab and focuses the same prompt.
+- Activity, results, tool actions, and contextual follow-ups all stay in that tab; successful edits apply immediately and say so plainly.
 
 ---
 
-## 25. Agent panel — natural language actions
+## 25. Inspector Assistant — natural language actions
 
 | Action | How to invoke | Status | Best reference apps |
 |--------|---------------|--------|---------------------|
-| Run quick intent: Auto-cut the reel | Agent chip | ✅ | **Descript** — remove silence/filler batch (functional). |
-| Run quick intent: Auto-cut, keep tagged demo | Agent chip | ✅ | **Auto-Editor** — boolean keep (functional). |
-| Run quick intent: Cut product-name fumble | Agent chip | ✅ | **Descript** — “remove ums and stumbles” (functional). |
-| Run quick intent: Find scenes / retakes | Agent chip | ✅ | **Descript** — scene pass (functional). |
-| Run quick intent: Collapse retakes | Agent chip | ✅ | **Descript** — retake collapse (functional). |
-| Run quick intent: Put back silence | Agent chip | ✅ | **Descript** — undo silence removal (functional). |
-| Type custom agent request | Agent textarea + Run tools; ⌘Enter | ✅ | **Cursor** — agent prompt (UI). **WeftCut** — NL timeline edit (functional). |
-| View agent tool call log | Agent log list | ✅ | **Cursor** — tool trace (UI transparency). |
+| Run quick intent: Auto-cut the reel | Assistant quick action | ✅ | **Descript** — remove silence/filler batch (functional). |
+| Run quick intent: Auto-cut, keep tagged demo | Assistant quick action | ✅ | **Auto-Editor** — boolean keep (functional). |
+| Run quick intent: Cut product-name fumble | Assistant quick action | ✅ | **Descript** — “remove ums and stumbles” (functional). |
+| Run quick intent: Find scenes / retakes | Assistant quick action | ✅ | **Descript** — scene pass (functional). |
+| Run quick intent: Collapse retakes | Assistant quick action | ✅ | **Descript** — retake collapse (functional). |
+| Run quick intent: Put back silence | Assistant quick action | ✅ | **Descript** — undo silence removal (functional). |
+| Type a custom request | Assistant textarea + Send request; Ctrl/Cmd+Enter | ✅ | **Cursor** — agent prompt (UI). **WeftCut** — NL timeline edit (functional). |
+| View activity and tool actions | Inspector Assistant activity feed | ✅ | **Cursor** — tool trace (UI transparency). |
+| Ask a contextual follow-up | Click a completed activity result, then Ask follow-up | ✅ | **Cursor** — continue from a prior result (functional). |
 | View live editorial brief | Agent brief pre block | ✅ | **WeftCut** — context resource (functional). |
 | Preview agent recipe before apply | Agent **Will:** line under Ask, live as you type | ✅ | **Terraform plan** — preview before apply (UI). |
 

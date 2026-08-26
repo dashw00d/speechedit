@@ -201,7 +201,7 @@ export function planIntent(project: Project, intent: string): IntentPlan {
     const fillers = project.suggestions.filter((s) => s.type === 'filler' && !s.applied)
     return {
       commands: fillers.map((s) => ({ type: 'applySuggestion', suggestionId: s.id })),
-      note: `Cut ${fillers.length} filler suggestion(s).`
+      note: `Removed ${fillers.length} filler${fillers.length === 1 ? '' : 's'}.`
     }
   }
 

@@ -13,6 +13,7 @@ import { primaryAssetAt, primaryTakes } from '../lib/takes'
 import { formatTimecode } from '../lib/time'
 import { ingestDroppedFile } from '../lib/fileActions'
 import { REVIEW_RATES, describeReviewRate } from '../lib/reviewRate'
+import { settlePreviewSource, type PreviewSourceChoice } from '../lib/previewSource'
 import { isZoomClip, ZOOM_SCALES } from '../lib/zoom'
 import { isRedactionClip, REDACT_SCALES } from '../lib/redaction'
 import { isVerticalFrame, PICTURE_PANS } from '../lib/canvas'
@@ -23,7 +24,7 @@ import { clearMarksFromContext } from '../lib/marks'
 import { useEditor, usePlayback } from '../store'
 import { OverflowMenu } from './OverflowMenu'
 import { useEngine } from '../useEngine'
-import type { Crop } from '../types'
+import type { Asset, Crop } from '../types'
 import {
   commitPictureText,
   EDIT_PICTURE_TEXT_EVENT,
@@ -32,6 +33,24 @@ import {
   startPictureTextEdit
 } from '../lib/pictureText'
 import type { GraphLayer } from '../lib/exportGraph'
+
+function useStablePreviewPath(asset: Asset | undefined, proxyFailed: boolean, playing: boolean) {
+  const preferredPath = asset?.path
+    ? playbackPath(asset, { proxyExists: !proxyFailed })
+    : ''
+  const next: PreviewSourceChoice = {
+    assetId: asset?.id,
+    originalPath: asset?.path ?? '',
+    sourcePath: preferredPath
+  }
+  const [choice, setChoice] = useState<PreviewSourceChoice>(next)
+
+  useEffect(() => {
+    setChoice((current) => settlePreviewSource(current, next, playing))
+  }, [asset?.id, asset?.path, preferredPath, playing])
+
+  return choice.sourcePath
+}
 
 export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -46,6 +65,8 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   )
   const programTime = usePlayback((s) => s.programTime)
   const playing = usePlayback((s) => s.playing)
+  const [controlTime, setControlTime] = useState(programTime)
+  const reviewRate = usePlayback((s) => s.reviewRate)
   const toggle = usePlayback((s) => s.toggle)
   const selectedWordIds = useEditor((s) => s.selectedWordIds)
   const selectedClipId = useEditor((s) => s.selectedClipId)
@@ -76,6 +97,9 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   )
   const redactOn = isRedactionClip(selectedClip)
   useEffect(() => {
+    if (!playing) setControlTime(programTime)
+  }, [playing, programTime])
+  useEffect(() => {
     setProxyFailed(false)
     setPreviewFailed(false)
   }, [asset?.id, asset?.path, asset?.proxyPath])
@@ -92,26 +116,19 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
     const visible = look.layers.some((row) => row.layer.id === editingLayerId)
     if (!visible) setEditingLayerId(null)
   }, [look, editingLayerId])
-  const src = asset?.path ? mediaUrl(playbackPath(asset, { proxyExists: !proxyFailed })) : ''
   const outgoingAsset =
     (look.outgoingInput
       ? Object.values(project.assets).find((row) => row.path === look.outgoingInput)
       : undefined) ?? asset
-  const underSrc = outgoingAsset?.path
-    ? mediaUrl(playbackPath(outgoingAsset, { proxyExists: !proxyFailed }))
-    : src
+  const previewPath = useStablePreviewPath(asset, proxyFailed, playing)
+  const outgoingPreviewPath = useStablePreviewPath(outgoingAsset, proxyFailed, playing)
+  const src = previewPath ? mediaUrl(previewPath) : ''
+  const underSrc = outgoingPreviewPath ? mediaUrl(outgoingPreviewPath) : src
   const waitingPreview = previewFailed && !asset?.proxyPath && previewUnsafeCodec(asset?.codec)
   const picture = pictureAt(playbackProject, programTime)
   const { gain: volume, ducked, duckAmount, incomingGain } = look.voice
   const captions = look.layers.filter((l) => l.layer.kind === 'caption')
   const overlays = look.layers.filter((l) => l.layer.kind !== 'caption')
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    video.muted = incomingGain <= 0.0001
-    video.volume = Math.min(1, Math.max(0, incomingGain))
-  }, [incomingGain])
 
   const crop = picture.crop
   const angle = useMemo(() => 18 + sourceTime * 37, [sourceTime])
@@ -124,7 +141,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
     const willPlay = !playing
     const video = videoRef.current
     if (video && willPlay) {
-      video.muted = incomingGain <= 0.0001
+      video.muted = false
       video.volume = Math.min(1, Math.max(0, incomingGain))
       void video.play().catch(() => undefined)
     }
@@ -154,7 +171,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
       }}
     >
       <div className="panel-head">
-        Program
+        Preview
         <span>
           {project.name}
           {look.incoming && look.incoming.speed !== 1 ? ` · ${look.incoming.speed}×` : ''}
@@ -178,7 +195,6 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
               ref={underRef}
               className="dissolve-under"
               src={underSrc}
-              muted={look.voice.outgoingGain <= 0.0001}
               playsInline
               style={{
                 opacity: look.outgoingOpacity,
@@ -190,7 +206,6 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
               ref={videoRef}
               data-monitor-video
               src={src}
-              muted={incomingGain <= 0.0001}
               playsInline
               style={{
                 transform: cssTransform(picture),
@@ -403,57 +418,77 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
         {showNowWord && word && captions.length === 0 && <div className="now-word">{word.text}</div>}
       </div>
       <div className="transport">
-        <button className="play" onClick={onPlayClick} aria-label={playing ? 'Pause' : 'Play'}>
-          {playing ? '❙❙' : '▶'}
-        </button>
-        <span
-          className="timecode"
-          title={`Source ${formatTimecode(sourceTime, project.fps)}`}
-        >
-          {formatTimecode(programTime, project.fps)}
-          <small>/ {formatTimecode(duration, project.fps)}</small>
-        </span>
-        <span className="vol-readout" title={`Volume ${Math.round(volume * 100)}`}>
-          <span className="audio-meter" title="Program voice level">
-            <i style={{ height: `${Math.min(100, Math.max(4, volume * 100))}%` }} data-hot={volume > 0.95 || undefined} />
-          </span>
-        </span>
-        {ducked && (
-          <span className="duck-flag" title="Voice is ducked under B-roll">
-            duck −{Math.round(duckAmount * 100)}
-          </span>
-        )}
-        <RateButtons />
-        <ZoomScaleButtons />
-        <RedactScaleButtons />
-        <TitleLookButtons onToast={onToast} />
-        <PicturePanButtons />
-        <LoopButton />
-        {(hasMarks || selectedWordIds.length > 0) && (
-          <button
-            className="chip"
-            title={
-              hasMarks
-                ? 'Play from In to Out (P)'
-                : 'Play the selected words (P)'
-            }
-            onClick={() => usePlayback.getState().playSelectionOrMarks()}
-          >
-            {playRangeLabel}
+        <div className="transport-readout">
+          <button className="play" onClick={onPlayClick} aria-label={playing ? 'Pause' : 'Play'}>
+            {playing ? '❙❙' : '▶'}
           </button>
-        )}
-        <MarkButtons />
-        {(project.markIn != null || project.markOut != null) && (
+          <span
+            className="timecode"
+            title={`Source ${formatTimecode(sourceTime, project.fps)}`}
+          >
+            {formatTimecode(programTime, project.fps)}
+            <small>/ {formatTimecode(duration, project.fps)}</small>
+          </span>
           <button
-            className="chip"
             type="button"
-            title="Clear In and Out"
-            onClick={() => onToast?.(clearMarksFromContext().toast)}
+            className="vol-readout"
+            data-muted={project.audioMaster.muted || undefined}
+            title={project.audioMaster.muted ? 'Turn preview sound on' : 'Mute preview sound'}
+            aria-label={project.audioMaster.muted ? 'Preview muted. Turn sound on' : 'Preview sound on. Mute'}
+            onClick={() =>
+              dispatch({ type: 'setAudioMaster', patch: { muted: !project.audioMaster.muted } })
+            }
           >
-            Clear
+            <span className="audio-meter" title="Program voice level">
+              <i style={{ height: `${Math.min(100, Math.max(4, volume * 100))}%` }} data-hot={volume > 0.95 || undefined} />
+            </span>
+            <span>{project.audioMaster.muted ? 'Muted' : `Sound ${Math.round(project.audioMaster.volume * 100)}%`}</span>
           </button>
-        )}
-        <OverflowMenu tone="chip" label="More" title="Safe, match frame, copy, full screen">
+          {ducked && (
+            <span className="duck-flag" title="Voice is ducked under B-roll">
+              duck −{Math.round(duckAmount * 100)}
+            </span>
+          )}
+        </div>
+        <div className="transport-context" aria-label="Selected picture controls">
+          <ZoomScaleButtons />
+          <RedactScaleButtons />
+          <TitleLookButtons onToast={onToast} programTime={controlTime} />
+          <PicturePanButtons />
+        </div>
+        <div className="transport-actions">
+          <OverflowMenu tone="chip" label={`${reviewRate}×`} title="Playback speed and looping">
+            <span className="overflow-section-label">Playback</span>
+            <RateButtons inMenu />
+            <LoopButton inMenu />
+          </OverflowMenu>
+          <OverflowMenu
+            tone="chip"
+            label={hasMarks ? 'Clip marked' : selectedWordIds.length ? 'Selection' : 'Mark clip'}
+            title="Choose where a clip starts and ends"
+          >
+            {(hasMarks || selectedWordIds.length > 0) && (
+              <button
+                className="overflow-item"
+                title={hasMarks ? 'Play from In to Out (P)' : 'Play the selected words (P)'}
+                onClick={() => usePlayback.getState().playSelectionOrMarks()}
+              >
+                {playRangeLabel}
+              </button>
+            )}
+            <MarkButtons inMenu />
+            {(project.markIn != null || project.markOut != null) && (
+              <button
+                className="overflow-item"
+                type="button"
+                title="Clear In and Out"
+                onClick={() => onToast?.(clearMarksFromContext().toast)}
+              >
+                Clear range
+              </button>
+            )}
+          </OverflowMenu>
+          <OverflowMenu tone="chip" label="View" title="Preview display and frame tools">
           <button
             className="overflow-item"
             type="button"
@@ -491,7 +526,8 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
             Copy frame
           </button>
           <FullScreenButton inMenu />
-        </OverflowMenu>
+          </OverflowMenu>
+        </div>
         <div className="beds" hidden>
           {(job.beds ?? []).map((bed) => (
             <audio key={bed.id ?? bed.path} data-bed={bed.id ?? bed.path} src={mediaUrl(bed.path)} preload="auto" />
@@ -563,10 +599,15 @@ function lookSwatch(value: string, fallback: string): string {
   return fallback
 }
 
-function TitleLookButtons({ onToast }: { onToast?: (msg: string) => void }) {
+function TitleLookButtons({
+  onToast,
+  programTime
+}: {
+  onToast?: (msg: string) => void
+  programTime: number
+}) {
   const project = useEditor((s) => s.project)
   const selectedClipId = useEditor((s) => s.selectedClipId)
-  const programTime = usePlayback((s) => s.programTime)
   const dispatch = useEditor((s) => s.dispatch)
   const clip = styleSourceClip(project, selectedClipId, programTime)
   if (!clip) return null
@@ -637,15 +678,15 @@ function ZoomScaleButtons() {
   )
 }
 
-function RateButtons() {
+function RateButtons({ inMenu = false }: { inMenu?: boolean } = {}) {
   const reviewRate = usePlayback((s) => s.reviewRate)
   const setReviewRate = usePlayback((s) => s.setReviewRate)
   return (
-    <span className="rate-chips">
+    <span className={inMenu ? 'overflow-section' : 'rate-chips'}>
       {REVIEW_RATES.map((rate) => (
         <button
           key={rate}
-          className="chip"
+          className={inMenu ? 'overflow-item' : 'chip'}
           data-active={reviewRate === rate}
           title={describeReviewRate(rate)}
           onClick={() => setReviewRate(rate)}
@@ -689,11 +730,11 @@ function FullScreenButton({ inMenu = false }: { inMenu?: boolean }) {
   )
 }
 
-function LoopButton() {
+function LoopButton({ inMenu = false }: { inMenu?: boolean } = {}) {
   const loop = usePlayback((s) => s.loop)
   return (
     <button
-      className="chip"
+      className={inMenu ? 'overflow-item' : 'chip'}
       data-active={loop}
       onClick={() => usePlayback.setState({ loop: !loop })}
       title="Loop the marked range, or the whole reel (/)"
@@ -882,25 +923,29 @@ function CropSafeOverlay({
   )
 }
 
-function MarkButtons() {
+function MarkButtons({ inMenu = false }: { inMenu?: boolean } = {}) {
   const project = useEditor((s) => s.project)
   const programTime = usePlayback((s) => s.programTime)
   const dispatch = useEditor((s) => s.dispatch)
   return (
-    <span className="marks">
+    <span className={inMenu ? 'overflow-section' : 'marks'}>
       <button
-        className="chip"
+        className={inMenu ? 'overflow-item' : 'chip'}
         title="Mark In at the playhead (I). With words selected, marks the start of the selection."
         onClick={() => dispatch({ type: 'setMarks', markIn: programTime })}
       >
-        In {project.markIn == null ? '—' : formatTimecode(project.markIn, project.fps)}
+        {project.markIn == null
+          ? inMenu ? 'Set start here' : 'Set start'
+          : `${inMenu ? 'Move start here' : 'Start'} · ${formatTimecode(project.markIn, project.fps)}`}
       </button>
       <button
-        className="chip"
+        className={inMenu ? 'overflow-item' : 'chip'}
         title="Mark Out at the playhead (O)"
         onClick={() => dispatch({ type: 'setMarks', markOut: programTime })}
       >
-        Out {project.markOut == null ? '—' : formatTimecode(project.markOut, project.fps)}
+        {project.markOut == null
+          ? inMenu ? 'Set end here' : 'Set end'
+          : `${inMenu ? 'Move end here' : 'End'} · ${formatTimecode(project.markOut, project.fps)}`}
       </button>
     </span>
   )

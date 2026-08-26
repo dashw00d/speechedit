@@ -50,13 +50,13 @@ export type BarJob = 'clean' | 'leftover' | 'leftover-decide' | 'retake' | 'mark
 
 /** One job on the row. Everything else waits in More. */
 export const BAR_NOW: Record<BarJob, readonly BarActionId[]> = {
-  clean: ['collapse-retakes', 'find-retakes', 'review', 'cut-fillers'],
+  clean: ['review', 'cut-fillers'],
   leftover: ['hear-leftover'],
   'leftover-decide': ['silent-demo', 'speed-4x', 'cut-leftover', 'keep-leftover', 'quiet-leftover'],
-  retake: ['collapse-retakes', 'find-retakes', 'review', 'cut-fillers'],
-  marked: ['cut-marked', 'tighten-marked', 'frame-9-16', 'export-marked', 'clear-marks'],
-  selection: ['protect-pause', 'cut-prev', 'cut-sentence', 'cut-paragraph', 'copy-quote', 'copy-frame', 'mark-clip', 'add-note', 'add-zoom', 'add-redaction', 'apply-style', 'remove-scene', 'merge-prev', 'merge-next', 'split-chapter'],
-  finish: ['watch', 'export', 'normalize', 'export-srt', 'copy-notes', 'copy-chapters', 'add-title', 'add-lower-third', 'chapter-names', 'caption-remaining', 'review']
+  retake: ['collapse-retakes', 'find-retakes', 'review'],
+  marked: ['cut-marked', 'export-marked', 'clear-marks'],
+  selection: ['protect-pause', 'cut-prev', 'cut-sentence', 'cut-paragraph', 'copy-quote', 'add-zoom'],
+  finish: ['watch', 'export']
 }
 
 export const BAR_MORE_ORDER: readonly BarActionId[] = [

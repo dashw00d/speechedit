@@ -1,6 +1,6 @@
 import type { Command, EditSuggestion, EditorialScene, Project } from '../types'
 import { renderAgentBrief } from './agentContext'
-import { completeOpenAI, endpointReady, extractJson } from './providers'
+import { endpointReady, extractJson, type ChatMessage } from './providers'
 import { inferScenesLocal, normalizeScenes, suggestionsFromScenes } from './sceneAnalysis'
 import type { ModelEndpoint } from './settings'
 import { uid } from './time'
@@ -133,27 +133,42 @@ Rules:
 export async function runIntelligence(
   project: Project,
   endpoint: ModelEndpoint,
-  intent?: string
+  intent?: string,
+  complete: IntelligenceComplete = completeFromHost
 ): Promise<IntelligenceDraft> {
   const prompt = intelligencePrompt(project, intent)
-  const text = await completeOpenAI(endpoint, [
+  const text = await complete(endpoint, [
     { role: 'system', content: prompt.system },
     { role: 'user', content: prompt.user }
-  ])
+  ], intent ? `Analyze · ${intent.slice(0, 54)}` : 'Analyze scenes and retakes')
   return parseIntelligence(extractJson(text))
+}
+
+export type IntelligenceComplete = (endpoint: ModelEndpoint, messages: ChatMessage[], label?: string) => Promise<string>
+
+async function completeFromHost(endpoint: ModelEndpoint, messages: ChatMessage[], label?: string): Promise<string> {
+  const { host } = await import('../host')
+  return host.complete({ endpoint, messages, label })
 }
 
 /** Heuristic always. Optional OpenAI-compatible /v1/chat/completions when the endpoint is ready. */
 export async function runSceneIntelligence(
   project: Project,
   endpoint?: ModelEndpoint,
-  intent?: string
+  intent?: string,
+  complete: IntelligenceComplete = completeFromHost
 ): Promise<IntelligenceDraft> {
+  let modelError = ''
   if (endpoint && endpointReady(endpoint)) {
     try {
-      return await runIntelligence(project, endpoint, intent ?? 'Group scenes and mark retakes. Do not cut yet.')
-    } catch {
-      /* fall through to local */
+      return await runIntelligence(
+        project,
+        endpoint,
+        intent ?? 'Group scenes and mark retakes. Do not cut yet.',
+        complete
+      )
+    } catch (err) {
+      modelError = err instanceof Error ? err.message : String(err)
     }
   }
   const local = inferScenesLocal(project)
@@ -161,6 +176,6 @@ export async function runSceneIntelligence(
     scenes: local.scenes,
     suggestions: local.suggestions,
     commands: [],
-    notes: `Local intelligence · ${local.scenes.length} scenes · ${local.suggestions.length} retake cuts (no LLM).`
+    notes: `Local intelligence · ${local.scenes.length} scenes · ${local.suggestions.length} retake cuts (no LLM).${modelError ? ` Model unavailable: ${modelError}` : ''}`
   }
 }

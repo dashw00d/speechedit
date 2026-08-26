@@ -22,13 +22,14 @@ describe('suggest bar plan', () => {
       'remove-scene',
       'merge-next'
     ])
-    expect(now).toEqual(['collapse-retakes', 'review', 'cut-fillers'])
+    expect(now).toEqual(['collapse-retakes', 'review'])
     expect(now).not.toContain('add-broll')
     expect(now).not.toContain('copy-frame')
     expect(now).not.toContain('remove-scene')
     expect(more).toContain('add-broll')
     expect(more).toContain('copy-frame')
     expect(more).toContain('remove-scene')
+    expect(more).toContain('cut-fillers')
   })
 
   test('pre-clean without retakes shows fillers, not decorate', () => {
@@ -159,9 +160,10 @@ describe('suggest bar plan', () => {
       'hear-leftover',
       'add-broll'
     ])
-    expect(now).toEqual(['copy-quote', 'copy-frame', 'mark-clip', 'add-note', 'add-zoom', 'add-redaction', 'remove-scene', 'merge-next'])
+    expect(now).toEqual(['copy-quote', 'add-zoom'])
     const parked = planSuggestBar(job, ['protect-pause', 'copy-quote', 'copy-frame'])
-    expect(parked.now).toEqual(['protect-pause', 'copy-quote', 'copy-frame'])
+    expect(parked.now).toEqual(['protect-pause', 'copy-quote'])
+    expect(parked.more).toContain('copy-frame')
     expect(more).toContain('hear-leftover')
     expect(more).toContain('add-broll')
   })
@@ -187,7 +189,10 @@ describe('suggest bar plan', () => {
       'protect-pause',
       'review'
     ])
-    expect(now).toEqual(['watch', 'export', 'copy-notes', 'copy-chapters', 'add-title', 'add-lower-third', 'chapter-names', 'caption-remaining', 'review'])
+    expect(now).toEqual(['watch', 'export'])
+    expect(more).toContain('copy-notes')
+    expect(more).toContain('add-title')
+    expect(more).toContain('review')
     expect(more).toContain('protect-pause')
     const afterCaptions = planSuggestBar(job, [
       'watch',
@@ -199,16 +204,8 @@ describe('suggest bar plan', () => {
       'add-title',
       'review'
     ])
-    expect(afterCaptions.now).toEqual([
-      'watch',
-      'export',
-      'normalize',
-      'export-srt',
-      'copy-notes',
-      'copy-chapters',
-      'add-title',
-      'review'
-    ])
+    expect(afterCaptions.now).toEqual(['watch', 'export'])
+    expect(afterCaptions.more).toEqual(['review', 'add-title', 'copy-notes', 'copy-chapters', 'normalize', 'export-srt'])
   })
 
   test('marked range replaces the decorate pile', () => {

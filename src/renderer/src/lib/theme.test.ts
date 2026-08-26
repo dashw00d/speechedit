@@ -11,6 +11,7 @@ import {
   defaultSpeakerColor,
   isThemeId,
   readStoredTheme,
+  stillDefaults,
   subscribeTheme
 } from './theme'
 
@@ -77,12 +78,15 @@ describe('theme registry', () => {
       expect(THEMES[id].speakers).toHaveLength(6)
       expect(THEMES[id].captionFill).toMatch(/^#[0-9A-Fa-f]{6}$/)
       expect(THEMES[id].captionStroke).toMatch(/^#[0-9A-Fa-f]{6}$/)
+      expect(THEMES[id].stillBackground).toMatch(/^#[0-9A-Fa-f]{6}$/)
+      expect(THEMES[id].stillForeground).toMatch(/^#[0-9A-Fa-f]{6}$/)
     }
   })
 
   test('js defaults come from the active theme', () => {
     expect(captionDefaults().fill).toBe(THEMES.dashwood.captionFill)
     expect(defaultSpeakerColor()).toBe(THEMES.dashwood.speakers[0])
+    expect(stillDefaults().background).toBe(THEMES.dashwood.stillBackground)
     expect(THEMES.party.captionFill).not.toBe(THEMES.dashwood.captionFill)
   })
 
