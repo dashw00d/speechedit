@@ -16,6 +16,7 @@ import { Timeline } from './components/Timeline'
 import { Transcript } from './components/Transcript'
 import { findMovableClip, programLength } from './lib/commands'
 import { toastForCommand, toastForEdit } from './lib/contextActions'
+import { TOAST_UNDONE, toastOffersUndo } from './lib/toastActions'
 import { copySelectedClip, pasteClipboard } from './lib/clipClipboard'
 import { copyQuoteFromContext } from './lib/quote'
 import { cutPreviousFromContext } from './lib/cutPrevious'
@@ -98,6 +99,7 @@ export function App() {
   const { menu: contextMenu, closeMenu: closeContextMenu } = useContextMenu()
   useClearSelection()
   const exporting = useEditor((s) => s.exporting)
+  const canUndo = useEditor((s) => s.past.length > 0)
   const recoveryOffer = useEditor((s) => s.recoveryOffer)
   const missingAssets = useEditor((s) => s.missingAssets)
   const selectedSuggestionId = useEditor((s) => s.selectedSuggestionId)
@@ -394,6 +396,19 @@ export function App() {
       {toast && (
         <div className="toast">
           <span role="status" aria-live="polite">{toast}</span>
+          {toastOffersUndo(toast, canUndo) && (
+            <button
+              type="button"
+              className="chip"
+              aria-label="Undo the last edit"
+              onClick={() => {
+                useEditor.getState().undo()
+                setToast(TOAST_UNDONE)
+              }}
+            >
+              Undo
+            </button>
+          )}
           <button type="button" className="chip" aria-label="Dismiss message" onClick={() => setToast(null)}>Dismiss</button>
         </div>
       )}

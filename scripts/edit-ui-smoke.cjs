@@ -16,10 +16,17 @@ app.setPath('userData', profile)
 app.on('window-all-closed', () => {})
 app.on('quit', () => rmSync(profile, { recursive: true, force: true }))
 const url = process.argv.find(arg => /^https?:\/\//.test(arg)) || 'http://127.0.0.1:3088'
-const timer = setTimeout(() => { console.error('Review UI timed out'); app.exit(1) }, 120000)
-async function waitFor(win, expression) {
-  for (let i = 0; i < 700; i++) { if (await win.webContents.executeJavaScript(expression)) return; await new Promise(r => setTimeout(r, 50)) }
-  throw Error('Missing ' + expression + '\n' + await win.webContents.executeJavaScript('document.body.innerText'))
+const RUN_MS = Number(process.env.SPEECHEDIT_SMOKE_RUN_MS || 240000)
+const WAIT_MS = Number(process.env.SPEECHEDIT_SMOKE_WAIT_MS || 90000)
+const timer = setTimeout(() => { console.error('Review UI timed out'); app.exit(1) }, RUN_MS)
+async function waitFor(win, expression, budgetMs = WAIT_MS) {
+  const started = Date.now()
+  while (Date.now() - started < budgetMs) {
+    if (await win.webContents.executeJavaScript(expression)) return
+    await new Promise(r => setTimeout(r, 50))
+  }
+  const elapsed = ((Date.now() - started) / 1000).toFixed(1)
+  throw Error(`Timed out after ${elapsed}s (budget ${(budgetMs / 1000).toFixed(0)}s) waiting for ${expression}\n` + await win.webContents.executeJavaScript('document.body.innerText'))
 }
 const click = (win, text) => win.webContents.executeJavaScript(`(() => { const b = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)}); if (!b || b.disabled) throw Error('Button unavailable: ' + ${JSON.stringify(text)}); b.click(); })()`)
 async function field(win, selector, value) {
@@ -83,7 +90,9 @@ app.whenReady().then(async () => {
   const original = await win.webContents.executeJavaScript(`JSON.parse(localStorage.getItem('speechedit:project'))`)
 
   await click(win, 'Share'); await click(win, 'Create editing link')
+  const shareStarted = Date.now()
   await waitFor(win, `!!document.querySelector('.review-link-box input')`)
+  console.log('Share creation wait', { seconds: Number(((Date.now() - shareStarted) / 1000).toFixed(2)), video: Boolean(videoFixture) })
   const link = await win.webContents.executeJavaScript(`document.querySelector('.review-link-box input').value`)
   if (!link.includes('/edit/')) throw Error('Not a full editor link')
   const reviewer = windowFor('reviewer')
