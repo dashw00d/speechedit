@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "linkHasEditPath": true,
+  "originalWord": "Welcome",
+  "edited": "SharedUndo",
+  "buttons": [
+    {
+      "text": "Undo",
+      "aria": "Undo the last edit"
+    },
+    {
+      "text": "Dismiss",
+      "aria": "Dismiss message"
+    }
+  ],
+  "undoFocused": "Undo the last edit",
+  "afterUndo": {
+    "word": "Welcome",
+    "toast": "Undid the last edit. Redo puts it back.",
+    "undoChipGone": true
+  },
+  "afterRedo": "SharedUndo"
+}

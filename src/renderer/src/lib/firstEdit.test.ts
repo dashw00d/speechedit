@@ -4,7 +4,9 @@ import { suggestTask } from './contextActions'
 import { createDemoProject } from './demo'
 import {
   applySafeFirstEdit,
+  applyStreamingFirstEdit,
   describeFirstEdit,
+  describeFirstEditResult,
   dismissLeftoverBreaths,
   looksSafeSpans,
   safeEditCandidates,
@@ -293,6 +295,40 @@ describe('safe first edit', () => {
       true
     )
     expect(hasUncollapsedRetakes(useEditor.getState().project)).toBe(false)
+  })
+
+  test('streaming first edit records its batch so the final toast still offers undo', () => {
+    const ready = projectFromTake({
+      asset: {
+        id: 'src',
+        path: '/tmp/a.mp4',
+        name: 'a.mp4',
+        kind: 'video',
+        duration: 12,
+        waveform: [],
+        sourceOffset: 0
+      },
+      words: [],
+      whispered: null,
+      analysis: { silence: [{ start: 2, end: 8 }], scenes: { times: [], staticRegions: [] }, loudness: [] }
+    })
+    useEditor.getState().loadProject(ready, { path: null, clean: false })
+    const skip = looksSafeSpans(useEditor.getState().project)
+    applySafeFirstEdit('looks')
+    useEditor.getState().replay({
+      type: 'attachTakeIntel',
+      assetId: 'src',
+      words: [
+        { id: 'h', text: 'hello', start: 0.2, end: 0.6, speaker: 'ryan', deleted: false },
+        { id: 'u', text: 'um', start: 0.9, end: 1.1, speaker: 'ryan', deleted: false },
+        { id: 'w', text: 'world', start: 9.5, end: 10.1, speaker: 'ryan', deleted: false }
+      ]
+    })
+    const session: { wordsUndo: boolean; lastEdit?: { applied: number; review: number; retakes: number; unit?: 'pause' | 'filler' } } = { wordsUndo: false }
+    const first = applyStreamingFirstEdit(skip, session)
+    expect(first?.applied).toBeGreaterThan(0)
+    expect(session.lastEdit).toEqual(first ?? undefined)
+    expect(describeFirstEditResult(first!, 'fillers')).toMatch(/Undo to put them back/)
   })
 
   test('Open media lands words and fillers as ASR chunks arrive', async () => {
