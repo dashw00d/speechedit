@@ -5,8 +5,10 @@ Task: RYA-180 (SPE-09). Bounded usability repair on the existing relink flow.
 ## Snapshot
 
 - Repo: `/home/ryan/dev/speechedit`
-- Base branch: `spe-05/first-session-polish` @ `fb7d84a` (clean, 0 dirty paths)
-- Working branch: `spe-09/preview-relink-recovery`
+- Original base: `spe-05/first-session-polish` @ `fb7d84a` (clean, 0 dirty paths)
+- Accepted base after the SPE-10 merge hold: `spe-05/first-session-polish` @ `080c874`
+  (SPE-10 / RYA-182 accepted at `080c874`, so SPE-09 was resumed and integrated)
+- Working branch: `spe-09/preview-relink-recovery` @ `3cf7033` (merge of `080c874` with the SPE-09 commit `10de317`; no conflicts, no file overlap)
 
 ## Friction reproduction (before)
 
@@ -50,7 +52,7 @@ and consistent with the existing controls.
 
 ## Checks
 
-- `bun test src/renderer/src/lib` -> 734 pass / 0 fail (baseline on the snapshot was 730 pass / 0 fail; 4 added in `exportRelinkRecovery.test.ts`).
+- `bun test src/renderer/src/lib` -> 738 pass / 0 fail on the merged accepted base (fb7d84a baseline 730; SPE-09 adds 4 in `exportRelinkRecovery.test.ts`; SPE-10 adds the rest).
 - `bun run typecheck` -> clean (`tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.node.json --noEmit`).
 - New regression tests in `src/renderer/src/lib/exportRelinkRecovery.test.ts`:
   1. blocked render offers one plain-language relink action (no "proxy" language)
