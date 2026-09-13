@@ -44,6 +44,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
     null
   )
   const programTime = usePlayback((s) => s.programTime)
+  const playing = usePlayback((s) => s.playing)
   const pps = usePlayback((s) => s.pixelsPerSecond)
   const seekProgram = usePlayback((s) => s.seekProgram)
   const setPps = usePlayback((s) => s.setPixelsPerSecond)
@@ -132,6 +133,23 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
     }
     setScrollTick((t) => t + 1)
   }, [pps, programTime])
+
+  // Follow the playback clock without seeking media or moving the vertical scroll.
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current
+    if (!playing || !scroll) return
+    const labelWidth = scroll.querySelector<HTMLElement>('.track-label')?.offsetWidth ?? LABEL_WIDTH
+    const viewport = scroll.clientWidth - labelWidth
+    if (viewport <= 0) return
+    const playhead = programTime * pps
+    const right = viewport * 0.8
+    const left = Math.min(24, viewport * 0.1)
+    const viewX = playhead - scroll.scrollLeft
+    const next = viewX > right ? playhead - right : viewX < left ? Math.max(0, playhead - viewport * 0.2) : scroll.scrollLeft
+    if (Math.abs(next - scroll.scrollLeft) < 1) return
+    scroll.scrollLeft = next
+    setScrollTick(t => t + 1)
+  }, [playing, programTime, pps, fitPps])
 
   function zoomAroundPlayhead(nextPps: number) {
     const scroll = scrollRef.current

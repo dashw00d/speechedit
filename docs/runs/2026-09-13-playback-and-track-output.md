@@ -26,3 +26,9 @@ The browser check clicks the actual eye buttons for Picture, Voice, Graphics, an
 Run `bun run smoke:real-speech --no-sandbox` and `bun run smoke:track-visibility --no-sandbox` with that environment variable. `SPEECHEDIT_CASES=loaded` runs just the busy-editor regression. Captured WAVs and the track screenshot are written to the corpus directory. No media is uploaded by these tests. The test fails on backward seeks or a duration mismatch over one second; transcripts alone are insufficient because speech recognition can conceal repetitions.
 
 Validation: 758 tests passed, TypeScript checks, theme guard, web and desktop builds. The existing short-recording EOF/replay smoke is also retained. Deployment must preserve `Permissions-Policy: microphone=(self)`; ServerChirp regenerates this header, so verify it after deploying.
+
+## Timeline follows playback
+
+Playback now advances the horizontal viewport when the playhead reaches 80% of the visible media lane, leaving room to see upcoming edits. Restarting playback brings an offscreen playhead back into view. Paused navigation remains manual; vertical scroll and media time are not changed by following. The viewport calculation measures the actual sticky label width.
+
+The real-speech smoke now zooms to 160 px/second and samples the rendered playhead against the visible lane. On the previous implementation it left the viewport after about 7.5 seconds (350 of 500 observations outside); the fix scrolled 2,888 px with no outside observations. Ordinary and busy-UI playback captured 25.003 and 25.035 seconds respectively, both with zero backward audio seeks. The smoke also checks manual paused scrolling and restarting at zero. TypeScript and the web build pass.
