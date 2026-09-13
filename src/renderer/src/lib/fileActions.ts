@@ -136,7 +136,7 @@ async function replayInspectedTake(openedId: string, take: InspectedTake): Promi
   if (!editor.project.assets[openedId]) return
   replayCommands(importedProxyCommands(editor.project, take))
   replayCommands(importedLooksCommands(useEditor.getState().project, take))
-  replayCommands(importedWordsCommands(useEditor.getState().project, take))
+  replayCommands(importedWordsCommands(useEditor.getState().project, take, true))
 }
 
 function inspectMediaCallbacks(

@@ -1,3 +1,4 @@
+import { addMissingTranscriptChapters } from './transcriptChapters'
 import { wordSelectionRanges } from './transcriptEdit'
 import {
   DEFAULT_CAPTION_STYLE,
@@ -1684,6 +1685,10 @@ export function applyCommand(project: Project, command: Command): Project {
             end: row.end + offset
           }))
         })
+      }
+      if (command.complete) {
+        const chaptered = addMissingTranscriptChapters(next, span)
+        if (chaptered !== next) next = touch(chaptered)
       }
       if (next === current) return current
       if (command.analysis && !command.words?.length) {

@@ -373,8 +373,10 @@ describe('export / import cancel without a long encode', () => {
       waveform: host.waveform,
       thumbnails: host.thumbnails,
       analyze: host.analyze,
-      silence: host.silence
+      silence: host.silence,
+      transcribe: host.transcribe
     }
+    host.transcribe = async () => null
     host.probe = async () => ({ duration: 2, hasVideo: true, hasAudio: true })
     host.waveform = async () => [0.1]
     host.thumbnails = async () => []

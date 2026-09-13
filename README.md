@@ -52,7 +52,9 @@ For a Docker service, build the included `Dockerfile`, expose port 3000, and mou
 
 Serve the public app over **HTTPS** and deploy the full web server plus its matching `src/renderer/dist` build. WebGPU uses the visitor's device; the ServerChirp machine does not need a GPU. The browser must expose WebGPU and return a usable GPU adapter. See the [ONNX Runtime deployment requirements](https://onnxruntime.ai/docs/tutorials/web/deploy.html).
 
-Whisper checks the adapter before loading the GPU model. If GPU model initialization fails, it starts CPU compatibility mode in a fresh worker. **View → Project settings → Whisper transcription** shows the active backend and why compatibility mode was selected. Check that message on the affected browser; HTTPS, browser graphics acceleration, and device drivers can affect GPU availability.
+Whisper checks the adapter before loading the GPU model. If GPU initialization or transcription fails, it starts CPU compatibility mode in a fresh worker and automatically retries the recording. **View → Project settings → Whisper transcription** shows the active backend and why compatibility mode was selected. Check that message on the affected browser; HTTPS, browser graphics acceleration, and device drivers can affect GPU availability.
+
+Recording imports start Whisper automatically, including CPU compatibility mode. Finished transcription creates missing chapters while preserving existing chapter edits. If transcription fails, the Transcript panel displays a large **TRANSCRIBE** button to retry. For older projects that already have words but no chapters, click **Find chapters** in the Transcript header. Transcription can also be rerun from **Transcript → Options**; Undo restores the previous result.
 
 Both the ONNX runtime `.mjs` and `.wasm` files ship as versioned assets with the editor. Keep their JavaScript and WebAssembly MIME types intact through the hosting proxy. Runtime loading does not require jsDelivr. Model downloads still use the server's Hugging Face cache, with a direct Hub fallback.
 
@@ -63,9 +65,12 @@ bun run build:web
 bun run start:web
 # In another terminal; requires a graphical session:
 bun run smoke:whisper http://127.0.0.1:3000
+bun run smoke:transcription http://127.0.0.1:3000
 ```
 
-The smoke test blocks the runtime CDN, checks that both runtime assets came from this server, initializes Whisper, and transcribes a one-second silent fixture. It reports `webgpu` or `wasm` and any fallback reason. Set `SPEECHEDIT_EXPECT_BACKEND=webgpu` to require a GPU result on a compatible test machine. Run against the same build as the local source; the script uses its worker asset filename.
+The transcription UI smoke test uses deterministic worker responses to check automatic CPU fallback, chapter creation, and recovery through the Transcribe button.
+
+The Whisper smoke test blocks the runtime CDN, checks that both runtime assets came from this server, initializes Whisper, and transcribes a one-second silent fixture. It reports `webgpu` or `wasm` and any fallback reason. Set `SPEECHEDIT_EXPECT_BACKEND=webgpu` to require a GPU result on a compatible test machine. Run against the same build as the local source; the script uses its worker asset filename.
 
 ## Windows validation build
 

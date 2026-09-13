@@ -1,3 +1,5 @@
+import { TranscriptTranscription } from './TranscriptTranscription'
+import { transcribeCurrentRecording } from '../lib/transcribeAction'
 import { addSceneLowerThirdsFromContext } from '../lib/lowerThird'
 import { generateCaptionsFromContext } from '../lib/captionGenerate'
 import { blocksEditorShortcut, shortcutLabel } from '../lib/keyboard'
@@ -658,6 +660,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           </small>
         </span>
         <span className="transcript-head-actions">
+          {words.length > 0 && !islands && !project.scenes.length && <button className="chip" disabled={Boolean(analyzing)} onClick={() => dispatch({ type: 'inferScenes' })}>Find chapters</button>}
           {words.length > 0 && <button className="chip" type="button" title="One-click cleanup, presentations, tutorials, and highlights" onClick={() => window.dispatchEvent(new Event('speechedit:quick-edit'))}>Quick edit</button>}
           {((words.some((word) => !word.deleted) && !islands) ||
             hasYouTubeChapters(project) ||
@@ -696,6 +699,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             </OverflowMenu>
           )}
           <OverflowMenu tone="chip" place="below" label="Options" title="Transcript options">
+            {hasSource && <button className="overflow-item" disabled={Boolean(analyzing)} onClick={() => void transcribeCurrentRecording(onToast ?? (() => undefined))}>Transcribe recording again</button>}
             {words.some((word) => !word.deleted) && <>
               <span className="overflow-section-label">Use this transcript</span>
               <button className="overflow-item" onClick={() => onToast?.(generateCaptionsFromContext().toast)}>Generate captions</button>
@@ -1049,6 +1053,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           {findNote && !findGroups.length && <span className="transcript-find-note">{findNote}</span>}
         </div>
       )}
+      <TranscriptTranscription onToast={onToast} />
       {words.length === 0 ? (
         hasSource || analyzing ? (
           <div className="start-guide compact">
@@ -1062,7 +1067,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             <p>
               {analyzing && !/transcript|whisper/i.test(analyzing)
                 ? 'Waveform, picture analysis, and preview work are separate from Whisper. Their live status is shown above.'
-                : 'Play and cut on the timeline. Words land when Whisper finishes, or drop a transcript here now.'}
+                : 'You can also drop an SRT, VTT, or Whisper JSON transcript here.'}
             </p>
           </div>
         ) : (

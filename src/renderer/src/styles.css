@@ -4204,3 +4204,27 @@ button:disabled,
 .workflow-result-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .workflow-notice { padding: 12px; margin: 16px 0 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg-input); font-size: var(--font-size-sm); line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 560px) { .workflow-sheet { padding: 16px; } .workflow-cards { grid-template-columns: 1fr; } .transcript-head { flex-wrap: wrap; gap: 8px; } }
+
+.transcript-transcription {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-5);
+  padding: var(--space-6);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-subtle);
+  text-align: center;
+}
+.transcript-transcription p { margin: 0; }
+.transcript-transcribe-button {
+  min-height: 56px;
+  width: 100%;
+  padding: var(--space-4) var(--space-6);
+  border: 0;
+  border-radius: var(--radius-button);
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+.transcript-transcribe-button:disabled { opacity: 0.65; }

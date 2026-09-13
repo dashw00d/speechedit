@@ -1,6 +1,6 @@
+import { transcribeCurrentRecording } from '../lib/transcribeAction'
 import { useEffect, useState, type ReactNode } from 'react'
 import { host, isElectron } from '../host'
-import { wordsFromAsr } from '../lib/asr'
 import {
   INTEL_PRESETS,
   TRANSCRIPT_PRESETS,
@@ -9,10 +9,8 @@ import {
   type AppSettings
 } from '../lib/settings'
 import { presetIdFor } from '../../../shared/asr'
-import { applySafeFirstEdit, describeFirstEdit } from '../lib/firstEdit'
-import { busyMessage, isJobCancelled, whisperMissingMessage } from '../lib/mediaJobs'
 import { useEditor } from '../store'
-import { failActivity, finishActivity, startActivity, updateActivity } from '../lib/activity'
+import { failActivity, finishActivity, startActivity } from '../lib/activity'
 import { useBrowserWhisperState } from '../lib/browserWhisper'
 
 type IntelligenceModel = {
@@ -29,9 +27,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
   const dispatch = useEditor((s) => s.dispatch)
   const analyzing = useEditor((s) => s.analyzing)
   const exporting = useEditor((s) => s.exporting)
-  const setAnalyzing = useEditor((s) => s.setAnalyzing)
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
-  const [busy, setBusy] = useState<string | null>(null)
   const [modelBusy, setModelBusy] = useState<'list' | 'test' | null>(null)
   const [intelModels, setIntelModels] = useState<IntelligenceModel[]>([])
   const [modelStatus, setModelStatus] = useState<{ state: 'ok' | 'info' | 'error'; message: string } | null>(null)
@@ -143,72 +139,6 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
     }
   }
 
-  async function transcribeAgain() {
-    if (exporting) {
-      onToast(busyMessage('export'))
-      return
-    }
-    if (analyzing) {
-      onToast(busyMessage('import'))
-      return
-    }
-    const asset = Object.values(project.assets).find((a) => a.path)
-    if (!asset?.path) {
-      onToast('Open media first.')
-      return
-    }
-    setBusy('transcribe')
-    setAnalyzing('transcript')
-    startActivity({
-      id: 'media:transcribe',
-      label: 'Whisper transcription',
-      detail: asset.name,
-      ratio: 0.05,
-      cancellable: 'import'
-    })
-    const stopProgress = host.onTranscribeProgress((info) => {
-      const detail =
-        info.stage === 'install'
-          ? 'Installing local Whisper'
-          : info.stage === 'audio'
-            ? 'Extracting speech audio'
-            : info.stage === 'run'
-              ? info.chunk
-                ? `Transcribing chunk ${info.chunk.finished} of ${info.chunk.total}`
-                : 'Recognizing words'
-              : info.stage === 'parse'
-                ? 'Building word timings'
-                : info.stage === 'done'
-                  ? 'Transcript ready'
-                  : 'Preparing audio'
-      setAnalyzing(`transcript:${info.stage}`)
-      updateActivity('media:transcribe', { ratio: info.ratio, detail })
-    })
-    let keepErrorVisible = false
-    try {
-      await host.beginJob('import')
-      const cues = await host.transcribe(asset.path, { ...settings.transcript, force: true })
-      const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
-      if (!words.length) {
-        throw new Error(isElectron ? `${whisperMissingMessage()} Or use speech islands.` : 'Local Whisper found no spoken words in this recording.')
-      }
-      useEditor.getState().loadTranscript(words)
-      const first = applySafeFirstEdit()
-      onToast(first ? describeFirstEdit(first.applied, first.review, first.retakes) : `Transcript · ${words.length} words`)
-    } catch (err) {
-      if (!isJobCancelled(err)) {
-        failActivity('media:transcribe', err instanceof Error ? err.message : 'Transcription failed.')
-        keepErrorVisible = true
-      }
-      onToast(isJobCancelled(err) ? 'Import cancelled.' : err instanceof Error ? err.message : 'Transcribe failed.')
-    } finally {
-      stopProgress()
-      await host.endJob('import').catch(() => undefined)
-      setAnalyzing(null)
-      setBusy(null)
-      if (!keepErrorVisible) finishActivity('media:transcribe')
-    }
-  }
 
   return (
     <div className="models-panel">
@@ -325,12 +255,12 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
       <div className="project-settings-actions">
         <button
           className="chip"
-          disabled={Boolean(busy) || Boolean(analyzing) || exporting || (isElectron && settings.transcript.kind === 'off')}
-          onClick={() => void transcribeAgain()}
+          disabled={Boolean(analyzing) || exporting || (isElectron && settings.transcript.kind === 'off')}
+          onClick={() => void transcribeCurrentRecording(onToast)}
         >
-          {busy === 'transcribe' ? 'Transcribing…' : 'Transcribe current media'}
+          {Boolean(analyzing?.startsWith('transcript')) ? 'Transcribing…' : 'Transcribe current media'}
         </button>
-        <small>{isElectron ? 'Replaces the current transcript using the Whisper settings above.' : 'Runs locally using the model already warming in the background.'}</small>
+        <small>{isElectron ? 'Transcribes the selected recording and adds missing chapters. Undo restores its previous transcript.' : 'Runs locally using the model already warming in the background.'}</small>
       </div>
       </section>
 

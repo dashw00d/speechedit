@@ -30,7 +30,7 @@ let loadPromise: Promise<BrowserWhisperState> | null = null
 let resolveLoad: ((state: BrowserWhisperState) => void) | null = null
 let rejectLoad: ((error: Error) => void) | null = null
 const listeners = new Set<() => void>()
-const requests = new Map<string, { resolve: (cues: AsrCue[]) => void; reject: (error: Error) => void }>()
+const requests = new Map<string, { audio: Float32Array; sent: boolean; resolve: (cues: AsrCue[]) => void; reject: (error: Error) => void }>()
 let cancellationVersion = 0
 
 function publish(next: BrowserWhisperState): void {
@@ -51,18 +51,61 @@ export function useBrowserWhisperState(): BrowserWhisperState {
   return useSyncExternalStore(subscribe, browserWhisperState, browserWhisperState)
 }
 
-function createWorker(): Worker {
+function pendingLoad(): Promise<BrowserWhisperState> {
+  if (loadPromise) return loadPromise
+  const pending = new Promise<BrowserWhisperState>((resolve, reject) => {
+    resolveLoad = resolve
+    rejectLoad = reject
+  }).finally(() => {
+    if (loadPromise === pending) loadPromise = null
+  })
+  loadPromise = pending
+  return pending
+}
+
+function sendPendingAudio(): void {
+  if (!worker || snapshot.state === 'loading') return
+  for (const [id, request] of requests) {
+    if (request.sent) continue
+    request.sent = true
+    // Keep the decoded audio until completion so GPU failure can retry on CPU.
+    const audio = request.audio.slice()
+    worker.postMessage({ type: 'transcribe', id, audio }, [audio.buffer])
+  }
+}
+
+function restartOnCpu(next: Worker, reason: string): void {
+  console.warn('[SpeechEdit Whisper]', reason)
+  next.terminate()
+  worker = null
+  for (const request of requests.values()) request.sent = false
+  publish({ state: 'loading', detail: 'Continuing transcription on the CPU', fallbackReason: reason })
+  void pendingLoad().catch(() => undefined)
+  try { createWorker(true).postMessage({ type: 'load', backend: 'wasm', fallbackReason: reason }) }
+  catch (error) { failWorker(worker, error instanceof Error ? error : new Error(String(error))) }
+}
+
+function failWorker(next: Worker | null, error: Error): void {
+  publish({ state: 'error', detail: error.message })
+  failActivity('system:browser-whisper', error.message)
+  rejectLoad?.(error)
+  for (const request of requests.values()) request.reject(error)
+  requests.clear()
+  resolveLoad = null
+  rejectLoad = null
+  next?.terminate()
+  worker = null
+}
+
+function createWorker(forceWasm = false): Worker {
   if (worker) return worker
   const next = new Worker(new URL('../workers/browserWhisper.worker.ts', import.meta.url), { type: 'module' })
   next.onmessage = (event: MessageEvent<WorkerMessage>) => {
     if (worker !== next) return
     const message = event.data
     if (message.type === 'fallback') {
-      console.warn('[SpeechEdit Whisper]', message.reason)
-      next.terminate()
-      worker = null
-      publish({ state: 'loading', detail: 'Starting the compatibility engine', fallbackReason: message.reason })
-      createWorker().postMessage({ type: 'load', backend: 'wasm', fallbackReason: message.reason })
+      if (forceWasm) failWorker(next, new Error(message.reason))
+      else restartOnCpu(next, message.reason)
       return
     }
     if (message.type === 'model-progress') {
@@ -87,6 +130,7 @@ function createWorker(): Worker {
       resolveLoad?.(ready)
       resolveLoad = null
       rejectLoad = null
+      sendPendingAudio()
       return
     }
     if (message.type === 'transcription-status') {
@@ -101,33 +145,17 @@ function createWorker(): Worker {
       return
     }
     const error = new Error(message.error || 'Browser Whisper failed.')
-    if (message.id) {
-      const request = requests.get(message.id)
-      requests.delete(message.id)
-      request?.reject(error)
-      publish({ ...snapshot, state: 'ready', detail: 'Ready for another recording' })
+    if (message.id && requests.has(message.id) && snapshot.backend === 'webgpu' && !forceWasm) {
+      restartOnCpu(next, `GPU transcription failed: ${error.message}`)
       return
     }
-    publish({ state: 'error', detail: error.message })
-    failActivity('system:browser-whisper', error.message)
-    next.terminate()
-    worker = null
-    rejectLoad?.(error)
-    resolveLoad = null
-    rejectLoad = null
+    failWorker(next, error)
   }
   next.onerror = (event) => {
     if (worker !== next) return
     const error = new Error(event.message || 'Browser Whisper worker stopped.')
-    publish({ state: 'error', detail: error.message })
-    failActivity('system:browser-whisper', error.message)
-    rejectLoad?.(error)
-    for (const request of requests.values()) request.reject(error)
-    requests.clear()
-    resolveLoad = null
-    rejectLoad = null
-    next.terminate()
-    worker = null
+    if (!forceWasm && (loadPromise || requests.size)) restartOnCpu(next, `GPU worker stopped: ${error.message}`)
+    else failWorker(next, error)
   }
   worker = next
   return next
@@ -149,14 +177,12 @@ export function preloadBrowserWhisper(): Promise<BrowserWhisperState> {
     label: 'Preparing local Whisper',
     detail: 'Starting private transcription'
   })
-  loadPromise = new Promise<BrowserWhisperState>((resolve, reject) => {
-    resolveLoad = resolve
-    rejectLoad = reject
-    createWorker().postMessage({ type: 'load' })
-  }).finally(() => {
-    loadPromise = null
-  })
-  return loadPromise
+  const pending = pendingLoad()
+  try { createWorker().postMessage({ type: 'load' }) }
+  catch (error) {
+    failWorker(worker, error instanceof Error ? error : new Error(String(error)))
+  }
+  return pending
 }
 
 async function decodeBrowserAudio(filePath: string): Promise<Float32Array> {
@@ -198,8 +224,8 @@ export async function transcribeBrowserMedia(
   onProgress?.({ stage: 'run', ratio: 0.3 })
   publish({ ...snapshot, state: 'transcribing', detail: 'Listening locally · your media stays on this device' })
   const cues = await new Promise<AsrCue[]>((resolve, reject) => {
-    requests.set(id, { resolve, reject })
-    createWorker().postMessage({ type: 'transcribe', id, audio }, [audio.buffer])
+    requests.set(id, { audio, sent: false, resolve, reject })
+    sendPendingAudio()
   })
   if (version !== cancellationVersion) throw new JobCancelled('import')
   onProgress?.({ stage: 'parse', ratio: 0.96, cues })
@@ -219,6 +245,6 @@ export function cancelBrowserWhisper(): void {
   loadPromise = null
   resolveLoad = null
   rejectLoad = null
-  publish({ state: 'idle', detail: 'Restarting local transcription' })
-  window.setTimeout(() => void preloadBrowserWhisper().catch(() => undefined), 250)
+  publish({ state: 'idle', detail: 'Transcription cancelled. Ready to try again.' })
+  finishActivity('system:browser-whisper')
 }

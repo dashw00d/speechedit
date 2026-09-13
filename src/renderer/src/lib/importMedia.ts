@@ -322,20 +322,21 @@ export function importedLooksCommands(project: Project, take: InspectedTake): Co
   ]
 }
 
-export function importedWordsCommands(project: Project, take: InspectedTake): Command[] {
+export function importedWordsCommands(project: Project, take: InspectedTake, complete = false): Command[] {
   if (!project.assets[take.asset.id] || !take.words.length) return []
   return [
     {
       type: 'attachTakeIntel',
       assetId: take.asset.id,
       words: take.words,
-      whispered: take.whispered
+      whispered: take.whispered,
+      complete
     }
   ]
 }
 
 export function importedTakeCommands(project: Project, take: InspectedTake): Command[] {
-  return [...importedLooksCommands(project, take), ...importedWordsCommands(project, take)]
+  return [...importedLooksCommands(project, take), ...importedWordsCommands(project, take, true)]
 }
 
 export function fillImportedTake(project: Project, take: InspectedTake): Project {

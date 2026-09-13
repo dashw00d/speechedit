@@ -444,6 +444,8 @@ export type Command =
   | {
       type: 'attachTakeIntel'
       assetId: string
+      /** Final ASR result: add missing chapters without replacing existing ones. */
+      complete?: boolean
       words?: Word[]
       analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'> & {
         sceneTimes?: number[]
