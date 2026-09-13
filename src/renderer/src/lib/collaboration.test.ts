@@ -48,6 +48,26 @@ describe('shared editing document', () => {
     expect(conflict.conflicts.some(p => p.includes('.text'))).toBe(true)
     expect(conflict.project.transcript.words[0].text).toBe('Welcome')
   })
+  test('concurrent track moves conflict without duplicating or resurrecting clips', () => {
+    let base = prepareSharedProject(fixture())
+    base = applyCommand(base, { type: 'addTitle', start: 0, duration: 2, text: 'Move me' })
+    const clip = base.tracks.flatMap(t => t.clips).find(c => c.text === 'Move me')!
+    base.tracks.push({ id: 'destA', type: 'overlay', name: 'A', locked: false, muted: false, hidden: false, clips: [] }, { id: 'destB', type: 'overlay', name: 'B', locked: false, muted: false, hidden: false, clips: [] })
+    const moved = (dest: string) => ({ ...base, tracks: base.tracks.map(t => ({ ...t, clips: [...t.clips.filter(c => c.id !== clip.id), ...(t.id === dest ? [{ ...clip, trackId: dest }] : [])] })) })
+    const result = mergeSharedProjects(base, moved('destA'), moved('destB'))
+    expect(result.conflicts).toContain(`clips[${clip.id}].trackId`)
+    expect(result.project.tracks.flatMap(t => t.clips).filter(c => c.id === clip.id).map(c => c.trackId)).toEqual(['destA'])
+    const deleted = { ...base, tracks: base.tracks.map(t => ({ ...t, clips: t.clips.filter(c => c.id !== clip.id) })) }
+    const deletion = mergeSharedProjects(base, deleted, moved('destB'))
+    expect(deletion.conflicts).toContain(`clips[${clip.id}]`)
+    expect(deletion.project.tracks.flatMap(t => t.clips).some(c => c.id === clip.id)).toBe(false)
+    const changed = applyCommand(base, { type: 'setText', clipId: clip.id, text: 'Updated independently' })
+    const independent = mergeSharedProjects(base, moved('destA'), changed)
+    expect(independent.conflicts).toEqual([])
+    expect(independent.project.tracks.find(t => t.id === 'destA')!.clips[0].text).toBe('Updated independently')
+    const bad = moved('destA'); bad.tracks.find(t => t.id === 'destB')!.clips.push({ ...clip, trackId: 'destB' })
+    expect(() => sharedProject(bad)).toThrow('reference')
+  })
   test('deleting an object while someone edits it conflicts; independent additions survive', () => {
     const base = prepareSharedProject(fixture())
     base.tags = [{ id: 'tag', start: 0, end: 1, kind: 'note', label: 'Initial' }]

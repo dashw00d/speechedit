@@ -35,11 +35,10 @@ export function sharedProject(raw: unknown): Project {
     if (key !== asset.id) throw new Error('Media identifiers do not match.')
     assets[key] = { ...asset, path: `shared-media:${key}` }
   }
-  const seen = new Set<string>()
+  const seen = new Set<string>(), clips = new Set<string>()
   for (const track of parsed.tracks) {
     if (seen.has(track.id)) throw new Error('Duplicate track identifier.')
     seen.add(track.id)
-    const clips = new Set<string>()
     for (const c of track.clips) {
       if (c.trackId !== track.id || clips.has(c.id) || (c.assetId && !assets[c.assetId])) throw new Error('Invalid clip media or track reference.')
       clips.add(c.id)
@@ -73,5 +72,25 @@ export function mergeSharedProjects(base: Project, local: Project, remote: Proje
     }
     conflicts.push(path); return l
   }
-  return { project: merge(base, local, remote, ''), conflicts }
+  // A clip can move between tracks. Merge its identity across the whole timeline so two moves
+  // cannot create duplicate clips, and moving a deleted clip cannot resurrect it silently.
+  const clipMap = (p: Project) => new Map(p.tracks.flatMap(t => t.clips.map(c => [c.id, c] as const)))
+  const bm = clipMap(base), lm = clipMap(local), rm = clipMap(remote)
+  const moved = new Set([...new Set([...bm.keys(), ...lm.keys(), ...rm.keys()])].filter(id => {
+    const locations = [bm.get(id)?.trackId, lm.get(id)?.trackId, rm.get(id)?.trackId].filter(Boolean)
+    return new Set(locations).size > 1
+  }))
+  const withoutMoved = (p: Project) => ({ ...p, tracks: p.tracks.map(t => ({ ...t, clips: t.clips.filter(c => !moved.has(c.id)) })) })
+  const project: Project = merge(withoutMoved(base), withoutMoved(local), withoutMoved(remote), '')
+  for (const id of moved) {
+    let clip = merge(bm.get(id), lm.get(id), rm.get(id), `clips[${id}]`)
+    if (!clip) continue
+    let track = project.tracks.find(t => t.id === clip.trackId)
+    if (!track) {
+      conflicts.push(`clips[${id}].trackId`)
+      clip = lm.get(id); track = project.tracks.find(t => t.id === clip?.trackId)
+    }
+    if (track && clip) track.clips = [...track.clips, clip].sort((a, b) => a.start - b.start)
+  }
+  return { project, conflicts }
 }
