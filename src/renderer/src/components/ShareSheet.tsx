@@ -51,8 +51,20 @@ export function ShareSheet({ onClose, onToast }: { onClose: () => void; onToast:
       const assets = mode === 'edit' ? Object.values(project.assets) : snapshot.assets.map(a => project.assets[a.id])
       for (let i = 0; i < assets.length; i++) {
         const asset = assets[i]
+        let modeLabel = 'fast encoder', detail = '', started = performance.now()
         setStatus(`Compressing ${asset.name} (${i + 1}/${assets.length})`)
-        const blob = await encodeReviewProxy(asset, controller.signal, progress => setRatio((i + progress * 0.9) / assets.length), () => setStatus(`Compressing ${asset.name} at playback speed · keep this tab visible`))
+        const blob = await encodeReviewProxy(asset, controller.signal, progress => {
+          setRatio((i + progress * 0.9) / assets.length)
+          const elapsed = (performance.now() - started) / 1000
+          const remaining = progress > 0.02 && elapsed > 2 ? Math.ceil(elapsed * (1 - progress) / progress) : null
+          const eta = remaining == null ? '' : remaining >= 60 ? ` · about ${Math.ceil(remaining / 60)} min left` : ` · about ${remaining}s left`
+          setStatus(`${asset.name} · ${modeLabel}${eta}${detail}`)
+        }, value => {
+          started = performance.now()
+          modeLabel = value.mode === 'cached' ? 'reusing saved preview' : value.mode === 'playback' ? 'playback speed — keep this tab visible' : `${value.mode === 'fast' ? 'fast' : 'compatibility'} encoder`
+          detail = value.mode === 'playback' && value.detail ? `. ${value.detail}` : ''
+          setStatus(`${asset.name} · ${modeLabel}${detail}`)
+        })
         setStatus(`Uploading ${asset.name} · ${(blob.size / 1024 / 1024).toFixed(1)} MiB`)
         await uploadReviewPreview(made, asset.id, blob, controller.signal, progress => setRatio((i + 0.9 + progress * 0.1) / assets.length))
         setRatio((i + 1) / assets.length)

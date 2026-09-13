@@ -94,7 +94,8 @@ export class CollaborationClient {
       room = await reviewRequest<ReviewRoom>(`/${this.id}/assets`, this.key, 'POST', { asset: local.assets[asset.id] }, this.abort.signal)
       if (room.media[asset.id]) continue
       this.report(`Compressing ${asset.name}…`)
-      const blob = await encodeReviewProxy(asset, this.abort.signal, ratio => this.report(`Compressing ${asset.name} · ${Math.round(ratio * 100)}%`))
+      let encodingMode = 'fast encoder'
+      const blob = await encodeReviewProxy(asset, this.abort.signal, ratio => this.report(`Compressing ${asset.name} · ${Math.round(ratio * 100)}% · ${encodingMode}`), status => { encodingMode = status.mode === 'cached' ? 'saved preview' : status.mode === 'playback' ? 'playback speed' : `${status.mode} encoder`; this.report(`${asset.name} · ${encodingMode}`, status.mode === 'playback' ? status.detail : undefined) })
       this.report(`Uploading ${asset.name}…`)
       await uploadReviewPreview({ id: this.id, ownerKey: this.key, reviewerKey: this.key, projectId: this.base.id }, asset.id, blob, this.abort.signal)
     }

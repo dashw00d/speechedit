@@ -11,6 +11,7 @@
     "start:web": "bun scripts/web-server.ts",
     "smoke:whisper": "env -u ELECTRON_RUN_AS_NODE electron scripts/browser-whisper-smoke.cjs",
     "smoke:transcription": "env -u ELECTRON_RUN_AS_NODE electron scripts/transcription-ui-smoke.cjs",
+    "smoke:proxy": "env -u ELECTRON_RUN_AS_NODE electron scripts/proxy-ui-smoke.cjs",
     "smoke:edit": "env -u ELECTRON_RUN_AS_NODE electron scripts/edit-ui-smoke.cjs",
     "smoke:review": "env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
     "build": "electron-vite build",

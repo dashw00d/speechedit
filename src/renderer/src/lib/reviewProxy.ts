@@ -1,3 +1,6 @@
+import { browserMediaForPath } from './browserMediaStore'
+import { encodeFastReviewProxy, ProxyLimitError } from './fastReviewProxy'
+import { cachedReviewProxy, cacheReviewProxy } from './reviewProxyCache'
 import type { Asset } from '../types'
 import { mediaUrl } from '../host'
 import { REVIEW_MAX_ASSET_BYTES } from '../../../shared/review'
@@ -77,7 +80,7 @@ async function encodeRealtimeProxy(asset: Asset, signal: AbortSignal, progress: 
 }
 
 /** Timestamp-based conversion runs as fast as decoding permits; playback capture remains a compatibility fallback. */
-export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progress: (ratio: number) => void, onFallback?: () => void): Promise<Blob> {
+async function encodeCompatibleProxy(asset: Asset, signal: AbortSignal, progress: (ratio: number) => void, onFallback?: (reason: string) => void): Promise<Blob> {
   signal.throwIfAborted()
   if (asset.kind === 'image') {
     const response = await fetch(mediaUrl(asset.path), { signal })
@@ -95,15 +98,16 @@ export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progr
   let conversion: import('mediabunny').Conversion | undefined
   const abort = () => { void conversion?.cancel().catch(() => undefined) }
   try {
-    const { Input, Output, UrlSource, ALL_FORMATS, WebMOutputFormat, BufferTarget, Conversion } = await import('mediabunny')
-    input = new Input({ source: new UrlSource(mediaUrl(asset.path)), formats: ALL_FORMATS })
+    const { Input, Output, UrlSource, BlobSource, ALL_FORMATS, WebMOutputFormat, BufferTarget, Conversion } = await import('mediabunny')
+    const file = browserMediaForPath(asset.path)
+    input = new Input({ source: file ? new BlobSource(file) : new UrlSource(mediaUrl(asset.path)), formats: ALL_FORMATS })
     const duration = await input.computeDuration()
     if (!Number.isFinite(duration) || Math.abs(duration - asset.duration) > Math.max(1, asset.duration * 0.01)) throw new Error('Source duration changed.')
     const target = new BufferTarget()
     const output = new Output({ target, format: new WebMOutputFormat() })
     const track = await input.getPrimaryVideoTrack()
     const width = track ? await track.getDisplayWidth() : 640, height = track ? await track.getDisplayHeight() : 360, scale = Math.min(1, 640 / width, 360 / height)
-    conversion = await Conversion.init({ input, output,
+    conversion = await Conversion.init({ input, output, tracks: 'primary',
       video: asset.kind === 'video' ? { codec: 'vp8', width: Math.max(2, Math.round(width * scale / 2) * 2), height: Math.max(2, Math.round(height * scale / 2) * 2), fit: 'contain', allowRotationMetadata: false, frameRate: 8, bitrate: 180_000, keyFrameInterval: 1, hardwareAcceleration: 'prefer-software', forceTranscode: true } : { discard: true },
       audio: { codec: 'opus', numberOfChannels: 2, sampleRate: 48000, bitrate: 48_000, forceTranscode: true }
     })
@@ -117,7 +121,34 @@ export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progr
   } catch (error) {
     if (signal.aborted) throw error
     await conversion?.cancel().catch(() => undefined)
-    onFallback?.(); progress(0)
+    onFallback?.(error instanceof Error ? error.message : 'Fast encoding is unavailable.'); progress(0)
   } finally { signal.removeEventListener('abort', abort); input?.dispose() }
   return encodeRealtimeProxy(asset, signal, progress)
+}
+
+export interface ProxyEncodingStatus { mode: 'fast' | 'compatible' | 'playback' | 'cached'; detail?: string }
+export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progress: (ratio: number) => void, status?: (value: ProxyEncodingStatus) => void): Promise<Blob> {
+  signal.throwIfAborted()
+  const file = browserMediaForPath(asset.path)
+  const key = file ? JSON.stringify(['proxy-v2-8fps-realtime', asset.kind, asset.duration, file.name, file.size, file.lastModified]) : undefined
+  if (key) {
+    const saved = await cachedReviewProxy(key)
+    signal.throwIfAborted()
+    if (saved) { status?.({ mode: 'cached' }); progress(1); return saved }
+  }
+  let blob: Blob
+  try {
+    status?.({ mode: 'fast' })
+    blob = asset.kind === 'image' ? await encodeCompatibleProxy(asset, signal, progress)
+      : await encodeFastReviewProxy(file || mediaUrl(asset.path), asset.kind, asset.duration, signal, progress)
+  } catch (error) {
+    if (signal.aborted || error instanceof ProxyLimitError) throw error
+    status?.({ mode: 'compatible', detail: error instanceof Error ? error.message : String(error) })
+    progress(0)
+    blob = await encodeCompatibleProxy(asset, signal, progress, detail => status?.({ mode: 'playback', detail }))
+  }
+  signal.throwIfAborted()
+  if (key) await cacheReviewProxy(key, blob)
+  signal.throwIfAborted()
+  return blob
 }
