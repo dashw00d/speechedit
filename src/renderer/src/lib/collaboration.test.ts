@@ -1,3 +1,4 @@
+import { resolveSegments } from './resolver'
 import { buildExportJob } from './exportJob'
 import { validateExportJob } from './exportGraph'
 import { describe, test, expect } from 'bun:test'
@@ -30,8 +31,9 @@ describe('shared editing document', () => {
     let p = fixture()
     p = applyCommand(p, { type: 'addTitle', start: 0, duration: 2, text: 'My title' })
     p = applyCommand(p, { type: 'setPicture', transform: { scale: 1.4 } })
+    p = applyCommand(p, { type: 'setSegmentStyle', segmentId: resolveSegments(p)[0].id, patch: { volume: 0.6 } })
     const safe = prepareSharedProject(p)
-    expect(safe.tracks).toEqual(p.tracks); expect(safe.picture.scale).toBe(1.4)
+    expect(safe.tracks).toEqual(p.tracks); expect(safe.styles).toEqual(p.styles); expect(safe.picture.scale).toBe(1.4)
     expect(JSON.stringify(safe)).not.toContain('/private'); expect(JSON.stringify(safe)).not.toContain('private-key')
     expect(() => sharedProject({ ...safe, tracks: [{ ...safe.tracks[0], clips: [{ ...safe.tracks[0].clips[0], assetId: 'missing' }] }] })).toThrow('reference')
     expect(() => sharedProject({ ...safe, fps: Infinity })).toThrow()

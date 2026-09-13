@@ -1,18 +1,19 @@
 import { z } from 'zod'
 import type { Project, Asset } from '../renderer/src/types'
 
-const id = z.string().regex(/^[a-zA-Z0-9_-]{1,120}$/).refine(s => !['__proto__', 'constructor', 'prototype'].includes(s))
+const id = z.string().min(1).max(120).refine(s => !['__proto__', 'constructor', 'prototype'].includes(s))
+const mediaId = id.regex(/^[a-zA-Z0-9_-]{1,120}$/)
 const text = z.string().max(10000), num = z.number().finite().min(-1e9).max(1e9), time = z.number().min(0).max(86400)
 const span = { start: time, end: time }, crop = z.object({ x: num, y: num, w: num, h: num })
 const transform = z.object({ x: num, y: num, scale: num, rotation: num, opacity: num, crop })
 const keys = z.array(z.object({ time, transform: transform.partial(), easing: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']) })).max(10000)
 const style = z.object({ fontSize: num, align: z.enum(['left', 'center', 'right']), fill: text, stroke: text, position: z.enum(['lower', 'center', 'upper']) })
-export const sharedAssetSchema = z.object({ id, name: z.string().max(300), kind: z.enum(['video', 'audio', 'image']), duration: time,
+export const sharedAssetSchema = z.object({ id: mediaId, name: z.string().max(300), kind: z.enum(['video', 'audio', 'image']), duration: time,
   width: num.optional(), height: num.optional(), fps: num.optional(), sampleRate: num.optional(), waveform: z.array(z.number().min(0).max(1)).max(2000), sourceOffset: time.optional() })
-const clip = z.object({ id, trackId: id, assetId: id.optional(), start: time, duration: time, inPoint: time, outPoint: time, linkedClipId: id.optional(), transform, volume: num, muted: z.boolean(), speed: num, fadeIn: time, fadeOut: time, keyframes: keys, pan: num.optional(), text: text.optional(), style: style.optional(), effect: z.enum(['none', 'blur']).optional(), kind: z.enum(['media', 'slug']).optional(), auto: z.boolean().optional() })
+const clip = z.object({ id, trackId: id, assetId: mediaId.optional(), start: time, duration: time, inPoint: time, outPoint: time, linkedClipId: id.optional(), transform, volume: num, muted: z.boolean(), speed: num, fadeIn: time, fadeOut: time, keyframes: keys, pan: num.optional(), text: text.optional(), style: style.optional(), effect: z.enum(['none', 'blur']).optional(), kind: z.enum(['media', 'slug']).optional(), auto: z.boolean().optional() })
 const rows = <T extends z.ZodType>(schema: T, max = 20000) => z.array(schema).max(max)
 const schema = z.object({ id, name: z.string().max(300), fps: num.positive(), width: num.positive(), height: num.positive(), sourceDuration: time,
-  assets: z.record(id, sharedAssetSchema),
+  assets: z.record(mediaId, sharedAssetSchema),
   tracks: rows(z.object({ id, type: z.enum(['video', 'audio', 'overlay', 'caption']), name: text, locked: z.boolean(), muted: z.boolean(), hidden: z.boolean(), solo: z.boolean().optional(), clips: rows(clip) }), 1000),
   transcript: z.object({ words: rows(z.object({ id, text, ...span, speaker: id, deleted: z.boolean(), origin: z.literal('island').optional() }), 150000), speakers: rows(z.object({ id, name: text, color: text }), 1000) }),
   cuts: rows(z.object({ id, ...span, source: z.enum(['transcript', 'silence', 'manual', 'filler', 'repeat', 'model']) })), splits: rows(time),
