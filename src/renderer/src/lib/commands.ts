@@ -1584,6 +1584,7 @@ export function applyCommand(project: Project, command: Command): Project {
           [command.assetId]: {
             ...asset,
             path: command.path,
+            proxyOnly: false,
             browserMediaKey: command.browserMediaKey,
             proxyPath: undefined,
             waveform: [],

@@ -1,3 +1,4 @@
+import type { Project, Asset } from '../renderer/src/types'
 /** The review contract contains source coordinates and decisions, never original media paths. */
 export interface ReviewSpan { start: number; end: number }
 export interface ReviewAsset { id: string; name: string; kind: 'video' | 'audio'; duration: number; sourceOffset: number; waveform: number[] }
@@ -29,6 +30,11 @@ export interface ReviewProposal {
 export interface ReviewRoom {
   id: string
   revision: number
+  mode?: 'audit' | 'edit'
+  project?: Project
+  projectRevision?: number
+  mediaAssets?: Record<string, Asset>
+  history?: { revision: number; author: string; at: number }[]
   snapshot: ReviewSnapshot
   proposals: ReviewProposal[]
   media: Record<string, { bytes: number; mime: string }>

@@ -102,6 +102,7 @@ function buildProgramExportJob(project: Project, output: string, opts: ExportVid
     }))
   return {
     input: asset?.path ?? '',
+    ...(Object.values(project.assets).some(a => a.proxyOnly) ? { proxyOnly: true } : {}),
     inputs,
     output,
     fps: current.fps,

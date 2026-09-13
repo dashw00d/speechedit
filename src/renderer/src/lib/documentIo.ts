@@ -1,3 +1,4 @@
+import { isSharedEditor, sharedSession } from './sharedSession'
 import { host, isElectron } from '../host'
 import { assetNeedsProxy, proxyGopSeekable } from '../../../shared/proxy'
 import { flushWorkspace, useEditor } from '../store'
@@ -228,6 +229,7 @@ export async function discardRecovery(): Promise<void> {
 }
 
 export async function saveCurrentDocument(opts?: { saveAs?: boolean }): Promise<string> {
+  if (isSharedEditor()) return sharedSession.save ? sharedSession.save() : 'Connecting to shared project'
   const editor = useEditor.getState()
   const envelope = serializeDocument(editor.project, editor.documentPath)
   const suggested = editor.documentPath || suggestedDocumentName(editor.project)
@@ -245,6 +247,7 @@ export async function saveCurrentDocument(opts?: { saveAs?: boolean }): Promise<
 }
 
 export async function openCurrentDocument(): Promise<string> {
+  if (isSharedEditor()) throw new Error('Open your workspace in another tab to switch projects.')
   const result = await host.openProject()
   if (!result) return ''
   const opened = openDocumentFromRaw(result.project, result.path)

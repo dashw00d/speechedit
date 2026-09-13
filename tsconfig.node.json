@@ -18,7 +18,9 @@
     "src/shared/**/*",
     "electron.vite.config.ts",
     "vite.web.config.ts",
-    "src/renderer/src/lib/exportGraph.ts"
+    "src/renderer/src/lib/exportGraph.ts",
+    "src/renderer/src/types.ts",
+    "src/renderer/src/lib/theme.ts"
   ],
   "exclude": ["src/main/**/*.test.ts", "src/shared/**/*.test.ts"]
 }

@@ -1,3 +1,4 @@
+import { isSharedEditor } from './sharedSession'
 import { host, isElectron, mediaDisplayName, registerBrowserMedia } from '../host'
 import { assetNeedsProxy } from '../../../shared/proxy'
 import { applyInterchange, pickInterchange } from './interchange'
@@ -221,6 +222,7 @@ function inspectMediaCallbacks(
 }
 
 export async function importMediaFromPath(file: string, onToast: ToastFn): Promise<void> {
+  if (isSharedEditor()) return appendTakeAction(onToast, file)
   const editor = useEditor.getState()
   const busy = importBusyToast(editor.exporting, editor.analyzing)
   if (busy) {
@@ -271,6 +273,7 @@ export async function importMediaFromPath(file: string, onToast: ToastFn): Promi
 }
 
 export async function importMediaAction(onToast: ToastFn): Promise<void> {
+  if (isSharedEditor()) return appendTakeAction(onToast)
   const editor = useEditor.getState()
   const busy = importBusyToast(editor.exporting, editor.analyzing)
   if (busy) {
@@ -293,7 +296,7 @@ export async function importMediaAction(onToast: ToastFn): Promise<void> {
   await importMediaFromPath(file, onToast)
 }
 
-export async function appendTakeAction(onToast: ToastFn): Promise<void> {
+export async function appendTakeAction(onToast: ToastFn, providedFile?: string): Promise<void> {
   const editor = useEditor.getState()
   const busy = importBusyToast(editor.exporting, editor.analyzing)
   if (busy) {
@@ -307,7 +310,7 @@ export async function appendTakeAction(onToast: ToastFn): Promise<void> {
       return
     }
   }
-  const file = await host.openMedia()
+  const file = providedFile || await host.openMedia()
   if (!file) {
     onToast('No file selected.')
     return
@@ -447,12 +450,13 @@ export async function ingestDroppedFile(file: File, onToast: ToastFn): Promise<v
 
   if (kind === 'media') {
     const path = droppedFilePath(file) ?? (await registerBrowserMedia(file))
-    if (!(await confirmLoseWork('Replace this reel with the dropped recording?'))) return
+    if (!isSharedEditor() && !(await confirmLoseWork('Replace this reel with the dropped recording?'))) return
     await importMediaFromPath(path, onToast)
     return
   }
 
   if (kind === 'project') {
+    if (isSharedEditor()) { onToast('Open your workspace in another tab to switch projects.'); return }
     if (!(await confirmLoseWork('Replace this reel with the dropped project?'))) return
     const raw = text ?? (await file.text())
     const path = droppedFilePath(file) || file.name

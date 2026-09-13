@@ -1,3 +1,4 @@
+import { isSharedEditor } from '../lib/sharedSession'
 import { useEffect, type ReactNode } from 'react'
 import { shortcutLabel } from '../lib/keyboard'
 import { isElectron } from '../host'
@@ -72,7 +73,7 @@ export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: 
             onClick={async () => {
               try {
                 const path = await saveCurrentDocument()
-                if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
+                if (path) onToast(isSharedEditor() ? 'Saved to the shared project.' : isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
               } catch (err) {
                 onToast(err instanceof Error ? err.message : 'Save failed.')
               }
@@ -84,7 +85,7 @@ export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: 
             onClick={async () => {
               try {
                 const path = await saveCurrentDocument({ saveAs: true })
-                if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
+                if (path) onToast(isSharedEditor() ? 'Saved to the shared project.' : isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
               } catch (err) {
                 onToast(err instanceof Error ? err.message : 'Save failed.')
               }
@@ -147,7 +148,7 @@ export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: 
         </div>
         <button type="button" className="tool-btn" title={shortcutLabel('Save project (⌘S) — keeps your edits so you can continue later')} onClick={() => {
           void saveCurrentDocument().then(
-            (path) => { if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`) },
+            (path) => { if (path) onToast(isSharedEditor() ? 'Saved to the shared project.' : isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`) },
             (err: unknown) => onToast(err instanceof Error ? err.message : 'Save failed.')
           )
         }}>Save{dirty ? ' •' : ''}</button>
@@ -173,7 +174,7 @@ export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: 
             if (!dirty && documentPath) return
             void saveCurrentDocument().then(
               (path) => {
-                if (path) onToast(isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
+                if (path) onToast(isSharedEditor() ? 'Saved to the shared project.' : isElectron ? `Saved ${currentDocumentTitle()}.` : `Downloaded ${path}`)
               },
               (err: unknown) => onToast(err instanceof Error ? err.message : 'Save failed.')
             )

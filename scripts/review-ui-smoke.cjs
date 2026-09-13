@@ -81,7 +81,7 @@ app.whenReady().then(async () => {
 
   await waitFor(win, `document.querySelector('.transcript-heading small')?.textContent.includes('2 chapters')`)
   const original = await win.webContents.executeJavaScript(`JSON.parse(localStorage.getItem('speechedit:project'))`)
-  await click(win, 'Share'); await click(win, 'Create review link')
+  await click(win, 'Share'); await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('[aria-label="Share access"]'); s.value = 'audit'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`); await click(win, 'Create review link')
   await waitFor(win, `!!document.querySelector('.review-link-box input')`)
   const link = await win.webContents.executeJavaScript(`document.querySelector('.review-link-box input').value`)
   console.log('Created review using real browser compression', videoFixture ? 'video + audio' : 'audio')

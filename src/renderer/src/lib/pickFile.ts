@@ -45,67 +45,44 @@ export async function inspectPickedMedia(file: string, role: 'broll' | 'audio'):
   }
 }
 
+async function inspectBrowserPicked(file: File, kind: Asset['kind']): Promise<Asset> {
+  const path = await registerBrowserMedia(file)
+  let duration = 8, width: number | undefined, height: number | undefined
+  if (kind === 'image') {
+    const bitmap = await createImageBitmap(file)
+    width = bitmap.width; height = bitmap.height; bitmap.close()
+  } else {
+    const info = await host.probe(path)
+    if (!info.duration) throw new Error('Cannot determine this media file’s duration. Use a seekable recording.')
+    duration = info.duration; width = info.width; height = info.height
+  }
+  return { id: uid('asset'), path, name: file.name, kind, duration, width, height, waveform: [], browserMediaKey: browserMediaKeyForPath(path) }
+}
+
+function pickBrowserAsset(accept: string, kind: (file: File) => Asset['kind']): Promise<Asset | null> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input'); input.type = 'file'; input.accept = accept
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) { resolve(null); return }
+      void inspectBrowserPicked(file, kind(file)).then(resolve, reject)
+    }
+    input.oncancel = () => resolve(null); input.click()
+  })
+}
+
 export async function pickBroll(): Promise<Asset | null> {
   if (isElectron) {
     const file = await host.openBroll()
-    if (!file) return null
-    return inspectPickedMedia(file, 'broll')
+    return file ? inspectPickedMedia(file, 'broll') : null
   }
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*,video/mp4,video/webm,video/quicktime'
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) {
-        resolve(null)
-        return
-      }
-      const image = file.type.startsWith('image/')
-      const path = await registerBrowserMedia(file)
-      resolve({
-        id: uid('asset'),
-        path,
-        name: file.name,
-        kind: image ? 'image' : 'video',
-        duration: 8,
-        waveform: [],
-        browserMediaKey: browserMediaKeyForPath(path)
-      })
-    }
-    input.oncancel = () => resolve(null)
-    input.click()
-  })
+  return pickBrowserAsset('image/*,video/mp4,video/webm,video/quicktime', file => file.type.startsWith('image/') ? 'image' : 'video')
 }
 
 export async function pickAudio(): Promise<Asset | null> {
   if (isElectron) {
     const file = await host.openMedia()
-    if (!file) return null
-    return inspectPickedMedia(file, 'audio')
+    return file ? inspectPickedMedia(file, 'audio') : null
   }
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'audio/*'
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) {
-        resolve(null)
-        return
-      }
-      const path = await registerBrowserMedia(file)
-      resolve({
-        id: uid('asset'),
-        path,
-        name: file.name,
-        kind: 'audio',
-        duration: 30,
-        waveform: [],
-        browserMediaKey: browserMediaKeyForPath(path)
-      })
-    }
-    input.oncancel = () => resolve(null)
-    input.click()
-  })
+  return pickBrowserAsset('audio/*', () => 'audio')
 }

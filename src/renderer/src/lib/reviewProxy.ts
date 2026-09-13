@@ -3,7 +3,7 @@ import { mediaUrl } from '../host'
 import { REVIEW_MAX_ASSET_BYTES } from '../../../shared/review'
 
 /** Encode only a small preview on the owner's device. Never upload the original as a fallback. */
-export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progress: (ratio: number) => void): Promise<Blob> {
+async function encodeRealtimeProxy(asset: Asset, signal: AbortSignal, progress: (ratio: number) => void): Promise<Blob> {
   if (!asset.path) throw new Error(`Relink ${asset.name} before sharing.`)
   if (typeof MediaRecorder === 'undefined') throw new Error('This browser cannot create compressed previews. Open SpeechEdit in Brave, Chrome, or Edge.')
   const video = asset.kind === 'video'
@@ -16,7 +16,7 @@ export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progr
   media.style.cssText = 'position:fixed;left:-2px;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none'
   document.body.append(media)
   const context = new AudioContext()
-  const destination = context.createMediaStreamDestination(); destination.channelCount = 1
+  const destination = context.createMediaStreamDestination(); destination.channelCount = 2
   const source = context.createMediaElementSource(media); source.connect(destination)
   const canvas = document.createElement('canvas')
   const streams: MediaStream[] = []
@@ -41,10 +41,10 @@ export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progr
     const scale = Math.min(1, 640 / Math.max(1, media.videoWidth), 360 / Math.max(1, media.videoHeight))
     canvas.width = Math.max(2, Math.round(media.videoWidth * scale / 2) * 2); canvas.height = Math.max(2, Math.round(media.videoHeight * scale / 2) * 2)
     const ctx = canvas.getContext('2d')!
-    if (video) { ctx.drawImage(media, 0, 0, canvas.width, canvas.height); streams.push(canvas.captureStream(15)) }
+    if (video) { ctx.drawImage(media, 0, 0, canvas.width, canvas.height); streams.push(canvas.captureStream(8)) }
     streams.push(destination.stream)
     const stream = new MediaStream(streams.flatMap(s => s.getTracks()))
-    recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 300_000, audioBitsPerSecond: 48_000 })
+    recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 180_000, audioBitsPerSecond: 48_000 })
     const active = recorder
     const chunks: Blob[] = []; let size = 0
     const result = new Promise<Blob>((ok, fail) => {
@@ -62,7 +62,7 @@ export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progr
     })
     // Attach rejection handling before playback can fail, and stop all resources in finally.
     void result.catch(() => undefined)
-    drawTimer = setInterval(() => { if (video && !media.paused) ctx.drawImage(media, 0, 0, canvas.width, canvas.height); progress(Math.min(1, media.currentTime / asset.duration)) }, 1000 / 15)
+    drawTimer = setInterval(() => { if (video && !media.paused) ctx.drawImage(media, 0, 0, canvas.width, canvas.height); progress(Math.min(1, media.currentTime / asset.duration)) }, 1000 / 8)
     document.addEventListener('visibilitychange', visibility)
     active.start(1000)
     await media.play()
@@ -74,4 +74,50 @@ export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progr
     for (const stream of streams) for (const track of stream.getTracks()) track.stop()
     media.pause(); media.removeAttribute('src'); media.load(); media.remove(); source.disconnect(); await context.close().catch(() => undefined)
   }
+}
+
+/** Timestamp-based conversion runs as fast as decoding permits; playback capture remains a compatibility fallback. */
+export async function encodeReviewProxy(asset: Asset, signal: AbortSignal, progress: (ratio: number) => void, onFallback?: () => void): Promise<Blob> {
+  signal.throwIfAborted()
+  if (asset.kind === 'image') {
+    const response = await fetch(mediaUrl(asset.path), { signal })
+    if (!response.ok) throw new Error(`Cannot read ${asset.name}.`)
+    const bitmap = await createImageBitmap(await response.blob())
+    try {
+      const ratio = Math.min(1, 960 / bitmap.width, 960 / bitmap.height)
+      const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(bitmap.width * ratio)); canvas.height = Math.max(1, Math.round(bitmap.height * ratio))
+      canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise<Blob>((ok, fail) => canvas.toBlob(v => v ? ok(v) : fail(new Error('Image compression failed.')), 'image/webp', 0.65))
+      signal.throwIfAborted(); progress(1); return blob
+    } finally { bitmap.close() }
+  }
+  let input: import('mediabunny').Input | undefined
+  let conversion: import('mediabunny').Conversion | undefined
+  const abort = () => { void conversion?.cancel().catch(() => undefined) }
+  try {
+    const { Input, Output, UrlSource, ALL_FORMATS, WebMOutputFormat, BufferTarget, Conversion } = await import('mediabunny')
+    input = new Input({ source: new UrlSource(mediaUrl(asset.path)), formats: ALL_FORMATS })
+    const duration = await input.computeDuration()
+    if (!Number.isFinite(duration) || Math.abs(duration - asset.duration) > Math.max(1, asset.duration * 0.01)) throw new Error('Source duration changed.')
+    const target = new BufferTarget()
+    const output = new Output({ target, format: new WebMOutputFormat() })
+    const track = await input.getPrimaryVideoTrack()
+    const width = track ? await track.getDisplayWidth() : 640, height = track ? await track.getDisplayHeight() : 360, scale = Math.min(1, 640 / width, 360 / height)
+    conversion = await Conversion.init({ input, output,
+      video: asset.kind === 'video' ? { codec: 'vp8', width: Math.max(2, Math.round(width * scale / 2) * 2), height: Math.max(2, Math.round(height * scale / 2) * 2), fit: 'contain', allowRotationMetadata: false, frameRate: 8, bitrate: 180_000, keyFrameInterval: 1, hardwareAcceleration: 'prefer-software', forceTranscode: true } : { discard: true },
+      audio: { codec: 'opus', numberOfChannels: 2, sampleRate: 48000, bitrate: 48_000, forceTranscode: true }
+    })
+    if (!conversion.isValid || conversion.discardedTracks.length) throw new Error('The fast encoder cannot preserve every media track.')
+    signal.addEventListener('abort', abort, { once: true }); signal.throwIfAborted()
+    conversion.onProgress = ratio => { progress(ratio) }
+    target.on('write', ({ end }) => { if (end > REVIEW_MAX_ASSET_BYTES) { void conversion?.cancel(); throw new Error('This preview exceeds 250 MiB.') } })
+    await conversion.execute(); signal.throwIfAborted()
+    if (!target.buffer?.byteLength) throw new Error('Empty preview.')
+    return new Blob([target.buffer], { type: `${asset.kind}/webm` })
+  } catch (error) {
+    if (signal.aborted) throw error
+    await conversion?.cancel().catch(() => undefined)
+    onFallback?.(); progress(0)
+  } finally { signal.removeEventListener('abort', abort); input?.dispose() }
+  return encodeRealtimeProxy(asset, signal, progress)
 }

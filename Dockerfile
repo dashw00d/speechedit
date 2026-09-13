@@ -19,7 +19,8 @@ ENV NODE_ENV=production \
 COPY --chown=bun:bun --from=build /app/package.json ./package.json
 COPY --chown=bun:bun --from=build /app/scripts/web-server.ts ./scripts/web-server.ts
 COPY --chown=bun:bun --from=build /app/scripts/review-server.ts ./scripts/review-server.ts
-COPY --chown=bun:bun --from=build /app/src/shared/review.ts ./src/shared/review.ts
+COPY --chown=bun:bun --from=build /app/src/shared ./src/shared
+COPY --chown=bun:bun --from=build /app/node_modules/zod ./node_modules/zod
 COPY --chown=bun:bun --from=build /app/src/renderer/dist ./src/renderer/dist
 
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*

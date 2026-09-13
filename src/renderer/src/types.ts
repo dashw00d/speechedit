@@ -20,6 +20,8 @@ export interface Interval {
 }
 
 export interface Asset {
+  /** Shared preview without a local original. Final rendering requires relinking. */
+  proxyOnly?: boolean
   id: string
   path: string
   name: string

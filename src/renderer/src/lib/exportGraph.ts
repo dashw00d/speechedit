@@ -74,6 +74,7 @@ export interface ProgrammedSegment extends GraphSegment {
 }
 
 export interface GraphJob {
+  proxyOnly?: boolean
   input: string
   inputs?: GraphInput[]
   output: string
@@ -183,6 +184,7 @@ export function validateExportJob(
   job: GraphJob,
   opts?: { fontFile?: string | undefined }
 ): string | null {
+  if (job.proxyOnly) return 'Relink shared previews to original media before rendering the final video.'
   if (!job.segments.length) return 'Nothing to export — the timeline is empty.'
   if (!job.input && !job.inputs?.some((row) => row.path)) return 'Open media to export a program.'
   for (const row of job.inputs ?? []) {

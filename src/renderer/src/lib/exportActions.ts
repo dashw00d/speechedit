@@ -360,6 +360,7 @@ export async function exportSidecar(id: SidecarId, onToast: ToastFn): Promise<vo
 }
 
 export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts = {}): Promise<void> {
+  if (Object.values(useEditor.getState().project.assets).some(a => a.proxyOnly)) { onToast('Relink shared previews to original media before rendering the final video.'); return }
   const editor = useEditor.getState()
   if (editor.exporting) {
     void cancelExport()

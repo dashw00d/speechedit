@@ -1,3 +1,4 @@
+import { isSharedEditor, sharedSession } from './lib/sharedSession'
 import { create } from 'zustand'
 import { host } from './host'
 import { applyCommand, programLength } from './lib/commands'
@@ -193,6 +194,7 @@ async function flushPending() {
 }
 
 function persist(project: Project, extra?: Partial<PersistMeta>, immediate = false) {
+  if (isSharedEditor()) { sharedSession.persist?.(project); return }
   const meta = persistMeta(extra)
   writeLocalCache(project, meta)
   persistPending = { project, meta }
@@ -209,6 +211,7 @@ function persist(project: Project, extra?: Partial<PersistMeta>, immediate = fal
 }
 
 export function flushWorkspace() {
+  if (isSharedEditor()) { sharedSession.persist?.(useEditor.getState().project); return }
   if (persistTimer) {
     clearTimeout(persistTimer)
     persistTimer = null
@@ -272,6 +275,7 @@ function bootReviewRate(): number {
 }
 
 function bootProject(): Project {
+  if (isSharedEditor()) return createDemoProject()
   if (typeof localStorage === 'undefined') return createDemoProject()
   try {
     const raw = localStorage.getItem(PROJECT_CACHE)
@@ -283,6 +287,7 @@ function bootProject(): Project {
 }
 
 function bootSession(): PersistMeta {
+  if (isSharedEditor()) return { dirty: false, documentPath: null, lastSavedAt: null }
   if (typeof localStorage === 'undefined') {
     return { dirty: false, documentPath: null, lastSavedAt: null }
   }
@@ -561,6 +566,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setTool: (tool) => set({ tool }),
   setGuardKind: (kind) => set({ guardKind: kind }),
   loadProject: (project, opts) => {
+    if (isSharedEditor() && sharedSession.projectId && project.id !== sharedSession.projectId) throw new Error('Open another workspace tab to switch projects.')
     const next = normalizeProject(project)
     const documentPath = opts && 'path' in opts ? opts.path ?? null : null
     const dirty = !(opts?.clean ?? true)
@@ -576,6 +582,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     resetPlaybackForProjectChange()
   },
   newProject: () => {
+    if (isSharedEditor()) { window.open('/', '_blank', 'noopener'); return }
     set(
       resetView(createEmptyProject(), {
         dirty: false,
@@ -587,6 +594,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     resetPlaybackForProjectChange()
   },
   loadDemo: () => {
+    if (isSharedEditor()) { window.open('/', '_blank', 'noopener'); return }
     set(
       resetView(createDemoProject(), {
         dirty: false,

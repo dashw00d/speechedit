@@ -17,6 +17,6 @@ export function ReviewPage() {
   return <main className="review-page">
     <header className="review-page-header"><div><span className="brand-mark">Speech<em>Edit</em></span><h1>{room?.snapshot.name || 'Shared review'}</h1><p>Review copy · original-quality export stays with the owner</p></div><button className="chip" onClick={() => void refresh()}>Refresh feedback</button></header>
     {error && <p role="alert" className="review-error">{error}</p>}
-    {room ? <><p>Source snapshot shared {new Date(room.createdAt).toLocaleDateString()} · link expires {new Date(room.expiresAt).toLocaleDateString()}</p><ReviewWorkspace room={room} accessKey={accessKey} onRoom={setRoom} onError={setError} /></> : !error && <p role="status">Opening the shared review…</p>}
+    {room?.mode === 'edit' ? <p>This link grants full editing. <a className="chip" href={`/edit/${id}#${accessKey}`}>Open full editor</a></p> : room ? <><p>Source snapshot shared {new Date(room.createdAt).toLocaleDateString()} · link expires {new Date(room.expiresAt).toLocaleDateString()}</p><ReviewWorkspace room={room} accessKey={accessKey} onRoom={setRoom} onError={setError} /></> : !error && <p role="status">Opening the shared review…</p>}
   </main>
 }

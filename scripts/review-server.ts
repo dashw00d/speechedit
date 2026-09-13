@@ -1,3 +1,4 @@
+import { sharedProject, sharedAssetSchema } from '../src/shared/collaboration'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readFile, writeFile, rename, rm, readdir, stat, utimes } from 'node:fs/promises'
@@ -112,17 +113,20 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
         const bucket = prior && now - prior.at < 3600_000 ? prior : { at: now, count: 0 }
         if (bucket.count >= 20) throw new HttpError(429, 'Too many review links created. Try again later.')
         bucket.count++; attempts.set(ip, bucket)
-        const snapshot = parseReviewSnapshot((await body(req)).snapshot)
+        const input = await body(req), snapshot = parseReviewSnapshot(input.snapshot)
+        const mode = input.mode === 'edit' ? 'edit' : 'audit'
+        const project = mode === 'edit' ? sharedProject(input.project) : undefined
+        if (project && project.id !== snapshot.projectId) throw new HttpError(400, 'Project identifiers do not match.')
         const created = await locked('capacity', async () => {
-          if (await usage() + Buffer.byteLength(JSON.stringify(snapshot)) + 1024 >= maxBytes || (await readdir(dir)).length >= 1000) throw new HttpError(507, 'Review storage is full.')
+          if (await usage() + Buffer.byteLength(JSON.stringify({ snapshot, project, mediaAssets: project?.assets })) + 2048 >= maxBytes || (await readdir(dir)).length >= 1000) throw new HttpError(507, 'Review storage is full.')
           const id = randomBytes(16).toString('hex'), ownerKey = token(), reviewerKey = token()
-          const room: StoredRoom = { id, snapshot, revision: 1, proposals: [], media: {}, published: false, createdAt: now, expiresAt: now + 30 * 86400_000, ownerHash: hash(ownerKey), reviewerHash: hash(reviewerKey) }
+          const room: StoredRoom = { id, snapshot, mode, ...(project ? { project, projectRevision: 1, mediaAssets: project.assets, history: [{ revision: 1, author: 'Owner', at: now }] } : {}), revision: 1, proposals: [], media: {}, published: false, createdAt: now, expiresAt: now + 30 * 86400_000, ownerHash: hash(ownerKey), reviewerHash: hash(reviewerKey) }
           await mkdir(folder(id)); await save(room)
           return { room: publicRoom(room), ownerKey, reviewerKey }
         })
         json(res, 201, created); return true
       }
-      const match = /^\/api\/reviews\/([a-f0-9]{32})(?:\/(media)(?:\/([a-zA-Z0-9_-]{1,120}))?|\/(publish|proposals)(?:\/([a-f0-9-]{36})(?:\/(reply|resolve))?)?)?$/.exec(pathname)
+      const match = /^\/api\/reviews\/([a-f0-9]{32})(?:\/(media)(?:\/([a-zA-Z0-9_-]{1,120}))?|\/(publish|proposals|project|assets)(?:\/([a-f0-9-]{36})(?:\/(reply|resolve))?)?)?$/.exec(pathname)
       if (!match) throw new HttpError(404, 'Review route not found.')
       const [, id, media, assetId, route, proposalId, action] = match
       await locked(id, async () => {
@@ -135,14 +139,48 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
           json(res, 200, publicRoom(room)); return
         }
         if (!media && !route && req.method === 'DELETE') { owner(); await rm(folder(id), { recursive: true, force: true }); json(res, 200, { revoked: true }); return }
+        if (route === 'project' && req.method === 'PUT') {
+          if (room.mode !== 'edit' || !room.project || !room.published) throw new HttpError(403, 'This link is for audit only.')
+          const input = await body(req)
+          if (input.revision !== room.projectRevision) throw new HttpError(409, 'Another editor saved changes. Merge or resolve them before saving.')
+          const project = sharedProject(input.project)
+          if (project.id !== room.project.id) throw new HttpError(400, 'Cannot replace a shared project with another document.')
+          for (const asset of Object.values(project.assets)) {
+            const registered = room.mediaAssets?.[asset.id]
+            if (!registered || !room.media[asset.id] || registered.kind !== asset.kind || registered.duration !== asset.duration) throw new HttpError(409, 'Upload each new media preview before saving.')
+          }
+          room.project = project; room.projectRevision = (room.projectRevision || 1) + 1
+          room.history = [...(room.history || []), { revision: room.projectRevision, author: reviewText(input.author, 80), at: Date.now() }].slice(-100)
+          await locked('capacity', async () => {
+            if (await usage() + Buffer.byteLength(JSON.stringify(room)) > maxBytes) throw new HttpError(507, 'Shared storage is full.')
+            await save(room)
+          })
+          json(res, 200, publicRoom(room)); return
+        }
+        if (route === 'assets' && req.method === 'POST') {
+          if (room.mode !== 'edit') throw new HttpError(403, 'This link is for audit only.')
+          const asset = sharedAssetSchema.parse((await body(req)).asset)
+          room.mediaAssets ||= {}
+          if (room.mediaAssets[asset.id]) {
+            if (room.mediaAssets[asset.id].kind !== asset.kind || room.mediaAssets[asset.id].duration !== asset.duration) throw new HttpError(409, 'This media identifier is already registered.')
+          } else {
+            if (Object.keys(room.mediaAssets).length >= 256) throw new HttpError(413, 'Shared media limit reached.')
+            room.mediaAssets[asset.id] = { ...asset, path: `shared-media:${asset.id}` }
+            await locked('capacity', async () => {
+              if (await usage() + Buffer.byteLength(JSON.stringify(room)) > maxBytes) throw new HttpError(507, 'Shared storage is full.')
+              await save(room)
+            })
+          }
+          json(res, 200, publicRoom(room)); return
+        }
         if (media && assetId) {
-          const asset = room.snapshot.assets.find(a => a.id === assetId)
+          const asset = room.mediaAssets?.[assetId] || room.snapshot.assets.find(a => a.id === assetId)
           if (!asset) throw new HttpError(404, 'Unknown preview.')
           const target = resolve(folder(id), `${assetId}.webm`)
           if (req.method === 'PUT') {
-            owner()
-            if (room.published) throw new HttpError(409, 'Published previews are immutable. Create a new review link.')
-            if (!/^(audio|video)\/webm(?:;|$)/.test(req.headers['content-type'] || '')) throw new HttpError(415, 'Upload a compressed WebM preview.')
+            if (room.mode !== 'edit') owner()
+            if (room.media[assetId] || (room.published && room.mode !== 'edit')) throw new HttpError(409, 'Published previews are immutable. Create a new review link.')
+            if (!(asset.kind === 'image' ? /^image\/webp$/ : /^(audio|video)\/webm(?:;|$)/).test(req.headers['content-type'] || '')) throw new HttpError(415, 'Upload a compressed WebM preview.')
             const length = Number(req.headers['content-length'])
             const contentRange = req.headers['content-range']
             const range = contentRange ? /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange) : null
@@ -159,20 +197,21 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
               let bytes = 0; let magic = Buffer.alloc(0)
               try {
                 await pipeline(req, new Transform({ transform(chunk: Buffer, _encoding, callback) {
-                  bytes += chunk.length; if (magic.length < 4) magic = Buffer.concat([magic, chunk]).subarray(0, 4)
+                  bytes += chunk.length; if (magic.length < 12) magic = Buffer.concat([magic, chunk]).subarray(0, 12)
                   callback(bytes > length ? new Error('Preview exceeds its declared size.') : null, chunk)
                 } }), createWriteStream(temp, { mode: 0o600, flags: offset ? 'a' : 'w' }), { signal: AbortSignal.timeout(120000) })
-                if (bytes !== length || (!offset && magic.toString('hex') !== '1a45dfa3')) throw new HttpError(400, 'Invalid compressed preview.')
+                if (bytes !== length || (!offset && (asset.kind === 'image' ? magic.subarray(0, 4).toString() !== 'RIFF' || magic.subarray(8, 12).toString() !== 'WEBP' : magic.subarray(0, 4).toString('hex') !== '1a45dfa3'))) throw new HttpError(400, 'Invalid compressed preview.')
                 if (offset + length === total) {
-                  await remux(temp, prepared, asset.duration)
+                  if (asset.kind === 'image') await writeFile(prepared, await readFile(temp))
+                  else await remux(temp, prepared, asset.duration)
                   await rename(prepared, target)
-                  room.media[assetId] = { bytes: (await stat(target)).size, mime: `${asset.kind}/webm` }; await save(room)
+                  room.media[assetId] = { bytes: (await stat(target)).size, mime: asset.kind === 'image' ? 'image/webp' : `${asset.kind}/webm` }; await save(room)
                   await rm(temp, { force: true })
                 }
               } catch (error) { await rm(temp, { force: true }); throw error }
               finally { await rm(prepared, { force: true }) }
             })
-            json(res, 200, { uploaded: offset + length, total, ...(room.media[assetId] || {}) }); return
+            json(res, 200, { uploaded: offset + length, total, ...(room.media[assetId] as { bytes: number; mime: string } | undefined || {}) }); return
           }
           if (req.method === 'GET' || req.method === 'HEAD') {
             const info = room.media[assetId]
@@ -195,7 +234,7 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
         }
         if (route === 'publish' && req.method === 'POST') {
           owner()
-          if (room.snapshot.assets.some(a => !room.media[a.id])) throw new HttpError(409, 'Upload every source preview before sharing.')
+          if ((room.project ? Object.values(room.project.assets) : room.snapshot.assets).some(a => !room.media[a.id])) throw new HttpError(409, 'Upload every source preview before sharing.')
           room.published = true; await save(room); json(res, 200, publicRoom(room)); return
         }
         if (route === 'proposals' && req.method === 'POST') {

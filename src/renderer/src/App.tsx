@@ -1,3 +1,4 @@
+import { isSharedEditor } from './lib/sharedSession'
 import { ShareSheet } from './components/ShareSheet'
 import { WorkflowSheet } from './components/WorkflowSheet'
 import { useEffect, useRef, useState } from 'react'
@@ -110,7 +111,7 @@ export function App() {
   useEffect(() => subscribeTheme(setThemeId), [])
 
   useEffect(() => {
-    if (!isElectron) void preloadBrowserWhisper().catch(() => undefined)
+    if (!isElectron && !isSharedEditor()) void preloadBrowserWhisper().catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -200,6 +201,7 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    if (isSharedEditor()) return
     void hydrateWorkspace()
       .then((result) => {
         if (result.recovery) setToast('Crash recovery is available — restore unsaved edits or keep the last save.')
@@ -285,7 +287,7 @@ export function App() {
     <div className="app" data-empty={emptyReel || undefined} data-mobile-pane={mobilePane}>
       <MenuBar
         onToast={setToast}
-        onShare={() => setShareOpen(true)}
+        onShare={() => { if (isSharedEditor()) { void navigator.clipboard.writeText(location.href).then(() => setToast('Full editing link copied. Anyone with it can edit this shared project.')).catch(() => setToast('Copy the address bar to share full editing access.')) } else setShareOpen(true) }}
         onExport={onExportClick}
         exporting={exporting}
         onShortcuts={() => setKeysOpen(true)}
