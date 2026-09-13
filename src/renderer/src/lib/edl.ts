@@ -72,11 +72,38 @@ export function projectKept(project: Project): Interval[] {
 
 export const MIN_WORD_DURATION = 0.06
 
-/** ASR zero-duration tokens (start === end) are unreachable for highlight and cut; give them a frame-visible window. */
+/**
+ * ASR zero-duration tokens (start === end) are unreachable for highlight and cut.
+ * Give them a MIN_WORD_DURATION window, but never extend across a neighbour:
+ * take forward room up to the next word's start and borrow the rest from the
+ * gap before the token. Only a token with no gap on either side falls back to a
+ * forward-only window, which may overlap the following word.
+ */
 export function withPlayableWordDurations(words: Word[]): Word[] {
-  return words.map((word) =>
-    word.end > word.start ? word : { ...word, end: word.start + MIN_WORD_DURATION }
-  )
+  return words.map((word, index) => {
+    if (word.end > word.start) return word
+    const { start } = word
+    let prevEnd = Number.NEGATIVE_INFINITY
+    for (let i = index - 1; i >= 0; i--) {
+      if (words[i].end <= start) {
+        prevEnd = words[i].end
+        break
+      }
+    }
+    let nextStart = Number.POSITIVE_INFINITY
+    for (let i = index + 1; i < words.length; i++) {
+      if (words[i].start >= start) {
+        nextStart = words[i].start
+        break
+      }
+    }
+    const forward = Math.max(0, Math.min(MIN_WORD_DURATION, nextStart - start))
+    const back = Math.max(0, Math.min(MIN_WORD_DURATION - forward, start - prevEnd))
+    const windowStart = start - back
+    const windowEnd = start + forward
+    if (windowEnd > windowStart) return { ...word, start: windowStart, end: windowEnd }
+    return { ...word, end: start + MIN_WORD_DURATION }
+  })
 }
 
 export function currentWord(words: Word[], sourceTime: number): Word | undefined {

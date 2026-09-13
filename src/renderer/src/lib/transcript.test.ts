@@ -11,6 +11,7 @@ import {
   wordsFromIslands
 } from './transcript'
 import { currentWord } from './edl'
+import { wordsFromCues } from './asr'
 
 const whisperCli = {
   text: 'Hello there um world',
@@ -76,6 +77,47 @@ describe('drop / open transcript JSON', () => {
     const zero = words.find((w) => w.id === 'zero')
     expect(zero!.end).toBeGreaterThan(zero!.start)
     expect(currentWord(words, zero!.start)?.id).toBe('zero')
+  })
+
+  test('deleting a zero-duration token does not split the following word (jfk geometry)', () => {
+    // Real whisper.cpp jfk geometry: ask @8.24 (gap before; what @8.29).
+    const words = wordsFromCues(
+      [
+        { text: 'you', start: 7.0, end: 7.55 },
+        { text: 'ask', start: 8.24, end: 8.24 },
+        { text: 'what', start: 8.29, end: 8.49 }
+      ],
+      { wordLevel: true }
+    )
+    const base = createEmptyProject('zero-token')
+    const project = { ...base, sourceDuration: 12, transcript: { ...base.transcript, words } }
+    const ask = words.find((w) => w.text === 'ask')!
+    expect(ask.end).toBeLessThanOrEqual(8.29)
+    const cut = applyCommand(project, { type: 'toggleWords', wordIds: [ask.id] })
+    const whats = cut.transcript.words.filter((w) => w.text === 'what')
+    expect(whats).toHaveLength(1)
+    expect(whats[0].deleted).toBe(false)
+    expect([whats[0].start, whats[0].end]).toEqual([8.29, 8.49])
+  })
+
+  test('same-start zero token borrows the preceding gap without splitting the next word', () => {
+    // Real geometry: or @38.42 next word also @38.42, with a gap before.
+    const words = wordsFromCues(
+      [
+        { text: 'so', start: 38.0, end: 38.27 },
+        { text: 'or', start: 38.42, end: 38.42 },
+        { text: 'not', start: 38.42, end: 38.62 }
+      ],
+      { wordLevel: true }
+    )
+    const base = createEmptyProject('zero-token-same-start')
+    const project = { ...base, sourceDuration: 40, transcript: { ...base.transcript, words } }
+    const token = words.find((w) => w.text === 'or')!
+    expect(token.end).toBeLessThanOrEqual(38.42)
+    const cut = applyCommand(project, { type: 'toggleWords', wordIds: [token.id] })
+    const nots = cut.transcript.words.filter((w) => w.text === 'not')
+    expect(nots).toHaveLength(1)
+    expect(nots[0].deleted).toBe(false)
   })
 
   test('openai-whisper segments.words[] keep provider times (no lerp)', () => {
