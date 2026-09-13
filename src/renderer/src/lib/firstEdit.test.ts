@@ -8,6 +8,7 @@ import {
   describeFirstEdit,
   describeFirstEditResult,
   dismissLeftoverBreaths,
+  groupHistory,
   looksSafeSpans,
   safeEditCandidates,
   startLeftoverReview,
@@ -196,6 +197,84 @@ describe('safe first edit', () => {
       restore()
       useEditor.getState().setAnalyzing(null)
     }
+  })
+
+  test('non-streaming first edit + captions undo as one unit that names its edit', async () => {
+    const restore = stubHost({
+      probe: async () => ({
+        duration: 12,
+        hasVideo: true,
+        hasAudio: true,
+        width: 320,
+        height: 240,
+        fps: 30
+      }),
+      makeProxy: async () => {
+        throw new Error('proxy should not run for short SD')
+      },
+      waveform: async () => [0.2],
+      thumbnails: async () => [],
+      analyze: async () => ({
+        silence: [],
+        scenes: { times: [], staticRegions: [] },
+        loudness: []
+      }),
+      transcribe: async () => [
+        { text: 'hello', start: 0.2, end: 0.6 },
+        { text: 'um', start: 0.9, end: 1.1 },
+        { text: 'world', start: 1.5, end: 2.0 }
+      ],
+      beginJob: async () => undefined,
+      endJob: async () => undefined
+    })
+    const toasts: string[] = []
+    useEditor.getState().newProject()
+    useEditor.getState().setAnalyzing(null)
+    useEditor.getState().setExporting(false)
+    try {
+      await importMediaFromPath('/tmp/se-first-edit-undo-unit.mp4', (msg) => toasts.push(msg))
+      const project = useEditor.getState().project
+      const filler = project.suggestions.find((s) => s.type === 'filler' && s.label === 'um' && s.applied)
+      expect(filler).toBeTruthy()
+      expect(project.transcript.words.find((w) => w.text === 'um')?.deleted).toBe(true)
+      expect(project.tracks.find((t) => t.type === 'caption')?.clips.some((c) => c.auto && c.text)).toBe(true)
+      // The message the user actually sees names the automatic edit and offers Undo.
+      const offered = toasts.filter((msg) => /Undo to put them back/.test(msg)).pop()
+      expect(offered).toMatch(/Removed \d+ (pause|filler)/)
+      const editedLength = programLength(project)
+      useEditor.getState().undo()
+      const undone = useEditor.getState().project
+      // Undo does what the message promised: the cuts are back…
+      expect(undone.suggestions.find((s) => s.id === filler!.id)?.applied).toBe(false)
+      expect(undone.transcript.words.find((w) => w.text === 'um')?.deleted).toBe(false)
+      expect(undone.suggestions.some((s) => s.safe && s.applied)).toBe(false)
+      expect(programLength(undone)).toBeGreaterThan(editedLength)
+      // …and the rest of the same automatic unit (captions) is reversed with it.
+      expect(undone.tracks.find((t) => t.type === 'caption')?.clips.length ?? 0).toBe(0)
+    } finally {
+      restore()
+      useEditor.getState().setAnalyzing(null)
+    }
+  })
+
+  test('an undo group reverses as one unit and keeps later user edits separate', () => {
+    useEditor.getState().loadProject(createDemoProject(), { path: null, clean: true })
+    const start = programLength(useEditor.getState().project)
+    groupHistory(() => {
+      useEditor.getState().dispatch({ type: 'applySafeSuggestions' })
+      useEditor.getState().dispatch({ type: 'collapseRetakes' })
+    })
+    const grouped = useEditor.getState().project
+    expect(programLength(grouped)).toBeLessThan(start)
+    useEditor.getState().dispatch({ type: 'insertGap', time: 0, duration: 1 })
+    const withUserEdit = programLength(useEditor.getState().project)
+    expect(withUserEdit).toBeCloseTo(programLength(grouped) + 1, 3)
+    // A user edit made after the automatic unit is its own step.
+    useEditor.getState().undo()
+    expect(programLength(useEditor.getState().project)).toBeCloseTo(programLength(grouped), 5)
+    // One more undo reverses the whole automatic unit.
+    useEditor.getState().undo()
+    expect(programLength(useEditor.getState().project)).toBeCloseTo(start, 5)
   })
 
   test('Open media applies safe pauses when looks land, before Whisper finishes', async () => {
@@ -483,6 +562,10 @@ describe('safe first edit', () => {
         expect(
           useEditor.getState().project.suggestions.some((s) => s.type === 'filler' && s.label === 'um' && s.applied)
         ).toBe(false)
+        // Streaming: the first cut and its auto captions share one undo unit.
+        expect(
+          useEditor.getState().project.tracks.find((t) => t.type === 'caption')?.clips.length ?? 0
+        ).toBe(0)
         sendProgress({
           stage: 'run',
           ratio: 0.8,

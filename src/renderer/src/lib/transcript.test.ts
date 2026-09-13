@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { applyCommand } from './commands'
+import { applyCommand, programLength } from './commands'
 import { createEmptyProject } from './demo'
 import { normalizeProject } from './normalize'
 import {
@@ -10,7 +10,7 @@ import {
   transcriptIsPlaceholder,
   wordsFromIslands
 } from './transcript'
-import { currentWord } from './edl'
+import { currentWord, overlap } from './edl'
 import { wordsFromCues } from './asr'
 
 const whisperCli = {
@@ -75,8 +75,55 @@ describe('drop / open transcript JSON', () => {
       ]
     })
     const zero = words.find((w) => w.id === 'zero')
-    expect(zero!.end).toBeGreaterThan(zero!.start)
+    // Flush to `world`: keep the zero-duration timestamp so a cut is safe…
+    expect([zero!.start, zero!.end]).toEqual([0.3, 0.3])
+    // …highlighting is separate from cutting and still reaches the token.
     expect(currentWord(words, zero!.start)?.id).toBe('zero')
+  })
+
+  test('SPE-10 P1: deleting a flush zero-duration filler leaves the following word intact', () => {
+    const words = wordsFromCues(
+      [
+        { text: 'hello', start: 0, end: 0.3 },
+        { text: 'uh', start: 0.3, end: 0.3 },
+        { text: 'world', start: 0.3, end: 0.6 }
+      ],
+      { wordLevel: true }
+    )
+    const base = createEmptyProject('zero-flush')
+    const project = { ...base, sourceDuration: 1, transcript: { ...base.transcript, words } }
+    const uh = project.transcript.words.find((w) => w.text === 'uh')!
+    const removed = applyCommand(project, { type: 'toggleWords', wordIds: [uh.id] })
+    expect(removed.transcript.words.find((w) => w.text === 'uh')!.deleted).toBe(true)
+    const world = removed.transcript.words.find((w) => w.text === 'world')!
+    expect(world.deleted).toBe(false)
+    expect([world.start, world.end]).toEqual([0.3, 0.6])
+    expect(removed.cuts.some((cut) => overlap(cut, { start: 0.3, end: 0.6 }) > 0)).toBe(false)
+    expect(programLength(removed)).toBeCloseTo(programLength(project), 5)
+    const restored = applyCommand(removed, { type: 'toggleWords', wordIds: [uh.id] })
+    expect(restored.transcript.words.find((w) => w.text === 'uh')!.deleted).toBe(false)
+  })
+
+  test('SPE-10 P2: a zero-duration token at recording start is reachable and cut-safe', () => {
+    const words = wordsFromCues(
+      [
+        { text: 'uh', start: 0, end: 0 },
+        { text: 'world', start: 0, end: 0.6 }
+      ],
+      { wordLevel: true }
+    )
+    const base = createEmptyProject('zero-start')
+    const project = { ...base, sourceDuration: 1, transcript: { ...base.transcript, words } }
+    const uh = project.transcript.words.find((w) => w.text === 'uh')!
+    // Never borrow past the recording start into a negative timestamp.
+    expect([uh.start, uh.end]).toEqual([0, 0])
+    expect(currentWord(project.transcript.words, 0)?.text).toBe('uh')
+    const removed = applyCommand(project, { type: 'toggleWords', wordIds: [uh.id] })
+    expect(removed.transcript.words.find((w) => w.text === 'uh')!.deleted).toBe(true)
+    const world = removed.transcript.words.find((w) => w.text === 'world')!
+    expect(world.deleted).toBe(false)
+    expect([world.start, world.end]).toEqual([0, 0.6])
+    expect(removed.cuts.some((cut) => overlap(cut, { start: 0, end: 0.6 }) > 0)).toBe(false)
   })
 
   test('deleting a zero-duration token does not split the following word (jfk geometry)', () => {

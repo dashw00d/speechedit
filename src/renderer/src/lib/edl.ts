@@ -73,20 +73,22 @@ export function projectKept(project: Project): Interval[] {
 export const MIN_WORD_DURATION = 0.06
 
 /**
- * ASR zero-duration tokens (start === end) are unreachable for highlight and cut.
- * Give them a MIN_WORD_DURATION window, but never extend across a neighbour:
- * take forward room up to the next word's start and borrow the rest from the
- * gap before the token. Only a token with no gap on either side falls back to a
- * forward-only window, which may overlap the following word.
+ * ASR zero-duration tokens (start === end) have no audio of their own. When a
+ * neighbour leaves a gap, borrow it so the token has a real, cuttable window:
+ * take forward room up to the next word's start, then the rest from the gap
+ * after the previous word, never crossing the recording start. When there is no
+ * safe window (flush against a neighbour, or at 0), keep the original
+ * timestamps — the token is transcript-only and deleting it must not touch
+ * neighbouring speech. Playback highlighting uses `wordHighlightSpan`.
  */
 export function withPlayableWordDurations(words: Word[]): Word[] {
   return words.map((word, index) => {
     if (word.end > word.start) return word
     const { start } = word
-    let prevEnd = Number.NEGATIVE_INFINITY
+    let prevEnd = 0
     for (let i = index - 1; i >= 0; i--) {
       if (words[i].end <= start) {
-        prevEnd = words[i].end
+        prevEnd = Math.max(words[i].end, 0)
         break
       }
     }
@@ -102,12 +104,28 @@ export function withPlayableWordDurations(words: Word[]): Word[] {
     const windowStart = start - back
     const windowEnd = start + forward
     if (windowEnd > windowStart) return { ...word, start: windowStart, end: windowEnd }
-    return { ...word, end: start + MIN_WORD_DURATION }
+    return word
   })
 }
 
+/**
+ * Playback-only window for a word. Zero-duration tokens never highlight from
+ * their own timestamps, so give them a brief forward window without moving
+ * where they cut. Display may briefly overlap the next word; audio cutting
+ * never uses this span. Used by `currentWord`.
+ */
+export function wordHighlightSpan(word: Word): Interval {
+  if (word.end > word.start) return { start: word.start, end: word.end }
+  const start = Math.max(0, word.start)
+  return { start, end: start + MIN_WORD_DURATION }
+}
+
 export function currentWord(words: Word[], sourceTime: number): Word | undefined {
-  return words.find((w) => !w.deleted && sourceTime >= w.start && sourceTime < w.end)
+  return words.find((w) => {
+    if (w.deleted) return false
+    const span = wordHighlightSpan(w)
+    return sourceTime >= span.start && sourceTime < span.end
+  })
 }
 
 export function wordsInRange(words: Word[], start: number, end: number): Word[] {
