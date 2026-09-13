@@ -1,3 +1,4 @@
+import { useDialog } from '../useDialog'
 import { useEffect, useState } from 'react'
 import { captionsForExport } from '../lib/captions'
 import {
@@ -43,18 +44,7 @@ export function ExportSheet({
     setAudioOnly(!projectHasPicture(project))
   }, [open, project.markIn, project.markOut, project.assets])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      if (exporting) void cancelExport()
-      else onClose()
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [open, exporting, onClose])
+  const dialogRef = useDialog(open, () => { if (exporting) void cancelExport(); else onClose() })
 
   if (!open) return null
 
@@ -62,6 +52,8 @@ export function ExportSheet({
     <div className="confirm-back export-back" onMouseDown={onClose}>
       <div
         className="confirm-sheet export-sheet"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-title"

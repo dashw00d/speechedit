@@ -39,7 +39,6 @@ describe('transcript context choices', () => {
     expect(remove?.consequence).toMatch(/closes the gap/)
     expect(remove?.command.type).toBe('toggleWords')
     expect(choices.length).toBeGreaterThanOrEqual(2)
-    expect(choices.length).toBeLessThanOrEqual(4)
     expect(choices.some((c) => c.id === 'keep')).toBe(true)
   })
 

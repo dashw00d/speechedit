@@ -240,6 +240,7 @@ export function ModelsPanel({ onToast }: { onToast: (msg: string) => void }) {
           <div>
             <strong>Whisper tiny.en · on this device</strong>
             <span>{browserWhisper.detail}</span>
+            {browserWhisper.fallbackReason && <small>{browserWhisper.fallbackReason} Transcription runs locally in compatibility mode.</small>}
           </div>
           {browserWhisper.state === 'loading' && browserWhisper.ratio != null && (
             <progress max={1} value={browserWhisper.ratio} aria-label={`${Math.round(browserWhisper.ratio * 100)}%`} />

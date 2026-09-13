@@ -15,7 +15,8 @@ import {
   liveSentenceRange,
   restartBeforeWord,
   tagAt,
-  wordRange
+  wordRange,
+  wordSelectionRanges
 } from './transcriptEdit'
 import { captionClipsOf } from './captions'
 import { hasOpeningTitle } from './title'
@@ -157,30 +158,20 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
 
   const span = wordRange(project.transcript.words, selectedWordIds)
   if (!span) return { summary: '', choices: [] }
-  const dur = Math.max(0, span.end - span.start)
+  const dur = wordSelectionRanges(project.transcript.words, selectedWordIds).reduce((total, range) => total + range.end - range.start, 0)
   const live = words.filter((w) => !w.deleted)
   const dead = words.filter((w) => w.deleted)
-  const covering = coveringAppliedSuggestion(project, span.start, span.end)
   const scene = (project.scenes ?? []).find((s) => span.start >= s.start - 0.05 && span.end <= s.end + 0.05)
   const family = scene ? takeFamily(project.scenes, scene.id) : []
   const choices: ContextChoice[] = []
 
   if (dead.length && !live.length) {
-    choices.push(
-      covering
-        ? {
-            id: 'put-back',
-            label: 'Put back',
-            consequence: `Restores ${formatSpan(dur)} · ${covering.label.toLowerCase()}.`,
-            command: { type: 'revertSuggestion', suggestionId: covering.id }
-          }
-        : {
-            id: 'put-back',
-            label: 'Put back',
-            consequence: `Restores ${formatSpan(dur)} and opens the gap.`,
-            command: { type: 'restoreRange', start: span.start, end: span.end }
-          }
-    )
+    choices.push({
+      id: 'put-back',
+      label: 'Restore words',
+      consequence: `Restores ${formatSpan(dur)} of selected words.`,
+      command: { type: 'toggleWords', wordIds: selectedWordIds }
+    })
     return { summary: `${countLabel(words.length, 'cut word')} · ${formatSpan(dur)}`, choices }
   }
 
@@ -307,7 +298,7 @@ export function transcriptChoices(project: Project, selectedWordIds: string[]): 
 
   return {
     summary: `${countLabel(words.length, 'word')} · ${formatSpan(dur)}`,
-    choices: choices.slice(0, 4)
+    choices
   }
 }
 

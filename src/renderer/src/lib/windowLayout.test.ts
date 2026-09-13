@@ -30,12 +30,12 @@ describe('small-laptop window', () => {
     expect(workspacePaneFromHotkey({ key: '1', code: 'Digit1', altKey: false })).toBeNull()
   })
 
-  test('styles reserve the transport row and shrink chrome on laptop viewports', () => {
+  test('styles let transport controls wrap and shrink chrome on laptop viewports', () => {
     const css = readFileSync(join(process.cwd(), 'src/renderer/src/styles.css'), 'utf8')
-    expect(css).toContain('flex-wrap: nowrap')
-    expect(css).toMatch(/\.transport-context:empty \{[\s\S]*visibility: hidden/)
+    expect(css.match(/\.transport \{([^}]+)\}/)?.[1]).toContain('flex-wrap: wrap')
+    expect(css.match(/\.transport-context:empty \{([^}]+)\}/)?.[1]).toContain('display: none')
     expect(css).toContain('@media (max-width: 1366px)')
     expect(css).toContain('@media (max-height: 768px)')
-    expect(css).toContain('--layout-timeline-max-height: 168px')
+    expect(css).toContain('--layout-timeline-max-height: 220px')
   })
 })

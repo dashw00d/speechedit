@@ -1,3 +1,5 @@
+import { AddContentMenu } from './AddContentMenu'
+import { blocksEditorShortcut } from '../lib/keyboard'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type CSSProperties } from 'react'
 import { mediaUrl } from '../host'
 import { programFrame } from '../../../shared/mediaOrient'
@@ -457,6 +459,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
           <PicturePanButtons />
         </div>
         <div className="transport-actions">
+          <AddContentMenu onToast={onToast} place="above" />
           <OverflowMenu tone="chip" label={`${reviewRate}×`} title="Playback speed and looping">
             <span className="overflow-section-label">Playback</span>
             <RateButtons inMenu />
@@ -706,8 +709,7 @@ function FullScreenButton({ inMenu = false }: { inMenu?: boolean }) {
   }, [full])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const typing = (e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA'
-      if (typing || e.metaKey || e.ctrlKey) return
+      if (blocksEditorShortcut(e) || e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === 'f' || e.key === 'F') {
         if (e.target instanceof HTMLElement && e.target.closest('.transcript')) return
         e.preventDefault()

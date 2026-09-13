@@ -1,3 +1,4 @@
+import { useDialog } from '../useDialog'
 import { useEffect, useState } from 'react'
 import { formatAppIdentity, loadAppIdentity } from '../lib/appIdentity'
 import { PREFERENCES_EVENT } from '../lib/theme'
@@ -18,17 +19,7 @@ export function PreferencesSheet() {
     void loadAppIdentity().then((identity) => setBuildId(formatAppIdentity(identity)))
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      setOpen(false)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [open])
+  const dialogRef = useDialog(open, () => setOpen(false))
 
   if (!open) return null
 
@@ -36,6 +27,8 @@ export function PreferencesSheet() {
     <div className="confirm-back" onMouseDown={() => setOpen(false)}>
       <div
         className="confirm-sheet prefs-sheet"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="prefs-title"

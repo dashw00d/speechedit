@@ -13,6 +13,7 @@ vendor
 *.wav
 *.aup
 .vite
+.cache/
 
 *.tsbuildinfo
 .worktrees/

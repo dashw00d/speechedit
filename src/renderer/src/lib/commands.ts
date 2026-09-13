@@ -1,3 +1,4 @@
+import { wordSelectionRanges } from './transcriptEdit'
 import {
   DEFAULT_CAPTION_STYLE,
   DEFAULT_TRANSFORM,
@@ -257,14 +258,17 @@ function restoreSourceRange(project: Project, start: number, end: number): Proje
 }
 
 function toggleWords(project: Project, wordIds: string[], lift = false): Project {
-  const selected = project.transcript.words.filter((w) => wordIds.includes(w.id))
+  const ids = new Set(wordIds)
+  const selected = project.transcript.words.filter((word) => ids.has(word.id))
   if (!selected.length) return project
-  const start = Math.min(...selected.map((w) => w.start))
-  const end = Math.max(...selected.map((w) => w.end))
-  const shouldDelete = selected.some((w) => !w.deleted)
-  return shouldDelete
-    ? deleteSourceRange(project, start, end, 'transcript', lift)
-    : restoreSourceRange(project, start, end)
+  const shouldDelete = selected.some((word) => !word.deleted)
+  const ranges = wordSelectionRanges(project.transcript.words, wordIds)
+  return ranges.reverse().reduce(
+    (next, span) => shouldDelete
+      ? deleteSourceRange(next, span.start, span.end, 'transcript', lift)
+      : restoreSourceRange(next, span.start, span.end),
+    project
+  )
 }
 
 function cutMarkedRange(project: Project, lift: boolean): Project {

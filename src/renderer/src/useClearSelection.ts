@@ -1,3 +1,4 @@
+import { blocksEditorShortcut } from './lib/keyboard'
 import { useEffect } from 'react'
 import { isTypingTarget, keepsSelection } from './lib/selectionSurface'
 import { useEditor } from './store'
@@ -24,7 +25,7 @@ export function useClearSelection() {
     }
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || blocksEditorShortcut(e)) return
       const editor = useEditor.getState()
       if (editor.exporting || editor.analyzing) return
       if (editor.palette) {

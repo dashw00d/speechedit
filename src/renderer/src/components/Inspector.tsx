@@ -104,7 +104,6 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
   const showNowWord = useEditor((s) => s.showNowWord)
   const setShowNowWord = useEditor((s) => s.setShowNowWord)
 
-  const [advanced, setAdvanced] = useState(false)
   const [projectAdvanced, setProjectAdvanced] = useState(false)
   const [projectOpen, setProjectOpen] = useState(false)
   const [encoders, setEncoders] = useState<EncoderOption[]>([
@@ -223,8 +222,13 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
       setProjectOpen(true)
       setTab('project')
     }
+    const openSelectionDetails = () => { setProjectOpen(false); setTab('transform') }
+    window.addEventListener('speechedit:selection-details', openSelectionDetails)
     window.addEventListener('speechedit:project-settings', openProjectSettings)
-    return () => window.removeEventListener('speechedit:project-settings', openProjectSettings)
+    return () => {
+      window.removeEventListener('speechedit:project-settings', openProjectSettings)
+      window.removeEventListener('speechedit:selection-details', openSelectionDetails)
+    }
   }, [setTab])
 
   const panelTitle =
@@ -245,15 +249,16 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               : projectDetail.title
 
   return (
-    <aside className="panel inspector">
+    <aside className="panel inspector" aria-label="Inspector">
       <div className="inspector-head" aria-label={`${panelTitle} details`}>
-        <div className="panel-head">Details</div>
-        <div className="tabs">
+        <div className="panel-head">Inspector</div>
+        <div className="tabs" aria-label="Inspector views">
           {tabs.map((item) => (
             <button
               key={item.id}
               className="tab"
               data-on={pane === item.id}
+              aria-pressed={pane === item.id}
               onClick={() => {
                 if (item.id === 'agent') {
                   setProjectOpen(false)
@@ -269,7 +274,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 }
               }}
             >
-              {item.label}
+              {item.id === 'caption' && titleCard ? 'Title' : item.id === 'caption' && lowerThirdCard ? 'Label' : item.id === 'clip' && clipKind === 'audio' ? 'Audio' : item.label}
             </button>
           ))}
         </div>
@@ -292,7 +297,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onClear={() => clearSelection()}
             />
             <p className="helper-excerpt">"{wordsDetail.excerpt}"</p>
-            <HelperActions dispatch={dispatch} onToast={onToast} actions={wordsDetail.actions} onNavigate={compareTakes} />
+            <HelperActions dispatch={dispatch} onToast={onToast} actions={[...wordsDetail.actions].sort((a, b) => Number(b.id === 'remove' || b.id === 'put-back') - Number(a.id === 'remove' || a.id === 'put-back')).map((action, index) => ({ ...action, primary: index === 0 }))} onNavigate={compareTakes} />
             <div className="chips inspector-utility-actions" aria-label="Copy selection">
               <span className="inspector-action-label">Copy</span>
               <button
@@ -312,7 +317,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 Copy frame
               </button>
             </div>
-            <HelperSection title="Adjust">
+            <HelperSection title="Words & speaker">
               {wordsDetail.speakerId != null && (
                 <>
                   <Field label="Speaker">
@@ -330,7 +335,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                       ))}
                     </select>
                   </Field>
-                  <Field label="Name">
+                  <Field label="Speaker name">
                     <input
                       key={wordsDetail.speakerId}
                       type="text"
@@ -697,7 +702,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             <section className="project-overview-section">
             <HelperHead headline={projectDetail.headline} />
             {projectDetail.pendingByType.length > 0 && (
-              <HelperSection title="Issues & suggestions">
+              <InspectorSection title="Issues & suggestions" description="Review suggested cuts before applying them">
                 {projectDetail.pendingByType.map((row) => (
                   <div key={row.type} className="helper-row static">
                     <span>
@@ -723,14 +728,13 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 <button className="chip" type="button" onClick={() => setReviewing(true)}>
                   Review issues
                 </button>
-              </HelperSection>
+              </InspectorSection>
             )}
             {projectDetail.nextHint && pane === 'project' && <HelperNext hint={projectDetail.nextHint} />}
             {projectDetail.agentHint && pane === 'project' && (
               <p className="help agent-hint">{projectDetail.agentHint}</p>
             )}
             </section>
-            <ModelsPanel onToast={onToast ?? (() => undefined)} />
             {!projectDetail.isEmpty && (
             <>
             <section className="project-settings-section project-file-section">
@@ -829,7 +833,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               )}
               {task.showPace && (
                 <Slider
-                  label="Pause padding"
+                  label="Pause padding (seconds)"
                   value={project.cutMargin}
                   min={0}
                   max={0.4}
@@ -954,7 +958,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     onChange={(y) => dispatch({ type: 'setPicture', transform: { y } })}
                   />
                   <Slider
-                    label="Rotation"
+                    label="Rotation (degrees)"
                     value={project.picture.rotation}
                     min={-180}
                     max={180}
@@ -988,6 +992,9 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
             )}
             </>
             )}
+            <InspectorSection title="Transcription & AI" description="Models, providers, and connection checks" defaultOpen={projectDetail.isEmpty}>
+              <ModelsPanel onToast={onToast ?? (() => undefined)} />
+            </InspectorSection>
           </>
         )}
 
@@ -1039,6 +1046,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onHear={() => playLoop(clip.start, clip.start + clip.duration)}
               onClear={() => clearSelection()}
             />
+            <InspectorSection title="Timing & clip actions" description="Trim, split, duplicate, and move">
             <HelperActions
               dispatch={dispatch}
               actions={[
@@ -1218,6 +1226,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 </div>
               </>
             )}
+            </InspectorSection>
+            <InspectorSection title="Sound" description="Volume and stereo balance" defaultOpen>
             <Slider
               label="Clip volume"
               value={clip.volume}
@@ -1235,7 +1245,17 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onChange={(pan) => dispatch({ type: 'setPan', clipId: clip.id, pan })}
             />
             {!isPrimary && (
-              <>
+              <label className="field check">
+                <span>Mute clip</span>
+                <input
+                  type="checkbox"
+                  checked={clip.muted}
+                  onChange={(e) => dispatch({ type: 'setMuted', clipId: clip.id, muted: e.target.checked })}
+                />
+              </label>
+            )}
+            </InspectorSection>
+            {!isPrimary && <InspectorSection title="Picture placement" description="Position presets and source media">
                 <p className="help">Picture-in-picture corners. Same look you can paste with ⌘⇧V.</p>
                 <div className="chips">
                   {(
@@ -1273,32 +1293,17 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                     Replace footage
                   </button>
                 </div>
-              </>
-            )}
-            {!isPrimary && (
-              <label className="field check">
-                <span>Mute clip</span>
-                <input
-                  type="checkbox"
-                  checked={clip.muted}
-                  onChange={(e) => dispatch({ type: 'setMuted', clipId: clip.id, muted: e.target.checked })}
-                />
-              </label>
-            )}
-            <button className="chip" type="button" onClick={() => setAdvanced((value) => !value)}>
-              {advanced ? 'Hide transform' : 'Transform & fades'}
-            </button>
-            {advanced && (
-              <>
+            </InspectorSection>}
+            <InspectorSection title="Transform" description="Position, scale, rotation, and opacity">
             <Slider
-              label="X"
+              label="Horizontal position"
               value={clip.transform.x}
               min={-800}
               max={800}
               onChange={(x) => dispatch({ type: 'setTransform', clipId: clip.id, transform: { x } })}
             />
             <Slider
-              label="Y"
+              label="Vertical position"
               value={clip.transform.y}
               min={-800}
               max={800}
@@ -1315,7 +1320,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               }
             />
             <Slider
-              label="Rotation"
+              label="Rotation (degrees)"
               value={clip.transform.rotation}
               min={-180}
               max={180}
@@ -1333,8 +1338,10 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 dispatch({ type: 'setTransform', clipId: clip.id, transform: { opacity } })
               }
             />
+            </InspectorSection>
+            <InspectorSection title="Fades" description="Ease the picture in and out">
             <Slider
-              label="Fade in"
+              label="Fade in (seconds)"
               value={clip.fadeIn}
               min={0}
               max={2}
@@ -1344,7 +1351,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               }
             />
             <Slider
-              label="Fade out"
+              label="Fade out (seconds)"
               value={clip.fadeOut}
               min={0}
               max={2}
@@ -1353,6 +1360,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 dispatch({ type: 'setFade', targetId: clip.id, edge: 'out', duration })
               }
             />
+            </InspectorSection>
+            <InspectorSection title="Crop" description="Trim the edges of the picture">
             <Slider
               label="Crop"
               value={clip.transform.crop?.w ?? 1}
@@ -1433,8 +1442,8 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 })
               }}
             />
-            {isPrimary && (
-              <>
+            </InspectorSection>
+            {isPrimary && <InspectorSection title="Speed & animation" description="Playback speed and keyframes">
                 <Slider
                   label="Speed"
                   value={clip.speed}
@@ -1461,10 +1470,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 >
                   Add keyframe here
                 </button>
-              </>
-            )}
-              </>
-            )}
+            </InspectorSection>}
           </>
         )}
 
@@ -1482,7 +1488,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onChange={(volume) => dispatch({ type: 'setAudioMaster', patch: { volume } })}
             />
             <Slider
-              label="Fade in"
+              label="Fade in (seconds)"
               value={project.audioMaster.fadeIn}
               min={0}
               max={3}
@@ -1490,7 +1496,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onChange={(fadeIn) => dispatch({ type: 'setAudioMaster', patch: { fadeIn } })}
             />
             <Slider
-              label="Fade out"
+              label="Fade out (seconds)"
               value={project.audioMaster.fadeOut}
               min={0}
               max={3}
@@ -1498,7 +1504,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onChange={(fadeOut) => dispatch({ type: 'setAudioMaster', patch: { fadeOut } })}
             />
             <Slider
-              label="Low EQ"
+              label="Bass (dB)"
               value={project.audioMaster.eqLow}
               min={-12}
               max={12}
@@ -1506,7 +1512,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onChange={(eqLow) => dispatch({ type: 'setAudioMaster', patch: { eqLow } })}
             />
             <Slider
-              label="Mid EQ"
+              label="Midrange (dB)"
               value={project.audioMaster.eqMid}
               min={-12}
               max={12}
@@ -1514,7 +1520,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               onChange={(eqMid) => dispatch({ type: 'setAudioMaster', patch: { eqMid } })}
             />
             <Slider
-              label="High EQ"
+              label="Treble (dB)"
               value={project.audioMaster.eqHigh}
               min={-12}
               max={12}
@@ -1570,15 +1576,7 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
               }
               onClear={() => clearSelection()}
             />
-            <button
-              className="chip"
-              onClick={() => onToast?.(generateCaptionsFromContext().toast)}
-            >
-              Caption remaining words
-            </button>
-            <button className="chip" onClick={() => onToast?.(addSceneLowerThirdsFromContext().toast)}>
-              Scene lower thirds
-            </button>
+            <HelperSection title="Text on screen">
             <Field label="Text">
               <textarea
                 ref={titleFieldRef}
@@ -1590,8 +1588,9 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 }
               />
             </Field>
+            </HelperSection>
             {overlayClip && (
-              <>
+              <InspectorSection title="Appearance" description="Size, alignment, and colors" defaultOpen>
                 <Slider
                   label="Size"
                   value={overlayClip.style?.fontSize ?? 42}
@@ -1657,8 +1656,19 @@ export function Inspector({ onToast }: { onToast?: (msg: string) => void }) {
                 >
                   Apply style
                 </button>
-              </>
+              </InspectorSection>
             )}
+            <InspectorSection title="Captions for the whole reel" description="Generate captions and chapter labels">
+            <button
+              className="chip"
+              onClick={() => onToast?.(generateCaptionsFromContext().toast)}
+            >
+              Caption remaining words
+            </button>
+            <button className="chip" onClick={() => onToast?.(addSceneLowerThirdsFromContext().toast)}>
+              Scene lower thirds
+            </button>
+            </InspectorSection>
           </>
         )}
 
@@ -1758,9 +1768,7 @@ function HelperActions({
   variant?: 'list' | 'decision'
 }) {
   if (!actions.length) return null
-  return (
-    <div className={variant === 'decision' ? 'suggestion-actions' : 'helper-actions'}>
-      {actions.map((action) => (
+  const renderAction = (action: InspectorAction) => (
         <button
           key={action.id}
           className={variant === 'decision' ? 'suggestion-action' : 'helper-action'}
@@ -1804,7 +1812,16 @@ function HelperActions({
             </>
           )}
         </button>
-      ))}
+  )
+  if (variant === 'decision') return <div className="suggestion-actions">{actions.map(renderAction)}</div>
+  const visibleCount = actions.length > 2 ? 1 : actions.length
+  return (
+    <div className="inspector-actions-stack">
+      <div className="helper-actions">{actions.slice(0, visibleCount).map(renderAction)}</div>
+      {actions.length > 2 && <details className="inspector-more-actions" key={actions.map((action) => action.id).join(',')}>
+        <summary>More actions <span>{actions.length - visibleCount}</span></summary>
+        <div className="helper-actions">{actions.slice(visibleCount).map(renderAction)}</div>
+      </details>}
     </div>
   )
 }
@@ -1833,6 +1850,19 @@ function decisionCopyForAction(action: InspectorAction): string {
   if (action.label === 'Quiet') return 'Reduce the loudness of this section.'
   if (action.label.startsWith('Speed')) return 'Keep it, but play it faster.'
   return action.consequence
+}
+
+function InspectorSection({ title, description, defaultOpen = false, children }: {
+  title: string; description?: string; defaultOpen?: boolean; children: ReactNode
+}) {
+  return (
+    <details className="inspector-section" open={defaultOpen}>
+      <summary>
+        <span><strong>{title}</strong>{description && <small>{description}</small>}</span>
+      </summary>
+      <div className="inspector-section-body">{children}</div>
+    </details>
+  )
 }
 
 function HelperSection({ title, children }: { title: string; children: ReactNode }) {
@@ -1879,19 +1909,46 @@ function Slider({
   step?: number
   onChange: (value: number) => void
 }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const editSession = useRef({ onChange, value, min, max })
+  const formatted = Number(value).toFixed(step < 1 ? 2 : 0)
+  function commit() {
+    if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) {
+      const session = editSession.current
+      const next = Math.min(session.max, Math.max(session.min, Number(draft)))
+      if (next !== session.value) session.onChange(next)
+    }
+    setDraft(null)
+  }
   return (
     <div className="field">
       <label>{label}</label>
       <div className="slider">
         <input
           type="range"
+          aria-label={label}
           min={min}
           max={max}
           step={step}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
         />
-        <span>{Number(value).toFixed(step < 1 ? 2 : 0)}</span>
+        <input
+          className="slider-number"
+          type="number"
+          aria-label={`${label} value`}
+          min={min}
+          max={max}
+          step={step}
+          value={draft ?? formatted}
+          onFocus={(event) => { editSession.current = { onChange, value, min, max }; event.currentTarget.select() }}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur()
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(null) }
+          }}
+        />
       </div>
     </div>
   )

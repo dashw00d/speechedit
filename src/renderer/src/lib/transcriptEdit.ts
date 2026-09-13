@@ -17,6 +17,19 @@ export function wordRange(words: Word[], ids: string[]): Interval | null {
   }
 }
 
+/** Separate selections never include intervening, unselected words. */
+export function wordSelectionRanges(words: Word[], ids: string[]): Interval[] {
+  const selected = new Set(ids)
+  const ranges: Interval[] = []
+  let range: Interval | undefined
+  for (const word of words) {
+    if (!selected.has(word.id)) { range = undefined; continue }
+    if (range) range.end = Math.max(range.end, word.end)
+    else { range = { start: word.start, end: word.end }; ranges.push(range) }
+  }
+  return ranges
+}
+
 export function sentenceRange(words: Word[], wordId: string): Interval | null {
   const index = words.findIndex((w) => w.id === wordId)
   if (index < 0) return null

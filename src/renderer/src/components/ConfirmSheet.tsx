@@ -1,30 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useDialog } from '../useDialog'
+import { useEffect, useState } from 'react'
 import { onLoseWorkRequest, resolveLoseWork, type LoseWorkRequest } from '../lib/loseWork'
 
 export function ConfirmSheet() {
   const [request, setRequest] = useState<LoseWorkRequest | null>(null)
-  const saveRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => onLoseWorkRequest(setRequest), [])
 
-  useEffect(() => {
-    if (!request) return
-    saveRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        resolveLoseWork('cancel')
-      }
-      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        e.stopPropagation()
-        resolveLoseWork('save')
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [request])
+  const dialogRef = useDialog(Boolean(request), () => resolveLoseWork('cancel'))
 
   if (!request) return null
 
@@ -32,6 +15,8 @@ export function ConfirmSheet() {
     <div className="confirm-back" onMouseDown={() => resolveLoseWork('cancel')}>
       <div
         className="confirm-sheet"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="lose-work-title"
@@ -49,7 +34,6 @@ export function ConfirmSheet() {
             Discard
           </button>
           <button
-            ref={saveRef}
             type="button"
             className="chip confirm-primary"
             onClick={() => resolveLoseWork('save')}

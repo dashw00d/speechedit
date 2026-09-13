@@ -9,12 +9,14 @@ export type BrowserWhisperState = {
   ratio?: number
   detail: string
   backend?: 'webgpu' | 'wasm'
+  fallbackReason?: string
 }
 
 type WorkerMessage =
   | { type: 'model-progress'; ratio: number; detail: string }
   | { type: 'model-status'; detail: string }
-  | { type: 'ready'; backend: 'webgpu' | 'wasm' }
+  | { type: 'ready'; backend: 'webgpu' | 'wasm'; fallbackReason?: string }
+  | { type: 'fallback'; reason: string }
   | { type: 'transcription-status'; id: string; detail: string }
   | { type: 'result'; id: string; cues: AsrCue[] }
   | { type: 'error'; id: string | null; error: string }
@@ -53,14 +55,23 @@ function createWorker(): Worker {
   if (worker) return worker
   const next = new Worker(new URL('../workers/browserWhisper.worker.ts', import.meta.url), { type: 'module' })
   next.onmessage = (event: MessageEvent<WorkerMessage>) => {
+    if (worker !== next) return
     const message = event.data
+    if (message.type === 'fallback') {
+      console.warn('[SpeechEdit Whisper]', message.reason)
+      next.terminate()
+      worker = null
+      publish({ state: 'loading', detail: 'Starting the compatibility engine', fallbackReason: message.reason })
+      createWorker().postMessage({ type: 'load', backend: 'wasm', fallbackReason: message.reason })
+      return
+    }
     if (message.type === 'model-progress') {
-      publish({ state: 'loading', ratio: message.ratio, detail: message.detail })
+      publish({ ...snapshot, state: 'loading', ratio: message.ratio, detail: message.detail })
       updateActivity('system:browser-whisper', { ratio: message.ratio, detail: message.detail })
       return
     }
     if (message.type === 'model-status') {
-      publish({ state: 'loading', detail: message.detail })
+      publish({ ...snapshot, state: 'loading', detail: message.detail })
       updateActivity('system:browser-whisper', { detail: message.detail })
       return
     }
@@ -68,7 +79,8 @@ function createWorker(): Worker {
       const ready: BrowserWhisperState = {
         state: 'ready',
         detail: message.backend === 'webgpu' ? 'Ready on this device · WebGPU' : 'Ready on this device · compatibility mode',
-        backend: message.backend
+        backend: message.backend,
+        fallbackReason: message.fallbackReason
       }
       publish(ready)
       finishActivity('system:browser-whisper')
@@ -98,17 +110,24 @@ function createWorker(): Worker {
     }
     publish({ state: 'error', detail: error.message })
     failActivity('system:browser-whisper', error.message)
+    next.terminate()
+    worker = null
     rejectLoad?.(error)
     resolveLoad = null
     rejectLoad = null
   }
   next.onerror = (event) => {
+    if (worker !== next) return
     const error = new Error(event.message || 'Browser Whisper worker stopped.')
     publish({ state: 'error', detail: error.message })
     failActivity('system:browser-whisper', error.message)
     rejectLoad?.(error)
     for (const request of requests.values()) request.reject(error)
     requests.clear()
+    resolveLoad = null
+    rejectLoad = null
+    next.terminate()
+    worker = null
   }
   worker = next
   return next
@@ -192,6 +211,7 @@ export function cancelBrowserWhisper(): void {
   cancellationVersion += 1
   if (!worker) return
   const error = new JobCancelled('import')
+  rejectLoad?.(error)
   for (const request of requests.values()) request.reject(error)
   requests.clear()
   worker.terminate()

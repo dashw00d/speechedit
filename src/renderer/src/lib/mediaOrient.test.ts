@@ -124,7 +124,8 @@ describe('camera display rotation', () => {
     expect(info.width).toBe(640)
     expect(info.height).toBe(360)
     if (!info.rotation) {
-      await Bun.$`${ffmpeg} -y -i /tmp/se-land-src.mp4 -c:v libx264 -pix_fmt yuv420p -c:a aac -metadata:s:v:0 rotate=90 /tmp/se-phone-rot.mp4`.quiet()
+      // Newer FFmpeg versions set display rotation as an input option.
+      await Bun.$`${ffmpeg} -y -display_rotation:v:0 90 -i /tmp/se-land-src.mp4 -c copy /tmp/se-phone-rot.mp4`.quiet()
     }
     const stamped = info.rotation ? info : await probe('/tmp/se-phone-rot.mp4')
     expect([90, 270]).toContain(stamped.rotation)

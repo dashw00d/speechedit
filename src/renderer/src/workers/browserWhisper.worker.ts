@@ -1,11 +1,14 @@
 import { env, pipeline } from '@huggingface/transformers'
+import wasmUrl from '../../../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm?url'
+import runtimeUrl from '../../../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs?url'
+import { browserGpuUnavailableReason } from '../lib/browserGpu'
 
 const MODEL = 'onnx-community/whisper-tiny.en'
 const MODEL_REVISION = '2575352d61be1bf7225cf8f8b268a4678025fc58'
 const MODEL_CACHE_VERSION = 'v2'
 
 type WorkerRequest =
-  | { type: 'load' }
+  | { type: 'load'; backend?: 'wasm'; fallbackReason?: string }
   | { type: 'transcribe'; id: string; audio: Float32Array }
 
 type Transcriber = (
@@ -21,6 +24,7 @@ const scope = globalThis as unknown as {
 let transcriber: Transcriber | null = null
 let loading: Promise<Transcriber> | null = null
 let backend: 'webgpu' | 'wasm' = 'wasm'
+let fallbackReason: string | undefined
 const downloads = new Map<string, { loaded: number; total: number }>()
 
 env.allowLocalModels = true
@@ -32,7 +36,15 @@ env.localModelPath = `/whisper-models/${MODEL_CACHE_VERSION}/`
 // dev/preview server supplies a same-origin cached copy.
 env.allowRemoteModels = true
 env.useBrowserCache = true
-if (env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = 1
+if (env.backends.onnx.wasm) {
+  env.backends.onnx.wasm.numThreads = 1
+  // Transformers defaults to a CDN even when Vite emits the WASM asset.
+  // Ship the matching JS/WASM pair with the application for both backends.
+  env.backends.onnx.wasm.wasmPaths = {
+    wasm: new URL(wasmUrl, self.location.href).href,
+    mjs: new URL(runtimeUrl, self.location.href).href
+  }
+}
 
 function send(message: unknown): void {
   scope.postMessage(message)
@@ -75,28 +87,32 @@ async function build(device: 'webgpu' | 'wasm'): Promise<Transcriber> {
   return await pipeline('automatic-speech-recognition', MODEL, options) as unknown as Transcriber
 }
 
-async function load(): Promise<Transcriber> {
+async function load(forceWasm = false): Promise<Transcriber> {
   if (transcriber) return transcriber
   if (loading) return loading
   loading = (async () => {
-    const hasWebGpu = 'gpu' in navigator
-    if (hasWebGpu) {
+    if (!forceWasm) {
+      const gpu = (navigator as unknown as { gpu?: { requestAdapter: () => Promise<unknown | null> } }).gpu
+      fallbackReason = await browserGpuUnavailableReason(isSecureContext, gpu)
+    }
+    if (!forceWasm && !fallbackReason) {
       try {
         send({ type: 'model-status', detail: 'Starting Whisper on the GPU' })
         backend = 'webgpu'
         transcriber = await build('webgpu')
-      } catch {
-        send({
-          type: 'model-status',
-          detail: 'GPU unavailable; starting the compatibility engine'
-        })
+      } catch (error) {
+        fallbackReason = `GPU model initialization failed: ${error instanceof Error ? error.message : String(error)}`
+        // ONNX initialization can stay rejected after a GPU failure. The host
+        // must start WASM in a fresh worker, with a fresh runtime instance.
+        send({ type: 'fallback', reason: fallbackReason })
+        throw new Error(fallbackReason)
       }
     }
     if (!transcriber) {
       backend = 'wasm'
       transcriber = await build('wasm')
     }
-    send({ type: 'ready', backend })
+    send({ type: 'ready', backend, fallbackReason })
     return transcriber
   })().finally(() => {
     loading = null
@@ -107,7 +123,9 @@ async function load(): Promise<Transcriber> {
 scope.onmessage = (event) => {
   const request = event.data
   if (request.type === 'load') {
-    void load().catch((error) => {
+    fallbackReason = request.fallbackReason
+    void load(request.backend === 'wasm').catch((error) => {
+      if (backend === 'webgpu' && fallbackReason) return
       send({ type: 'error', id: null, error: error instanceof Error ? error.message : String(error) })
     })
     return

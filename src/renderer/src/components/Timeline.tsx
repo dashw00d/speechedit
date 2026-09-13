@@ -1,3 +1,6 @@
+import { AddContentMenu } from './AddContentMenu'
+import { copySelectedClip, pasteClipboard } from '../lib/clipClipboard'
+import { protectRange } from '../lib/protect'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { isPrimaryLane, primarySegments, programLength } from '../lib/commands'
 import { wordsInRange } from '../lib/edl'
@@ -20,6 +23,7 @@ const LABEL_WIDTH = 184
 
 export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) {
   const project = useEditor((s) => s.project)
+  const clipboard = useEditor((s) => s.clipClipboard)
   const selectedClipId = useEditor((s) => s.selectedClipId)
   const selectedClipIds = useEditor((s) => s.selectedClipIds)
   const selectClip = useEditor((s) => s.selectClip)
@@ -68,7 +72,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
     if (tool !== 'guard') return
     const dismissOutsideTimeline = (event: PointerEvent) => {
       const target = event.target
-      if (target instanceof Element && !target.closest('.timeline-panel')) setTool('select')
+      if (target instanceof Element && !target.closest('.timeline-panel, .transcript, .overflow-menu-fly, .mobile-workspace-nav')) setTool('select')
     }
     document.addEventListener('pointerdown', dismissOutsideTimeline, true)
     return () => document.removeEventListener('pointerdown', dismissOutsideTimeline, true)
@@ -256,6 +260,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             className="timeline-btn"
             type="button"
             data-active={snap}
+            aria-pressed={snap}
             onClick={() => setSnap(!snap)}
             title={snap ? 'Snap on — playhead and trims stick to words and clip edges' : 'Snap off — free placement'}
           >
@@ -265,10 +270,11 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             className="timeline-btn"
             type="button"
             data-active={ripple}
+            aria-pressed={ripple}
             title={
               ripple
-                ? 'Ripple on — Delete closes the gap. Click to lift instead (leave a hold).'
-                : 'Ripple off — Delete leaves a black hold so later clips stay put.'
+                ? 'Removing words closes the gap. Click to leave a blank space and keep later clips in place.'
+                : 'Removing words leaves a blank space so later clips stay in place. Click to close gaps instead.'
             }
             onClick={() => setRipple(!ripple)}
           >
@@ -276,6 +282,12 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           </button>
         </div>
         <div className="timeline-toolbar-group timeline-edit-controls" data-label="Tools" aria-label="Timeline editing tools">
+          <AddContentMenu onToast={onToast} />
+          {(selectedClipId || clipboard?.clip) && <OverflowMenu tone="chip" place="below" label="Clip actions" title="Actions for the selected clip">
+            {project.tracks.some((track) => track.clips.some((clip) => clip.id === selectedClipId)) && <button className="overflow-item" onClick={() => { if (copySelectedClip('clip')) onToast?.('Copied clip. Paste at the playhead.') }}>Copy selected clip</button>}
+            {clipboard?.clip && <button className="overflow-item" onClick={() => { if (pasteClipboard('clip')) onToast?.('Pasted at the playhead.') }}>Paste clip at playhead</button>}
+            {selectedClipId && <button className="overflow-item" onClick={() => { window.dispatchEvent(new Event('speechedit:selection-details')); window.dispatchEvent(new CustomEvent('speechedit:workspace-pane', { detail: 'review' })) }}>Adjust selected clip…</button>}
+          </OverflowMenu>}
           <button
             className="timeline-btn"
             type="button"
@@ -294,6 +306,22 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           >
             Split
           </button>
+          <OverflowMenu tone="chip" place="below" label="Trim" title="Remove the beginning or end of a clip">
+            <span className="overflow-section-label">Move the playhead to the new edge first</span>
+            <button type="button" className="overflow-item" disabled={programTime <= 0} onClick={() => {
+              dispatch({ type: 'rippleTrimToPlayhead', edge: 'in', time: programTime, lift: !ripple })
+              onToast?.('Trimmed the start to the playhead. Undo puts it back.')
+            }}>Remove start up to playhead (Q)</button>
+            <button type="button" className="overflow-item" disabled={programTime >= programLength(project)} onClick={() => {
+              dispatch({ type: 'rippleTrimToPlayhead', edge: 'out', time: programTime, lift: !ripple })
+              onToast?.('Trimmed the end back to the playhead. Undo puts it back.')
+            }}>Remove end after playhead (W)</button>
+          </OverflowMenu>
+          {segments.length > 1 && <button className="timeline-btn" title="Fade across the nearest join at the playhead" onClick={() => {
+            const before = useEditor.getState().project
+            dispatch({ type: 'dissolveAtPlayhead', time: programTime, duration: 0.4 })
+            onToast?.(useEditor.getState().project === before ? 'Move the playhead near a join between clips.' : 'Added a cross-dissolve. Adjust fades in the clip inspector.')
+          }}>Dissolve</button>}
           <button
             className="timeline-btn"
             type="button"
@@ -332,6 +360,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             className="timeline-btn"
             type="button"
             data-active={tool === 'guard'}
+            aria-pressed={tool === 'guard'}
             onClick={() => setTool(tool === 'guard' ? 'select' : 'guard')}
             title="Protect words so Auto Edit skips them (G)"
           >
@@ -371,6 +400,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
         </div>
         {showEditFilters && (
           <div className="timeline-toolbar-group edit-filters" data-label="Show" aria-label="Filter timeline markers">
+            <OverflowMenu tone="chip" place="below" label={`Markers: ${{ all: 'All', pending: 'Needs review', applied: 'Applied', scenes: 'Chapters', guards: 'Protected', notes: 'Notes' }[editFilter]}`} title="Choose which timeline markers to show">
             {(
               [
                 ['all', 'All'],
@@ -384,7 +414,8 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
               <button
                 key={id}
                 type="button"
-                className="edit-filter"
+                className="overflow-item edit-filter"
+                aria-pressed={editFilter === id}
                 data-active={editFilter === id}
                 title={
                   id === 'notes'
@@ -405,6 +436,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
                 {editCounts[id] > 0 ? ` ${editCounts[id]}` : ''}
               </button>
             ))}
+            </OverflowMenu>
           </div>
         )}
         <div className="timeline-toolbar-group timeline-track-controls" data-label="Tracks" aria-label="Add or reveal tracks">
@@ -448,6 +480,10 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
         </div>
         {io && (
           <div className="timeline-toolbar-group timeline-mark-controls" data-label="Marked clip" aria-label="Actions for the marked clip">
+            <OverflowMenu tone="chip" place="below" label="Protect marked" title="Keep this marked range during automatic editing">
+              <button className="overflow-item" onClick={() => onToast?.(protectRange(programToSourceOf(project, io.start), programToSourceOf(project, io.end), 'keep').toast)}>Keep marked range</button>
+              <button className="overflow-item" onClick={() => onToast?.(protectRange(programToSourceOf(project, io.start), programToSourceOf(project, io.end), 'demo').toast)}>Keep as a silent demonstration</button>
+            </OverflowMenu>
             <>
               <button
                 className="timeline-btn"

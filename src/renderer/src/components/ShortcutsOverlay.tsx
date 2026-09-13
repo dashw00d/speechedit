@@ -1,8 +1,12 @@
+import { useEditor } from '../store'
+import { useDialog } from '../useDialog'
+import { shortcutLabel } from '../lib/keyboard'
+
 const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
   {
     title: 'Play',
     rows: [
-      { keys: 'Space', does: 'Play or pause. With a word selected, loops that sentence.' },
+      { keys: 'Space', does: 'Play or pause from the current position.' },
       { keys: 'K / J / L', does: 'Play · skip back 2s · skip ahead 2s' },
       { keys: 'Home / End', does: 'Jump to the start or end' },
       { keys: 'P', does: 'Play the marked range, or the selected words' },
@@ -14,7 +18,7 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
   {
     title: 'Cut',
     rows: [
-      { keys: 'Delete', does: 'Cut the selection. Ripple off leaves a hold.' },
+      { keys: 'Delete', does: 'Remove the selection. Close gaps joins the remaining video; Leave gaps keeps its timing.' },
       { keys: '.', does: 'Cut this sentence and hear the join.' },
       { keys: ',', does: 'Cut the previous sentence. On a restart, that is Cut previous.' },
       { keys: 'Gap', does: 'Insert a 1s hold at the playhead' },
@@ -52,8 +56,10 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
     title: 'App',
     rows: [
       { keys: '⌘K', does: 'Command palette' },
-      { keys: '⌘J', does: 'Agent' },
-      { keys: '⌘Z', does: 'Undo' },
+      { keys: '⌘J', does: 'Open Assistant' },
+      { keys: '⌘Z', does: 'Undo the last edit' },
+      { keys: '⌘⇧Z', does: 'Redo an undone edit (Ctrl+Y also works)' },
+      { keys: '⌘S', does: 'Save project' },
       { keys: '\\', does: 'Fit the timeline' },
       { keys: 'G', does: 'Protect words so Auto Edit skips them' },
       { keys: '?', does: 'This list' },
@@ -63,20 +69,29 @@ const GROUPS: { title: string; rows: { keys: string; does: string }[] }[] = [
 ]
 
 export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const dialogRef = useDialog(open, onClose)
   if (!open) return null
   return (
     <div className="confirm-back shortcuts-back" onMouseDown={onClose}>
       <div
         className="confirm-sheet shortcuts-sheet"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcuts-title"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <p id="shortcuts-title" className="confirm-title">
-          Keyboard
+          Editing help
         </p>
-        <p className="confirm-copy">The ones you need with a headache. ? closes this.</p>
+        <p className="confirm-copy">Start with select, preview, and remove. Undo is always available. Escape closes this guide.</p>
+        <ol className="editing-quick-start">
+          <li><strong>Choose what to change.</strong> Click a word, or drag across several. Click a pause or timeline clip to see its tools.</li>
+          <li><strong>Listen, then edit.</strong> Preview plays your words. Remove cuts them from the video. Correct word fixes a transcription mistake.</li>
+          <li><strong>Change your mind.</strong> Undo reverses an edit. Select crossed-out words and choose Restore words to bring them back.</li>
+          <li><strong>Keep your work.</strong> Save keeps an editable project. Export creates the finished video, audio, or captions.</li>
+        </ol>
         <div className="shortcuts-grid">
           {GROUPS.map((group) => (
             <section key={group.title}>
@@ -84,7 +99,7 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
               <dl>
                 {group.rows.map((row) => (
                   <div key={row.keys} className="shortcuts-row">
-                    <dt>{row.keys}</dt>
+                    <dt>{shortcutLabel(row.keys)}</dt>
                     <dd>{row.does}</dd>
                   </div>
                 ))}
@@ -93,6 +108,7 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
           ))}
         </div>
         <div className="confirm-actions">
+          <button type="button" className="chip" onClick={() => { onClose(); useEditor.getState().setPalette(true) }}>Find an editing action</button>
           <button type="button" className="chip" onClick={onClose}>
             Close
           </button>

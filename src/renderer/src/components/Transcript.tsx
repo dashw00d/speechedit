@@ -1,4 +1,7 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { addSceneLowerThirdsFromContext } from '../lib/lowerThird'
+import { generateCaptionsFromContext } from '../lib/captionGenerate'
+import { blocksEditorShortcut, shortcutLabel } from '../lib/keyboard'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { leftoverForSpan, reviewGap } from '../lib/analysis'
 import { isFillerToken, isPlaceholderWord, transcriptIsPlaceholder } from '../lib/transcript'
 import { ingestDroppedFile } from '../lib/fileActions'
@@ -7,7 +10,6 @@ import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
   appliedForWord,
   extendSelection,
-  nearestSpokenWord,
   PARAGRAPH_GAP,
   paragraphIds,
   sentenceIds,
@@ -19,7 +21,6 @@ import {
 } from '../lib/transcriptEdit'
 import { toastForCaptionFollow } from '../lib/captions'
 import {
-  commandForGapDoubleClick,
   formatSpan,
   sceneInspectorDetail,
   toastForCommand,
@@ -36,21 +37,20 @@ import {
   speakerIdFromSelection,
   toastForSpeakerRename
 } from '../lib/speakerRename'
-import { splitChapterFromContext } from '../lib/chapterShape'
+import { chapterMergeTarget, mergeChapterFromContext, splitChapterFromContext } from '../lib/chapterShape'
 import { removeSceneFromContext } from '../lib/sceneRemove'
 import { protectRange } from '../lib/protect'
 import { coveringNote, isTapeNote, noteDraft, notesSorted } from '../lib/clipEdit'
 import { describeNoteSaved, EDIT_NOTE_EVENT } from '../lib/noteEdit'
-import { findInTranscript, findStepShouldHear, findWordGroups, replacePlan } from '../lib/transcriptFind'
+import { findInTranscript, findWordGroups, replacePlan } from '../lib/transcriptFind'
 import { speakerColor } from '../lib/theme'
 import { exportSidecar, hasExportableCaptions, hasYouTubeChapters } from '../lib/exportActions'
 import { copyQuoteFromContext } from '../lib/quote'
 import { cutPreviousFromContext } from '../lib/cutPrevious'
 import { cutThisFromContext } from '../lib/cutSentence'
-import { cutParagraphFromContext } from '../lib/scriptActions'
+import { bladeAtWord, cutParagraphFromContext } from '../lib/scriptActions'
 import { copyStillFromContext } from '../lib/still'
 import { describeClearMarks, markClipFromContext } from '../lib/marks'
-import { placePopoverInBounds, type PopoverPlacement } from '../lib/popoverPlacement'
 import { useEditor, usePlayback } from '../store'
 import { StartGuide } from './StartGuide'
 import { OverflowMenu } from './OverflowMenu'
@@ -92,7 +92,6 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const dragMoved = useRef(false)
   const pendingDouble = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingSpeakerClick = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null)
-  const pendingHear = useRef<ReturnType<typeof setTimeout> | null>(null)
   const anchorRef = useRef<string | null>(null)
   const paintAdditiveRef = useRef(false)
   const paintIdsRef = useRef<string[] | null>(null)
@@ -104,8 +103,6 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const scriptRef = useRef<HTMLDivElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const wordRefs = useRef(new Map<string, HTMLButtonElement>())
-  const popoverRef = useRef<HTMLSpanElement>(null)
-  const [popoverPlacement, setPopoverPlacement] = useState<(PopoverPlacement & { anchorId: string }) | null>(null)
   const tool = useEditor((s) => s.tool)
   const setTool = useEditor((s) => s.setTool)
   const guardKind = useEditor((s) => s.guardKind)
@@ -124,76 +121,20 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const islands = words.length > 0 && transcriptIsPlaceholder(words)
   const findGroups = findWordGroups(words, findQuery)
   const findHitIds = new Set(findGroups.flat())
-  const { choices } = transcriptChoices(project, selected)
+  const { choices: contextualChoices, summary: selectionSummary } = transcriptChoices(project, selected)
+  // The primary action always affects exactly the selected words.
+  const primaryChoice = contextualChoices.find((choice) => ['remove', 'cut-paragraph', 'put-back'].includes(choice.id))
+  const choices = primaryChoice ? [primaryChoice, ...contextualChoices.filter((choice) => choice !== primaryChoice)] : contextualChoices
+  const selectionHasAudio = words.some((word) => selected.includes(word.id) && !word.deleted)
   const selectedSet = new Set(selected)
   const popoverAnchor =
     selectedSceneId || tool === 'guard' ? undefined : [...words].reverse().find((w) => selectedSet.has(w.id))
   const selectedScene = selectedSceneId ? (project.scenes ?? []).find((s) => s.id === selectedSceneId) : undefined
   const sceneAnchors = groupScenesByTranscriptAnchor(project.scenes ?? [], words)
 
-  useLayoutEffect(() => {
-    const script = scriptRef.current
-    const anchorId = popoverAnchor?.id
-    const anchor = anchorId ? wordRefs.current.get(anchorId) : undefined
-    const popover = popoverRef.current
-    if (!script || !anchorId || !anchor || !popover) {
-      setPopoverPlacement(null)
-      return
-    }
-
-    let frame = 0
-    const update = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => {
-        const next = {
-          ...placePopoverInBounds(
-            script.getBoundingClientRect(),
-            anchor.getBoundingClientRect(),
-            popover.getBoundingClientRect()
-          ),
-          anchorId
-        }
-        setPopoverPlacement((current) =>
-          current &&
-          current.anchorId === next.anchorId &&
-          current.left === next.left &&
-          current.top === next.top &&
-          current.maxWidth === next.maxWidth &&
-          current.maxHeight === next.maxHeight &&
-          current.visible === next.visible
-            ? current
-            : next
-        )
-      })
-    }
-
-    update()
-    script.addEventListener('scroll', update, { passive: true })
-    window.addEventListener('resize', update)
-    window.visualViewport?.addEventListener('resize', update)
-    window.visualViewport?.addEventListener('scroll', update)
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
-    observer?.observe(script)
-    observer?.observe(popover)
-
-    return () => {
-      cancelAnimationFrame(frame)
-      script.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
-      window.visualViewport?.removeEventListener('resize', update)
-      window.visualViewport?.removeEventListener('scroll', update)
-      observer?.disconnect()
-    }
-  }, [popoverAnchor?.id, choices.length])
 
   function loopSpan(start: number, end: number) {
     playLoop(sourceToProgramOf(project, start), sourceToProgramOf(project, end))
-  }
-
-  function hearScene(scene: (typeof project.scenes)[number]) {
-    selectScene(scene.id)
-    seekSource(scene.start)
-    loopSpan(scene.start, scene.end)
   }
 
   function parkScene(scene: (typeof project.scenes)[number]) {
@@ -256,7 +197,6 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           if (ids.length) applySelection(ids)
           else {
             seekSource(tag.start)
-            loopSpan(tag.start, tag.end)
           }
         }}
         onDoubleClick={(e) => {
@@ -375,28 +315,17 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             data-kind={scene.kind}
             data-on={on || undefined}
             aria-pressed={on}
-            title="Click to hear this chapter · click again to clear · right-click to rename, split, or mark"
+            title="Click to select this chapter · double-click to rename · use Hear to preview"
             onClick={(e) => {
               if (on && e.detail < 2) {
                 clearSelection()
                 return
               }
-              const source = programToSourceOf(project, usePlayback.getState().programTime)
-              const alreadyInside = source >= scene.start - 0.05 && source <= scene.end + 0.05
               parkScene(scene)
-              if (pendingHear.current) clearTimeout(pendingHear.current)
-              pendingHear.current = null
-              if (e.detail >= 2) return
-              if (alreadyInside) return
-              pendingHear.current = setTimeout(() => {
-                pendingHear.current = null
-                loopSpan(scene.start, scene.end)
-              }, 280)
+              seekSource(scene.start)
             }}
             onDoubleClick={(e) => {
               e.preventDefault()
-              if (pendingHear.current) clearTimeout(pendingHear.current)
-              pendingHear.current = null
               setEditingScene(scene.id)
             }}
           >
@@ -411,6 +340,15 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
         {wordlessSceneNotes(scene).map((tag) => (
           <Fragment key={tag.id}>{renderGuardChip(tag)}</Fragment>
         ))}
+        {on && !editing && <OverflowMenu tone="chip" place="below" label="Chapter options" title={`Organize ${scene.title}`}>
+          <button className="overflow-item" onClick={() => setEditingScene(scene.id)}>Rename chapter</button>
+          <button className="overflow-item" onClick={() => onToast?.(splitChapterFromContext(scene.id).toast)}>Split chapter at playhead</button>
+          {([-1, 1] as const).map((step) => {
+            const target = chapterMergeTarget(project, usePlayback.getState().programTime, [], scene.id, step)
+            return target && <button key={step} className="overflow-item" onClick={() => onToast?.(mergeChapterFromContext(step, scene.id).toast)}>Merge with {step === -1 ? 'previous' : 'next'} chapter · {target.other.title}</button>
+          })}
+          <button className="overflow-item" onClick={() => onToast?.(protectRange(scene.start, scene.end).toast)}>Protect this chapter</button>
+        </OverflowMenu>}
         {actions.length > 0 && (
           <div className="scene-chip-actions">
             {actions.map((action) => (
@@ -459,7 +397,8 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     if (!sorted.length) return
     selectWords(sorted, opts?.additive)
     anchorRef.current = opts?.anchor ?? sorted[0]
-    if (opts?.loop !== false) loopSelection(sorted)
+    if (opts?.loop === true) loopSelection(sorted)
+    else seekSource(words.find((word) => word.id === sorted[0])?.start ?? 0)
   }
 
   function idsInMarquee(box: Marquee): string[] {
@@ -498,7 +437,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     }
     const groups = findWordGroups(words, trimmed)
     if (groups.length) {
-      showFindGroup(groups, step === 0 ? 0 : findIndex + step, findStepShouldHear(step))
+      showFindGroup(groups, step === 0 ? 0 : findIndex + step)
       return
     }
     const hit = findInTranscript(project, words, trimmed)
@@ -507,7 +446,8 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
       return
     }
     if (hit.kind === 'scene') {
-      hearScene(hit.scene)
+      parkScene(hit.scene)
+      seekSource(hit.scene.start)
       setFindNote(`Scene · ${hit.scene.title}`)
       return
     }
@@ -536,6 +476,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
     const script = scriptRef.current
     if (!script) return
     const onKey = (e: KeyboardEvent) => {
+      if (blocksEditorShortcut(e)) return
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'a') return
       if (!script.contains(document.activeElement) && document.activeElement !== script) return
       e.preventDefault()
@@ -578,6 +519,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
       focusFind()
     }
     const onFind = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || document.querySelector('[aria-modal="true"]')) return
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'f') return
       e.preventDefault()
       focusFind()
@@ -716,6 +658,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           </small>
         </span>
         <span className="transcript-head-actions">
+          {words.length > 0 && <button className="chip" type="button" title="One-click cleanup, presentations, tutorials, and highlights" onClick={() => window.dispatchEvent(new Event('speechedit:quick-edit'))}>Quick edit</button>}
           {((words.some((word) => !word.deleted) && !islands) ||
             hasYouTubeChapters(project) ||
             hasExportableCaptions(project)) && (
@@ -752,7 +695,13 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
               )}
             </OverflowMenu>
           )}
-          <OverflowMenu tone="chip" place="below" label="•••" title="Transcript options">
+          <OverflowMenu tone="chip" place="below" label="Options" title="Transcript options">
+            {words.some((word) => !word.deleted) && <>
+              <span className="overflow-section-label">Use this transcript</span>
+              <button className="overflow-item" onClick={() => onToast?.(generateCaptionsFromContext().toast)}>Generate captions</button>
+              {project.scenes.length > 0 && <button className="overflow-item" onClick={() => onToast?.(addSceneLowerThirdsFromContext().toast)}>Add chapter names to the picture</button>}
+              <button className="overflow-item" onClick={() => setTool('guard')}>Protect words from automatic cuts</button>
+            </>}
             <span className="overflow-section-label">Reading</span>
             <button
               type="button"
@@ -855,6 +804,111 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           </button>
         </div>
       )}
+      {!popoverAnchor && words.length > 0 && <p className="transcript-guide">Select a word or drag across words. Preview to listen, Remove to cut.</p>}
+      {popoverAnchor && choices.length > 0 && (
+        <span
+          className="word-popover word-selection-tools"
+          role="group"
+          aria-label="Selected words"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <span className="word-selection-summary">{selectionSummary} selected</span>
+          <span className="word-selection-consequence">{choices[0]?.consequence}</span>
+          <span className="word-popover-actions">
+            <button type="button" className="chip" disabled={!selectionHasAudio} title="Play from the first selected word to the last, once" onClick={() => {
+              const span = wordRange(words, selected)
+              if (span) usePlayback.getState().playRange(sourceToProgramOf(project, span.start), sourceToProgramOf(project, span.end))
+            }}>Preview</button>
+            {choices.slice(0, 1).map((choice, index) => (
+              <button
+                key={choice.id}
+                className={index === 0 ? 'chip word-popover-primary' : 'chip'}
+                title={choice.consequence}
+                onClick={() => {
+                  if (choice.id === 'cut-prev') {
+                    onToast?.(cutPreviousFromContext().toast)
+                    return
+                  }
+                  if (choice.id === 'cut-sentence') {
+                    onToast?.(cutThisFromContext().toast)
+                    return
+                  }
+                  if (choice.id === 'cut-paragraph') {
+                    onToast?.(cutParagraphFromContext().toast)
+                    return
+                  }
+                  dispatch(choice.command)
+                  const toast = toastForEdit(project, choice.command)
+                  if (toast) onToast?.(toast)
+                }}
+              >
+                {choice.id === 'put-back' ? 'Restore words' : choice.label}
+              </button>
+            ))}
+            {selected.length === 1 && !islands && <button type="button" className="chip" title="Correct the transcript text without changing the recording" onClick={() => setEditing(selected[0])}>Correct word</button>}
+            <OverflowMenu tone="chip" place="below" label="More" title="More actions for these words">
+              <button className="overflow-item" onClick={() => bladeAtWord()}>Split clip at selected word</button>
+              <button type="button" className="overflow-item" onClick={() => applySelection(sentenceIds(words, words.findIndex((word) => word.id === selected[0])))}>Select sentence</button>
+              <button type="button" className="overflow-item" onClick={() => applySelection(paragraphIds(words, words.findIndex((word) => word.id === selected[0])))}>Select paragraph</button>
+              {choices.slice(1).map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  className="overflow-item"
+                  title={choice.consequence}
+                  onClick={() => {
+                    if (choice.id === 'cut-prev') {
+                      onToast?.(cutPreviousFromContext().toast)
+                      return
+                    }
+                    if (choice.id === 'cut-sentence') {
+                      onToast?.(cutThisFromContext().toast)
+                      return
+                    }
+                    if (choice.id === 'cut-paragraph') {
+                      onToast?.(cutParagraphFromContext().toast)
+                      return
+                    }
+                    dispatch(choice.command)
+                    const toast = toastForEdit(project, choice.command)
+                    if (toast) onToast?.(toast)
+                  }}
+                >
+                  {choice.id === 'put-back' ? 'Restore words' : choice.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="overflow-item"
+                onClick={() => onToast?.(copyQuoteFromContext().toast)}
+              >
+                Copy quote
+              </button>
+              <button
+                type="button"
+                className="overflow-item"
+                onClick={() => void copyStillFromContext().then((result) => onToast?.(result.toast))}
+              >
+                Copy frame
+              </button>
+              <button
+                type="button"
+                className="overflow-item"
+                onClick={() => onToast?.(markClipFromContext().toast)}
+              >
+                Mark clip
+              </button>
+              <button
+                type="button"
+                className="overflow-item"
+                onClick={() => onToast?.(splitChapterFromContext().toast)}
+              >
+                Split chapter here
+              </button>
+            </OverflowMenu>
+          </span>
+        </span>
+      )}
       {words.length > 0 && (
         <div className="transcript-toolbar">
           <input
@@ -863,7 +917,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
             className="transcript-find"
             aria-label="Find in transcript"
             value={findQuery}
-            placeholder="Find phrase, scene, or edit… ⌘F"
+            placeholder={shortcutLabel('Find words or chapters… ⌘F')}
             onChange={(e) => {
               const next = e.target.value
               setFindQuery(next)
@@ -878,9 +932,11 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
               if (e.key === 'Enter') {
                 e.preventDefault()
                 if (e.shiftKey) findAndSelect(findQuery, -1)
-                else hearCurrentFind()
+                else findAndSelect(findQuery, 1)
               }
               if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
                 setFindQuery('')
                 setFindNote(null)
                 setFindIndex(0)
@@ -894,6 +950,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                 type="button"
                 className="chip"
                 title="Previous match (Shift+Enter)"
+                aria-label="Previous match"
                 onClick={() => findAndSelect(findQuery, -1)}
               >
                 ‹
@@ -905,6 +962,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                 type="button"
                 className="chip"
                 title="Next match (Enter)"
+                aria-label="Next match"
                 onClick={() => findAndSelect(findQuery, 1)}
               >
                 ›
@@ -1135,7 +1193,6 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                     renderGuardChip(gapTag, {
                       hear: () => {
                         seekSource(gapTag.start)
-                        loopSpan(gapTag.start, gapTag.end)
                         selectGap({ start: gapTag.start, end: gapTag.end })
                       }
                     })}
@@ -1149,28 +1206,17 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                     data-leftover={leftoverAtGap ? gapReview.kind : ''}
                     data-tag={gapTag?.kind ?? ''}
                     data-sug={gapReview.suggestion?.type ?? ''}
-                    title={gapReview.title}
+                    title="Select this pause to preview, shorten, remove, or protect it"
                     onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
                       const start = prev.end
                       const end = word.start
                       seekSource(gapReview.start)
-                      loopSpan(gapReview.start, gapReview.end)
                       if (gapReview.suggestion) selectSuggestion(gapReview.suggestion.id)
                       else selectGap({ start, end })
                     }}
-                    onDoubleClick={(e) => {
-                      e.preventDefault()
-                      const command = commandForGapDoubleClick(project, prev.end, word.start)
-                      if (!command) {
-                        onToast?.('Silent demo is in this pause. Paint stays; this will not cut it.')
-                        return
-                      }
-                      dispatch(command)
-                      const toast = toastForCommand(command)
-                      if (toast) onToast?.(toast)
-                    }}
+
                   >
                     {gapReview.chip}
                   </button>
@@ -1181,6 +1227,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
               {!word.text.trim() && editing !== word.id ? null : editing === word.id ? (
                 <input
                   className="word-edit"
+                  aria-label="Correct transcript word"
                   autoFocus
                   defaultValue={word.text}
                     onBlur={(e) => {
@@ -1221,16 +1268,17 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                     isPlaceholderWord(word)
                       ? 'Not spoken text — a silence-detected speech region. Drop Whisper JSON or Transcribe again for words.'
                       : applied
-                        ? `${applied.label} · double-click puts this cut back`
+                        ? `${applied.label} · select to restore removed words`
                         : tag
                           ? `${tag.label}`
-                          : 'Click to hear · double-click a sentence · triple-click a paragraph · Remove paragraph hears the join'
+                          : 'Click to select · drag across words · double-click selects a sentence · Preview plays your selection'
                   }
                   style={{ ['--spk' as string]: speakerColor(project.transcript.speakers, word.speaker) }}
                   onMouseDown={(e) => {
                     if (editing) return
                     if (e.button !== 0) return
                     e.preventDefault()
+                    scriptRef.current?.focus({ preventScroll: true })
                     dragMoved.current = false
                     paintAdditiveRef.current = e.ctrlKey || e.metaKey || e.shiftKey
                     setPaint([word.id])
@@ -1290,21 +1338,15 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                       return
                     }
 
-                    const heard = nearestSpokenWord(words, i) ?? word
-                    anchorRef.current = heard.id
-                    selectWords([heard.id])
-                    if (heard.id === word.id) loopSentenceAt(word.id)
-                    else loopSelection([heard.id])
+                    anchorRef.current = word.id
+                    selectWords([word.id])
+                    seekSource(word.start)
                     return
                   }}
                   onDoubleClick={() => {
                     if (pendingDouble.current) clearTimeout(pendingDouble.current)
                     pendingDouble.current = setTimeout(() => {
                       pendingDouble.current = null
-                      if (applied) {
-                        dispatch({ type: 'revertSuggestion', suggestionId: applied.id })
-                        return
-                      }
                       applySelection(sentenceIds(words, i))
                     }, 220)
                   }}
@@ -1312,110 +1354,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
                   {word.text}
                 </button>
               )}
-              {popoverAnchor?.id === word.id && choices.length > 0 && (
-                <span
-                  ref={popoverRef}
-                  className="word-popover"
-                  style={
-                    popoverPlacement?.anchorId === word.id
-                      ? {
-                          left: popoverPlacement.left,
-                          top: popoverPlacement.top,
-                          maxWidth: popoverPlacement.maxWidth,
-                          maxHeight: popoverPlacement.maxHeight,
-                          visibility: popoverPlacement.visible ? 'visible' : 'hidden'
-                        }
-                      : { visibility: 'hidden' }
-                  }
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  <span className="word-popover-actions">
-                    {choices.slice(0, 2).map((choice, index) => (
-                      <button
-                        key={choice.id}
-                        className={index === 0 ? 'chip word-popover-primary' : 'chip'}
-                        title={choice.consequence}
-                        onClick={() => {
-                          if (choice.id === 'cut-prev') {
-                            onToast?.(cutPreviousFromContext().toast)
-                            return
-                          }
-                          if (choice.id === 'cut-sentence') {
-                            onToast?.(cutThisFromContext().toast)
-                            return
-                          }
-                          if (choice.id === 'cut-paragraph') {
-                            onToast?.(cutParagraphFromContext().toast)
-                            return
-                          }
-                          dispatch(choice.command)
-                          const toast = toastForEdit(project, choice.command)
-                          if (toast) onToast?.(toast)
-                        }}
-                      >
-                        {choice.label}
-                      </button>
-                    ))}
-                    <OverflowMenu tone="chip" place="below" label="More" title="More actions for these words">
-                      {choices.slice(2).map((choice) => (
-                        <button
-                          key={choice.id}
-                          type="button"
-                          className="overflow-item"
-                          title={choice.consequence}
-                          onClick={() => {
-                            if (choice.id === 'cut-prev') {
-                              onToast?.(cutPreviousFromContext().toast)
-                              return
-                            }
-                            if (choice.id === 'cut-sentence') {
-                              onToast?.(cutThisFromContext().toast)
-                              return
-                            }
-                            if (choice.id === 'cut-paragraph') {
-                              onToast?.(cutParagraphFromContext().toast)
-                              return
-                            }
-                            dispatch(choice.command)
-                            const toast = toastForEdit(project, choice.command)
-                            if (toast) onToast?.(toast)
-                          }}
-                        >
-                          {choice.label}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        className="overflow-item"
-                        onClick={() => onToast?.(copyQuoteFromContext().toast)}
-                      >
-                        Copy quote
-                      </button>
-                      <button
-                        type="button"
-                        className="overflow-item"
-                        onClick={() => void copyStillFromContext().then((result) => onToast?.(result.toast))}
-                      >
-                        Copy frame
-                      </button>
-                      <button
-                        type="button"
-                        className="overflow-item"
-                        onClick={() => onToast?.(markClipFromContext().toast)}
-                      >
-                        Mark clip
-                      </button>
-                      <button
-                        type="button"
-                        className="overflow-item"
-                        onClick={() => onToast?.(splitChapterFromContext().toast)}
-                      >
-                        Split chapter here
-                      </button>
-                    </OverflowMenu>
-                  </span>
-                </span>
-              )}
+
             </span>
             </Fragment>
           )
@@ -1438,7 +1377,7 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
           <p className="script-hint">
             {tool === 'guard'
               ? 'Drag across words to protect them. Done or Esc leaves this mode.'
-              : 'Click words to hear them. Select text to reveal editing actions.'}
+              : 'Select words → Preview → Remove. Your original recording stays safe. Undo puts edits back.'}
           </p>
         )}
         </div>

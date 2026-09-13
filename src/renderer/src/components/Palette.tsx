@@ -1,3 +1,4 @@
+import { useDialog } from '../useDialog'
 import { useMemo, useState } from 'react'
 import { confirmLoseWork, saveCurrentDocument } from '../lib/documentIo'
 import { listRecents } from '../lib/recents'
@@ -61,6 +62,8 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
   const selectedClipId = useEditor((s) => s.selectedClipId)
   const project = useEditor((s) => s.project)
   const [q, setQ] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const dialogRef = useDialog(open, () => setPalette(false))
 
   const actions = useMemo<PaletteSpec[]>(
     () => [
@@ -620,21 +623,29 @@ export function Palette({ onToast }: { onToast?: (msg: string) => void }) {
 
   return (
     <div className="palette-back" onClick={() => setPalette(false)}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
+      <div className="palette" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Find an editing action" onClick={(e) => e.stopPropagation()}>
         <input
           autoFocus
-          placeholder="Command…"
+          placeholder="What do you want to do? Try captions, zoom, or remove…"
+          aria-label="Search editing actions"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => { setQ(e.target.value); setActiveIndex(0) }}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') setPalette(false)
-            if (e.key === 'Enter' && shown[0]) {
-              runAction(shown[0])
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault()
+              const next = (activeIndex + (e.key === 'ArrowDown' ? 1 : -1) + shown.length) % Math.max(1, shown.length)
+              setActiveIndex(next)
+              dialogRef.current?.querySelector(`[data-action-index="${next}"]`)?.scrollIntoView({ block: 'nearest' })
+            }
+            if (e.key === 'Enter' && shown[Math.min(activeIndex, shown.length - 1)]) {
+              e.preventDefault()
+              runAction(shown[Math.min(activeIndex, shown.length - 1)])
             }
           }}
         />
-        {shown.map((action) => (
-          <button key={action.name} onClick={() => runAction(action)}>
+        {shown.length === 0 && <p className="help">No matching actions. Try “captions”, “save”, or “undo”.</p>}
+        {shown.map((action, index) => (
+          <button data-action-index={index} data-active={index === Math.min(activeIndex, shown.length - 1) || undefined} key={action.name} onClick={() => runAction(action)}>
             {recents.some((recent) => recent.name === action.name) ? `Recent · ${action.name}` : action.name}
           </button>
         ))}

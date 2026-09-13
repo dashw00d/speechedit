@@ -1,3 +1,4 @@
+import { WorkflowSheet } from './components/WorkflowSheet'
 import { useEffect, useRef, useState } from 'react'
 import { ConfirmSheet } from './components/ConfirmSheet'
 import { ExportSheet } from './components/ExportSheet'
@@ -47,7 +48,6 @@ import { neighborScene } from './lib/sceneChip'
 import {
   extendSelection,
   isParagraphSelection,
-  sentenceIds,
   shrinkSelection,
   wordRange
 } from './lib/transcriptEdit'
@@ -72,12 +72,14 @@ import { currentEditorSession } from './lib/editorSession'
 import { openAssistant } from './lib/assistantNavigation'
 import { ActivityStrip } from './components/ActivityPanel'
 import { syncModelActivities } from './lib/activity'
+import { blocksEditorShortcut } from './lib/keyboard'
+import { isTypingTarget } from './lib/selectionSurface'
 import { preloadBrowserWhisper } from './lib/browserWhisper'
 
 const WORKSPACE_PANE_LABELS: Record<WorkspacePane, string> = {
   preview: 'Preview',
   review: 'Review',
-  script: 'Script',
+  script: 'Transcript',
   timeline: 'Timeline'
 }
 
@@ -86,8 +88,9 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [mediaHealth, setMediaHealth] = useState<MediaToolsHealth | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
+  const [workflowOpen, setWorkflowOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
-  const [mobilePane, setMobilePane] = useState<WorkspacePane>('preview')
+  const [mobilePane, setMobilePane] = useState<WorkspacePane>('script')
   const mcpPolling = useRef(false)
   const { menu: contextMenu, closeMenu: closeContextMenu } = useContextMenu()
   useClearSelection()
@@ -172,12 +175,24 @@ export function App() {
     const showAssistant = () => setMobilePane('review')
     const showPane = (event: Event) => {
       const pane = (event as CustomEvent<unknown>).detail
-      if (isWorkspacePane(pane)) setMobilePane(pane)
+      if (isWorkspacePane(pane)) {
+        setMobilePane(pane)
+        requestAnimationFrame(() => {
+          const selector = { script: '.script', preview: '.monitor', timeline: '.timeline-panel', review: '.inspector' }[pane]
+          const panel = document.querySelector<HTMLElement>(selector)
+          if (panel) {
+            if (!panel.hasAttribute('tabindex')) panel.tabIndex = -1
+            panel.focus({ preventScroll: true })
+          }
+        })
+      }
     }
     window.addEventListener('speechedit:assistant', showAssistant)
+    window.addEventListener('speechedit:project-settings', showAssistant)
     window.addEventListener('speechedit:workspace-pane', showPane)
     return () => {
       window.removeEventListener('speechedit:assistant', showAssistant)
+      window.removeEventListener('speechedit:project-settings', showAssistant)
       window.removeEventListener('speechedit:workspace-pane', showPane)
     }
   }, [])
@@ -213,7 +228,7 @@ export function App() {
   useEffect(() => {
     if (!toast || exporting) return
     const sticky = /failed|missing|cannot|need/i.test(toast)
-    const id = setTimeout(() => setToast(null), sticky ? 14000 : 3600)
+    const id = setTimeout(() => setToast(null), sticky ? 14000 : Math.min(12000, Math.max(6000, toast.length * 60)))
     return () => clearTimeout(id)
   }, [toast, exporting])
 
@@ -247,16 +262,19 @@ export function App() {
   useEffect(() => {
     const onExportEvent = () => onExportClick()
     const onKeys = () => setKeysOpen(true)
+    const onWorkflow = () => setWorkflowOpen(true)
     const onToastEvent = (event: Event) => {
       const message = (event as CustomEvent<string>).detail
       if (message) setToast(message)
     }
     window.addEventListener('speechedit:export', onExportEvent)
     window.addEventListener('speechedit:shortcuts', onKeys)
+    window.addEventListener('speechedit:quick-edit', onWorkflow)
     window.addEventListener('speechedit:toast', onToastEvent)
     return () => {
       window.removeEventListener('speechedit:export', onExportEvent)
       window.removeEventListener('speechedit:shortcuts', onKeys)
+      window.removeEventListener('speechedit:quick-edit', onWorkflow)
       window.removeEventListener('speechedit:toast', onToastEvent)
     }
   }, [])
@@ -368,9 +386,15 @@ export function App() {
         </main>
       </div>
       <Timeline onToast={setToast} />
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          <span role="status" aria-live="polite">{toast}</span>
+          <button type="button" className="chip" aria-label="Dismiss message" onClick={() => setToast(null)}>Dismiss</button>
+        </div>
+      )}
       <Suggestions onToast={setToast} />
       <Palette onToast={setToast} />
+      <WorkflowSheet open={workflowOpen} onClose={() => setWorkflowOpen(false)} onToast={setToast} />
       <ConfirmSheet />
       <PreferencesSheet />
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
@@ -387,9 +411,11 @@ function useHotkeys(
 ) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (blocksEditorShortcut(e)) return
+      // Holding a destructive shortcut must not repeatedly edit the project.
+      if (e.repeat && !['ArrowLeft', 'ArrowRight', 'j', 'l'].includes(e.key)) return
       const meta = e.metaKey || e.ctrlKey
-      const target = e.target as HTMLElement
-      const typing = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+      const typing = isTypingTarget(e.target)
       const editor = useEditor.getState()
       const playback = usePlayback.getState()
       const pane = workspacePaneFromHotkey(e)
@@ -422,23 +448,12 @@ function useHotkeys(
       }
       if (e.code === 'Space' && !typing) {
         e.preventDefault()
-        if (playback.playing || (playback.loopFrom != null && playback.playUntil != null)) {
-          playback.toggle()
-          return
-        }
-        const ids = editor.selectedWordIds
-        const index = editor.project.transcript.words.findIndex((w) => w.id === ids[0])
-        if (index >= 0) {
-          const range = wordRange(editor.project.transcript.words, sentenceIds(editor.project.transcript.words, index))
-          if (range) {
-            playback.playLoop(
-              sourceToProgramOf(editor.project, range.start),
-              sourceToProgramOf(editor.project, range.end)
-            )
-            return
-          }
-        }
         playback.toggle()
+        return
+      }
+      if (meta && e.key.toLowerCase() === 'y') {
+        e.preventDefault()
+        editor.redo()
         return
       }
       if (meta && e.key.toLowerCase() === 'z') {
@@ -448,6 +463,7 @@ function useHotkeys(
       }
       if (meta && e.key.toLowerCase() === 's') {
         e.preventDefault()
+        if (isTypingTarget(e.target)) (e.target as HTMLElement).blur()
         void saveCurrentDocument({ saveAs: e.shiftKey }).then(
           (path) => {
             if (path) setToast(`Saved ${path.split(/[\\/]/).pop()}.`)
@@ -458,6 +474,7 @@ function useHotkeys(
         )
         return
       }
+      if (e.altKey && !['ArrowLeft', 'ArrowRight'].includes(e.key)) return
       if (e.key === 'Home' && !typing) {
         playback.seekProgram(0)
         return
@@ -665,9 +682,10 @@ function useHotkeys(
       }
       if ((e.key === 'u' || e.key === 'U') && !typing && !meta) {
         e.preventDefault()
-        const span = wordRange(editor.project.transcript.words, editor.selectedWordIds)
-        if (span) {
-          editor.dispatch({ type: 'restoreRange', start: span.start, end: span.end })
+        const removedIds = editor.project.transcript.words.filter((word) => word.deleted && editor.selectedWordIds.includes(word.id)).map((word) => word.id)
+        if (removedIds.length) {
+          editor.dispatch({ type: 'toggleWords', wordIds: removedIds })
+          setToast('Restored the selected words.')
           return
         }
         if (editor.selectedSuggestionId) {
@@ -692,7 +710,7 @@ function useHotkeys(
           return
         }
       }
-      if ((e.key === '[' || e.key === ']') && !typing) {
+      if ((e.key === '[' || e.key === ']') && !typing && !meta) {
         e.preventDefault()
         const sceneStep = e.key === ']' ? 1 : -1
         const hop =
@@ -713,7 +731,7 @@ function useHotkeys(
         )
         return
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && !meta) {
         if (editor.selectedSceneId) {
           e.preventDefault()
           setToast(removeSceneFromContext(editor.selectedSceneId).toast)
@@ -721,6 +739,10 @@ function useHotkeys(
         }
         if (editor.selectedWordIds.length) {
           e.preventDefault()
+          if (!editor.project.transcript.words.some((word) => editor.selectedWordIds.includes(word.id) && !word.deleted)) {
+            setToast('These words are already removed. Use Restore words or Undo to put them back.')
+            return
+          }
           if (isParagraphSelection(editor.project.transcript.words, editor.selectedWordIds)) {
             setToast(cutParagraphFromContext().toast)
             return
@@ -755,10 +777,10 @@ function useHotkeys(
         return
       }
       if (e.key.toLowerCase() === 'k' && !typing && !meta) playback.toggle()
-      if (e.key.toLowerCase() === 'j' && !typing) {
+      if (e.key.toLowerCase() === 'j' && !typing && !meta) {
         playback.seekProgram(Math.max(0, playback.programTime - 2))
       }
-      if (e.key.toLowerCase() === 'l' && !typing) {
+      if (e.key.toLowerCase() === 'l' && !typing && !meta) {
         playback.seekProgram(Math.min(programLength(editor.project), playback.programTime + 2))
       }
     }

@@ -1,3 +1,4 @@
+import { ReviewTools } from './ReviewTools'
 import { blockedByLabel, leftoverItems, leftoverKind } from '../lib/analysis'
 import { isFillerToken } from '../lib/transcript'
 import {
@@ -396,7 +397,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
           onToast?.(findRetakesAndReview().toast)
         )
       case 'collapse-retakes':
-        return button('Collapse retakes', 'Drop every superseded take. Undo, or use Put back retakes in Auto Edit.', () => {
+        return button('Collapse retakes', 'Drop every superseded take. Undo, or open Review edits → Review tools → Put back retakes.', () => {
           const count = uncollapsedRetakeCount(useEditor.getState().project)
           dispatch({ type: 'collapseRetakes' })
           clearSelection()
@@ -557,6 +558,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
   return (
     <>
       <footer className="suggest-bar">
+        <button className="review-btn" onClick={() => setReviewing(true)}>Review edits</button>
         <div className="suggest-cue">
           <span className="suggest-kicker">{cueKicker}</span>
           <span className="suggest-copy">{cueCopy}</span>
@@ -644,6 +646,7 @@ export function Suggestions({ onToast }: { onToast?: (msg: string) => void }) {
               <span className="drawer-progress">{issueCount ? `${issueCount} ${issueCount === 1 ? 'item' : 'items'} left in this step` : 'Review complete'}</span>
             </div>
             <span className="drawer-head-actions">
+              <ReviewTools onToast={onToast} />
               {reviewJob(project) === 'pending' && reviewOtherPending(project).length > 0 && (
                 <button
                   className="chip"
