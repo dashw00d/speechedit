@@ -1,0 +1,48 @@
+{
+  "ok": true,
+  "before": {
+    "heading": "8 words · 1 chapters",
+    "words": 8,
+    "chapters": 1,
+    "toast": "Removed 3 pauses. Undo to put them back.",
+    "toastButtons": [
+      {
+        "text": "Undo",
+        "aria": "Undo the last edit"
+      },
+      {
+        "text": "Dismiss",
+        "aria": "Dismiss message"
+      }
+    ],
+    "suggest": "Review edits UP NEXT Edit applied. Find retakes, or watch the result. Find retakes More Clear"
+  },
+  "dismissFocused": "Dismiss message",
+  "undoFocused": "Undo the last edit",
+  "after": {
+    "heading": "10 words · 1 chapters",
+    "words": 10,
+    "chapters": 1,
+    "toast": "Undid the last edit. Redo puts it back.",
+    "toastButtons": [
+      {
+        "text": "Dismiss",
+        "aria": "Dismiss message"
+      }
+    ],
+    "suggest": "Review edits SELECTED Transcript ready. 3 safe edits ready. More Clear"
+  },
+  "redone": {
+    "heading": "8 words · 1 chapters",
+    "words": 8,
+    "chapters": 1,
+    "toast": "Undid the last edit. Redo puts it back.",
+    "toastButtons": [
+      {
+        "text": "Dismiss",
+        "aria": "Dismiss message"
+      }
+    ],
+    "suggest": "Review edits UP NEXT Edit applied. Find retakes, or watch the result. Find retakes More Clear"
+  }
+}

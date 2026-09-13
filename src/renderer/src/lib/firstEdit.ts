@@ -41,6 +41,13 @@ export function firstEditSummary(project: Project): { applied: number; review: n
 
 export type FirstEditPhase = 'looks' | 'fillers' | 'words' | 'all'
 
+export type FirstEditResult = {
+  applied: number
+  review: number
+  retakes: number
+  unit?: 'pause' | 'filler'
+}
+
 export function describeFirstEdit(
   applied: number,
   review: number,
@@ -108,7 +115,7 @@ function wordEditResult(
 export function applySafeFirstEdit(
   phase: FirstEditPhase = 'all',
   skip: Interval[] = []
-): { applied: number; review: number; retakes: number; unit?: 'pause' | 'filler' } | null {
+): FirstEditResult | null {
   const editor = useEditor.getState()
   if (phase === 'looks') {
     const pending = safeEditCandidates(editor.project)
@@ -147,19 +154,23 @@ export function applySafeFirstEdit(
  */
 export function applyStreamingFirstEdit(
   skip: Interval[],
-  session: { wordsUndo: boolean }
-): { applied: number; review: number; retakes: number; unit?: 'pause' | 'filler' } | null {
+  session: { wordsUndo: boolean; lastEdit?: FirstEditResult }
+): FirstEditResult | null {
   const pending = pendingWordEdits(useEditor.getState().project, skip)
   if (!pending.length) return null
+  let result: FirstEditResult | null
   if (!session.wordsUndo) {
     session.wordsUndo = true
-    return applySafeFirstEdit('fillers', skip)
+    result = applySafeFirstEdit('fillers', skip)
+  } else {
+    useEditor.getState().replay({
+      type: 'applySuggestions',
+      suggestionIds: pending.map((suggestion) => suggestion.id)
+    })
+    result = wordEditResult(pending, 0)
   }
-  useEditor.getState().replay({
-    type: 'applySuggestions',
-    suggestionIds: pending.map((suggestion) => suggestion.id)
-  })
-  return wordEditResult(pending, 0)
+  session.lastEdit = result ?? undefined
+  return result
 }
 
 export type CaptionAutoSession = {
@@ -167,6 +178,8 @@ export type CaptionAutoSession = {
   skipCaptions: boolean
   captionCount: number
   captionsToast?: boolean
+  wordsUndo?: boolean
+  lastEdit?: FirstEditResult
 }
 
 export function emptyCaptionSession(): CaptionAutoSession {

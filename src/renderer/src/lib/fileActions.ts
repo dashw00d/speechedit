@@ -56,20 +56,18 @@ function leftoverReviewToast(kind: 'activity' | 'still' | 'static' | 'loud'): st
   return 'Hot audio can be quieted. Quiet or Keep.'
 }
 
-function offerLeftoverReview(onToast: ToastFn, session: { reviewToast?: boolean }): void {
+function leftoverReviewMessage(session: { reviewToast?: boolean }): string | null {
   dismissLeftoverBreaths()
   const kind = startLeftoverReview()
   if (kind) {
-    if (!session.reviewToast) {
-      session.reviewToast = true
-      onToast(leftoverReviewToast(kind))
-    }
-    return
+    if (session.reviewToast) return null
+    session.reviewToast = true
+    return leftoverReviewToast(kind)
   }
   const scene = startRetakeReview()
-  if (!scene || session.reviewToast) return
+  if (!scene || session.reviewToast) return null
   session.reviewToast = true
-  onToast(describeRetakeReview(useEditor.getState().project, scene))
+  return describeRetakeReview(useEditor.getState().project, scene)
 }
 
 function toastAfterIntel(
@@ -79,13 +77,18 @@ function toastAfterIntel(
   skip: { start: number; end: number }[] = [],
   session: CaptionAutoSession & { reviewToast?: boolean } = emptyCaptionSession()
 ): void {
-  const result = applySafeFirstEdit(phase, skip)
-  onToast(result ? describeFirstEditResult(result, phase) : fallback)
+  // One toast per import: merge the notes so a later caption/leftover line cannot
+  // clobber the undo invitation the automatic first edit just offered.
+  const result = applySafeFirstEdit(phase, skip) ?? session.lastEdit ?? null
+  const notes: string[] = []
+  if (result) notes.push(describeFirstEditResult(result, phase))
   if (applyAutoCaptions(session) && !session.captionsToast) {
     session.captionsToast = true
-    onToast('Captions from the transcript.')
+    notes.push('Captions from the transcript.')
   }
-  offerLeftoverReview(onToast, session)
+  const leftover = leftoverReviewMessage(session)
+  if (leftover) notes.push(leftover)
+  onToast(notes.length ? notes.join(' ') : fallback)
 }
 
 export type ToastFn = (msg: string) => void
@@ -194,9 +197,12 @@ function inspectMediaCallbacks(
         }
         looksFirstEdit.done = true
         looksFirstEdit.skip = looksSafeSpans(useEditor.getState().project)
+        const notes: string[] = []
         const result = applySafeFirstEdit('looks')
-        if (result) onToast(describeFirstEditResult(result, 'looks'))
-        offerLeftoverReview(onToast, looksFirstEdit)
+        if (result) notes.push(describeFirstEditResult(result, 'looks'))
+        const leftover = leftoverReviewMessage(looksFirstEdit)
+        if (leftover) notes.push(leftover)
+        if (notes.length) onToast(notes.join(' '))
         await releaseFfmpegAfterLooks()
       },
       onWords: (partial: InspectedTake) => {
