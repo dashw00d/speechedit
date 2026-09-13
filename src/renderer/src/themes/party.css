@@ -239,6 +239,7 @@
   --timeline-lane-video: 50px;
   --timeline-lane-audio: 46px;
   --timeline-lane-overlay: 38px;
+  --timeline-lane-collapsed: 32px;
   --timeline-wave-fill: color-mix(in srgb, #8452a1 22%, transparent);
   --timeline-wave-stroke: #6b4283;
   --layout-transcript-script-padding-bottom: 72px;

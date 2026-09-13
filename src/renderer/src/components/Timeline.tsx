@@ -10,7 +10,7 @@ import { buildEditBlocks, editBlockCounts, filterEditBlocks, type EditBlock, typ
 import { coveringNote, hopNote, isTapeNote } from '../lib/clipEdit'
 import { addNoteFromContext, startNoteEdit } from '../lib/noteEdit'
 import { clearMarksFromContext } from '../lib/marks'
-import { findRevealableStackTrack, hiddenLaneTracks, trackLaneName } from '../lib/timelineTracks'
+import { findRevealableStackTrack, trackLaneName } from '../lib/timelineTracks'
 import { formatClock } from '../lib/time'
 import { useEditor, usePlayback } from '../store'
 import type { Asset, Clip, TagKind, Track, Word } from '../types'
@@ -65,8 +65,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   const editCounts = useMemo(() => editBlockCounts(editBlocks), [editBlocks])
   const filteredEditBlocks = useMemo(() => filterEditBlocks(editBlocks, editFilter), [editBlocks, editFilter])
   const showEditFilters = editBlocks.length > 0
-  const visibleTracks = useMemo(() => project.tracks.filter((track) => !track.hidden), [project.tracks])
-  const hiddenLanes = useMemo(() => hiddenLaneTracks(project.tracks), [project.tracks])
+  const visibleTracks = project.tracks
 
   useEffect(() => {
     if (tool !== 'guard') return
@@ -465,17 +464,6 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
             >
               Captions
             </button>
-          {hiddenLanes.map((track) => (
-            <button
-              key={track.id}
-              className="overflow-item"
-              type="button"
-              title={`Show ${trackLaneName(track)} on the timeline`}
-              onClick={() => dispatch({ type: 'setTrackFlag', trackId: track.id, patch: { hidden: false } })}
-            >
-              Show {trackLaneName(track)}
-            </button>
-          ))}
           </OverflowMenu>
         </div>
         {io && (
@@ -614,7 +602,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
           </div>
 
           {visibleTracks.map((track) => (
-            <div key={track.id} className="timeline-row">
+            <div key={track.id} className="timeline-row" data-output-hidden={track.hidden || undefined}>
               <TrackLabel
                 track={track}
                 primary={isPrimaryLane(track)}
@@ -761,8 +749,9 @@ function TrackLabel({
           className="track-flag"
           type="button"
           data-active={track.hidden}
-          title={track.hidden ? 'Show track on timeline' : 'Hide — collapse this track from the timeline'}
+          title={track.hidden ? 'Include track in preview and export' : 'Hide track from preview and export'}
           aria-label={track.hidden ? 'Show track' : 'Hide track'}
+          aria-pressed={track.hidden}
           onClick={() => onFlag({ hidden: !track.hidden })}
         >
           <IconHide />

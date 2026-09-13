@@ -15,6 +15,8 @@
     "smoke:proxy": "env -u ELECTRON_RUN_AS_NODE electron scripts/proxy-ui-smoke.cjs",
     "smoke:edit": "env -u ELECTRON_RUN_AS_NODE electron scripts/edit-ui-smoke.cjs",
     "smoke:recording": "SPEECHEDIT_RECORDING=1 SPEECHEDIT_PASSAGE=1 env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
+    "smoke:real-speech": "env -u ELECTRON_RUN_AS_NODE electron scripts/real-speech-playback-smoke.cjs",
+    "smoke:track-visibility": "env -u ELECTRON_RUN_AS_NODE electron scripts/track-visibility-smoke.cjs",
     "smoke:recording-playback": "env -u ELECTRON_RUN_AS_NODE electron scripts/recording-playback-smoke.cjs",
     "smoke:passage": "SPEECHEDIT_PASSAGE=1 env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
     "smoke:review": "env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",

@@ -289,7 +289,7 @@ describe('program-master playback across cuts', () => {
     expect(sourceInHole(project, programToSourceOf(project, stepped.program))).toBe(false)
   })
 
-  test('media inside a keep may nudge the playhead but not jump it', () => {
+  test('media advancing inside a keep catches up a delayed UI without replaying speech', () => {
     const project = videoAssetProject()
     const resolved = resolveProgram(project)
     const tracked = stepProgramPlayback({
@@ -311,9 +311,9 @@ describe('program-master playback across cuts', () => {
       resolved,
       fps: 30
     })
-    expect(drifted.clock).toBe('wall')
-    expect(drifted.hard).toBe(true)
-    expect(drifted.program).toBeCloseTo(0.516, 5)
+    expect(drifted.clock).toBe('media')
+    expect(drifted.hard).toBe(false)
+    expect(drifted.program).toBeCloseTo(0.9, 5)
   })
 
   test('holds one post-cut target while Chromium completes the audio/video seek', () => {
@@ -421,4 +421,11 @@ test('an exhausted primary decoder lets the last fraction of the program finish'
     program = stepProgramPlayback({ lastProgram: program, requestedProgram: program, dt: 1 / 60, mediaSource: null, mediaPresent: false, resolved }).program
   }
   expect(program).toBeGreaterThan(resolved.length)
+})
+
+
+test('a delayed frame cannot use a later keep to skip a cut or a different source', () => {
+  const resolved = resolveProgram(videoAssetProject())
+  const stepped = stepProgramPlayback({ lastProgram: 0.5, requestedProgram: 0.5, dt: 0.08, mediaSource: 1.6, mediaPresent: true, resolved })
+  expect(stepped).toEqual({ program: 0.58, clock: 'wall', hard: true })
 })

@@ -401,6 +401,7 @@ export function buildSegmentFilters(job: GraphJob, seg: GraphSegment, index?: nu
     `crop=${even(job.width)}:${even(job.height)}:${x}:${y}`,
     seg.speed !== 1 ? `setpts=PTS/${seg.speed.toFixed(3)}` : '',
     ...vfade,
+    seg.opacity === 0 ? 'drawbox=color=black:t=fill' : '',
     `fps=${job.fps}`,
     'format=yuv420p'
   ]

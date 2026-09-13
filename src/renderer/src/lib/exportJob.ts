@@ -93,6 +93,8 @@ function buildProgramExportJob(project: Project, output: string, opts: ExportVid
   const takes = primaryTakes(current)
   const asset = takes[0] ?? Object.values(current.assets).find((a) => a.path)
   const segs = resolveSegments(current)
+  const pictureHidden = current.tracks.some(t => t.id === 'v1' && t.hidden)
+  const voiceHidden = current.tracks.some(t => t.id === 'a1' && (t.hidden || t.muted))
   const inputs = takes
     .filter((take) => take.path)
     .map((take) => ({
@@ -138,7 +140,7 @@ function buildProgramExportJob(project: Project, output: string, opts: ExportVid
         scale: s.transform.scale,
         x: s.transform.x,
         y: s.transform.y,
-        volume: s.volume,
+        volume: voiceHidden ? 0 : s.volume,
         fadeIn: s.fadeIn,
         fadeOut: s.fadeOut,
         overlapNext: s.overlapNext,
@@ -146,7 +148,7 @@ function buildProgramExportJob(project: Project, output: string, opts: ExportVid
         kind: s.kind,
         duration: s.duration,
         pan: s.pan,
-        opacity: s.transform.opacity,
+        opacity: pictureHidden ? 0 : s.transform.opacity,
         rotation: s.transform.rotation
       }
     }),

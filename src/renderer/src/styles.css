@@ -2420,7 +2420,11 @@ button:disabled,
 .track-label[data-kind='overlay'] { height: var(--timeline-lane-overlay); color: var(--palette-track-overlay); }
 .track-label[data-kind='video'] { height: var(--timeline-lane-video); color: var(--color-fg); }
 .track-label[data-kind='audio'] { height: var(--timeline-lane-audio); color: var(--color-success); }
-.track-label[data-hidden='true'] { opacity: 0.45; text-decoration: line-through; }
+.timeline-row[data-output-hidden='true'] .track-label,
+.timeline-row[data-output-hidden='true'] .lane.media-lane { height: var(--timeline-lane-collapsed); }
+.timeline-row[data-output-hidden='true'] .track-label { color: var(--color-fg-muted); }
+.timeline-row[data-output-hidden='true'] .lane.media-lane { filter: grayscale(1); opacity: 0.45; }
+.timeline-row[data-output-hidden='true'] .track-label { padding-block: 0; }
 
 .track-label-name {
   flex: 1;

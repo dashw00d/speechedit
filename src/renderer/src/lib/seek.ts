@@ -161,7 +161,13 @@ export function stepProgramPlayback(input: {
   const abs = source == null ? null : source + (input.sourceOffset ?? 0)
   if (abs != null && !sourceInHoleOn(input.resolved, abs)) {
     const fromMedia = sourceToProgramOn(input.resolved, abs)
-    if (Math.abs(fromMedia - wallProgram) <= seekSlop(true, fps)) {
+    // Audio keeps advancing while React/layout or a background tab delays RAF.
+    // Catch the UI up within the same retained segment; rewinding the decoder
+    // to the capped wall clock would audibly repeat words on every slow frame.
+    const advancedInKeep = fromMedia >= input.lastProgram && input.resolved.media.some(seg =>
+      input.lastProgram >= seg.start && input.lastProgram < seg.start + seg.duration &&
+      abs >= seg.inPoint && abs <= seg.outPoint)
+    if (advancedInKeep || Math.abs(fromMedia - wallProgram) <= seekSlop(true, fps)) {
       return { program: Math.max(input.lastProgram, fromMedia), clock: 'media', hard: false }
     }
     return { program: wallProgram, clock: 'wall', hard: true }
