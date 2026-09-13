@@ -105,6 +105,22 @@ function wordEditResult(
 }
 
 /**
+ * Run automatic-edit work as one undo unit so the recovery the toast offers
+ * (and the edit it names) share a single history boundary. Later streaming
+ * chunks use replay/patch, which do not open a new entry, so `endHistoryGroup`
+ * only records a snapshot when a real dispatch changed the project.
+ */
+export function groupHistory<T>(fn: () => T): T {
+  const editor = useEditor.getState()
+  editor.beginHistoryGroup()
+  try {
+    return fn()
+  } finally {
+    editor.endHistoryGroup()
+  }
+}
+
+/**
  * Apply pending safe edits for this import phase.
  * `looks` — silence / normalize once analysis lands (do not wait for Whisper).
  * `fillers` — new safe word edits only (no retake collapse). Used as ASR chunks arrive.

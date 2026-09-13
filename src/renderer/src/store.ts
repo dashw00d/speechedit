@@ -50,6 +50,7 @@ const SELECT_NEW_CLIP = new Set([
   'pasteClip'
 ])
 let lastCoalesce: { type: string; clipId?: string; at: number } | null = null
+let historyGroup: { base: Project; depth: number; dirty: boolean } | null = null
 let resetPlaybackForProjectChange: () => void = () => undefined
 
 function firstAddedClipId(before: Project, after: Project): string | undefined {
@@ -94,6 +95,10 @@ export interface EditorState {
   replay: (command: Command) => void
   /** Apply a command to the current project only — no undo entry, history snapshots unchanged. */
   patch: (command: Command) => void
+  /** Start an undo group: dispatched commands inside it share one history entry. */
+  beginHistoryGroup: () => void
+  /** Close the undo group; records one snapshot only if a dispatch changed the project. */
+  endHistoryGroup: () => void
   undo: () => void
   redo: () => void
   selectWords: (ids: string[], additive?: boolean) => void
@@ -376,12 +381,14 @@ export const useEditor = create<EditorState>((set, get) => ({
     const clipId = 'clipId' in command ? command.clipId : undefined
     const now = Date.now()
     const coalesce =
+      !historyGroup &&
       COALESCE.has(command.type) &&
       lastCoalesce &&
       lastCoalesce.type === command.type &&
       lastCoalesce.clipId === clipId &&
       now - lastCoalesce.at < 500
-    lastCoalesce = { type: command.type, clipId, at: now }
+    if (!historyGroup) lastCoalesce = { type: command.type, clipId, at: now }
+    if (historyGroup) historyGroup.dirty = true
     persist(next, { dirty: true })
     const addedClipId = SELECT_NEW_CLIP.has(command.type) ? firstAddedClipId(project, next) : undefined
     const addedClip = addedClipId
@@ -389,7 +396,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       : undefined
     set({
       project: next,
-      past: coalesce ? past : [...past, project].slice(-HISTORY_LIMIT),
+      past: historyGroup || coalesce ? past : [...past, project].slice(-HISTORY_LIMIT),
       future: [],
       dirty: true,
       ...(command.type === 'applySafeSuggestions' ? { previewSafeCuts: false } : {}),
@@ -424,6 +431,23 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (next === project) return
     persist(next, { dirty: true })
     set({ project: next, dirty: true })
+  },
+  beginHistoryGroup: () => {
+    if (historyGroup) {
+      historyGroup.depth += 1
+      return
+    }
+    historyGroup = { base: get().project, depth: 1, dirty: false }
+  },
+  endHistoryGroup: () => {
+    if (!historyGroup) return
+    historyGroup.depth -= 1
+    if (historyGroup.depth > 0) return
+    const group = historyGroup
+    historyGroup = null
+    lastCoalesce = null
+    if (!group.dirty || get().project === group.base) return
+    set({ past: [...get().past, group.base].slice(-HISTORY_LIMIT), future: [] })
   },
   undo: () => {
     const { past, project, future } = get()

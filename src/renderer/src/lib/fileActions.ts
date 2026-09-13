@@ -36,13 +36,15 @@ import {
   describeFirstEditResult,
   dismissLeftoverBreaths,
   emptyCaptionSession,
+  groupHistory,
   looksSafeSpans,
   offeredWordSpans,
   startLeftoverReview,
   startRetakeReview,
   describeRetakeReview,
   type CaptionAutoSession,
-  type FirstEditPhase
+  type FirstEditPhase,
+  type FirstEditResult
 } from './firstEdit'
 import { parseAnyTranscript } from './transcript'
 import { useEditor } from '../store'
@@ -78,15 +80,20 @@ function toastAfterIntel(
   session: CaptionAutoSession & { reviewToast?: boolean } = emptyCaptionSession()
 ): void {
   // One toast per import: merge the notes so a later caption/leftover line cannot
-  // clobber the undo invitation the automatic first edit just offered.
-  const result = applySafeFirstEdit(phase, skip) ?? session.lastEdit ?? null
+  // clobber the undo invitation the automatic first edit just offered. The cut,
+  // its captions and the leftover review share one history boundary so Undo does
+  // what the message promises.
+  const { result, captioned, leftover } = groupHistory(() => ({
+    result: (applySafeFirstEdit(phase, skip) ?? session.lastEdit ?? null) as FirstEditResult | null,
+    captioned: applyAutoCaptions(session),
+    leftover: leftoverReviewMessage(session)
+  }))
   const notes: string[] = []
   if (result) notes.push(describeFirstEditResult(result, phase))
-  if (applyAutoCaptions(session) && !session.captionsToast) {
+  if (captioned && !session.captionsToast) {
     session.captionsToast = true
     notes.push('Captions from the transcript.')
   }
-  const leftover = leftoverReviewMessage(session)
   if (leftover) notes.push(leftover)
   onToast(notes.length ? notes.join(' ') : fallback)
 }
@@ -198,9 +205,11 @@ function inspectMediaCallbacks(
         looksFirstEdit.done = true
         looksFirstEdit.skip = looksSafeSpans(useEditor.getState().project)
         const notes: string[] = []
-        const result = applySafeFirstEdit('looks')
+        const { result, leftover } = groupHistory(() => ({
+          result: applySafeFirstEdit('looks'),
+          leftover: leftoverReviewMessage(looksFirstEdit)
+        }))
         if (result) notes.push(describeFirstEditResult(result, 'looks'))
-        const leftover = leftoverReviewMessage(looksFirstEdit)
         if (leftover) notes.push(leftover)
         if (notes.length) onToast(notes.join(' '))
         await releaseFfmpegAfterLooks()
@@ -209,14 +218,17 @@ function inspectMediaCallbacks(
         if (!openedId.current || !useEditor.getState().project.assets[openedId.current]) return
         replayCommands(importedWordsCommands(useEditor.getState().project, partial))
         if (!looksFirstEdit.done) return
-        const captioned = applyAutoCaptions(looksFirstEdit)
+        const { captioned, result } = groupHistory(() => {
+          const captioned = applyAutoCaptions(looksFirstEdit)
+          const offered = offeredWordSpans(useEditor.getState().project, looksFirstEdit.skip)
+          const result = applyStreamingFirstEdit(looksFirstEdit.skip, looksFirstEdit)
+          looksFirstEdit.skip = [...looksFirstEdit.skip, ...offered]
+          return { captioned, result }
+        })
         if (captioned && !looksFirstEdit.captionsToast) {
           looksFirstEdit.captionsToast = true
           onToast('Captions from the transcript.')
         }
-        const offered = offeredWordSpans(useEditor.getState().project, looksFirstEdit.skip)
-        const result = applyStreamingFirstEdit(looksFirstEdit.skip, looksFirstEdit)
-        looksFirstEdit.skip = [...looksFirstEdit.skip, ...offered]
         if (result && !looksFirstEdit.wordsToast) {
           looksFirstEdit.wordsToast = true
           onToast(`${describeFirstEditResult(result, 'fillers')} Still transcribing.`)

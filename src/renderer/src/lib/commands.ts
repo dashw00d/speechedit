@@ -258,18 +258,40 @@ function restoreSourceRange(project: Project, start: number, end: number): Proje
   return touch(next)
 }
 
+/** Toggle a word's deleted flag without touching audio. Used for zero-duration
+ *  tokens that have no safe audio window of their own. */
+function setWordDeleted(project: Project, wordIds: string[], deleted: boolean): Project {
+  const ids = new Set(wordIds)
+  let changed = false
+  const words = project.transcript.words.map((word) => {
+    if (!ids.has(word.id) || word.deleted === deleted) return word
+    changed = true
+    return { ...word, deleted }
+  })
+  if (!changed) return project
+  return touch({ ...project, transcript: { ...project.transcript, words } })
+}
+
 function toggleWords(project: Project, wordIds: string[], lift = false): Project {
   const ids = new Set(wordIds)
   const selected = project.transcript.words.filter((word) => ids.has(word.id))
   if (!selected.length) return project
   const shouldDelete = selected.some((word) => !word.deleted)
-  const ranges = wordSelectionRanges(project.transcript.words, wordIds)
-  return ranges.reverse().reduce(
-    (next, span) => shouldDelete
-      ? deleteSourceRange(next, span.start, span.end, 'transcript', lift)
-      : restoreSourceRange(next, span.start, span.end),
-    project
+  // Tokens with no audio window (start === end) are removed from the transcript
+  // only: cutting their extended window would clip the neighbouring word.
+  const noAudio = new Set(
+    selected.filter((word) => word.end <= word.start).map((word) => word.id)
   )
+  let next = noAudio.size ? setWordDeleted(project, [...noAudio], shouldDelete) : project
+  const ranged = wordIds.filter((id) => !noAudio.has(id))
+  const ranges = wordSelectionRanges(next.transcript.words, ranged)
+  next = ranges.reverse().reduce(
+    (acc, span) => shouldDelete
+      ? deleteSourceRange(acc, span.start, span.end, 'transcript', lift)
+      : restoreSourceRange(acc, span.start, span.end),
+    next
+  )
+  return next
 }
 
 function cutMarkedRange(project: Project, lift: boolean): Project {

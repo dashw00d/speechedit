@@ -211,7 +211,7 @@ describe('cues → Word[]', () => {
     expect(words.every((w) => w.id.startsWith('w'))).toBe(true)
   })
 
-  test('whisper zero-duration tokens get a reachable highlight window', () => {
+  test('whisper zero-duration token flush to a neighbour stays reachable without a cut window', () => {
     const words = wordsFromCues(
       [
         { text: 'Hello', start: 0.1, end: 0.4 },
@@ -222,7 +222,9 @@ describe('cues → Word[]', () => {
     )
     const zero = words.find((w) => w.text === 'uh')
     expect(zero).toBeDefined()
-    expect(zero!.end).toBeGreaterThan(zero!.start)
+    // No gap on either side: keep the timestamps so deleting cannot clip `world`.
+    expect([zero!.start, zero!.end]).toEqual([0.4, 0.4])
+    // Playback highlighting still reaches the token.
     expect(currentWord(words, zero!.start)?.text).toBe('uh')
   })
 
