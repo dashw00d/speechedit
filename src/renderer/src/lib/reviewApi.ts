@@ -1,3 +1,4 @@
+import { REVIEW_PROFILE } from '../../../shared/reviewMedia'
 import type { ReviewRoom, ReviewSnapshot } from '../../../shared/review'
 import { reviewFragment, type ReviewFocus } from './reviewLinks'
 export const REVIEW_LINKS_CHANGED = 'speechedit:review-links-changed'
@@ -35,8 +36,8 @@ export async function reviewMutation(id: string, path: string, key: string, revi
     return reviewRequest<ReviewRoom>(`/${id}${path}`, key, 'POST', { ...payload, revision: latest.revision })
   }
 }
-export async function createReview(snapshot: ReviewSnapshot, signal?: AbortSignal, project?: import('../types').Project) {
-  return reviewRequest<{ room: ReviewRoom; ownerKey: string; reviewerKey: string }>('', undefined, 'POST', { snapshot, mode: project ? 'edit' : 'audit', ...(project ? { project } : {}) }, signal)
+export async function createReview(snapshot: ReviewSnapshot, signal?: AbortSignal, project?: import('../types').Project, lightweight = false, offlineMotion = false) {
+  return reviewRequest<{ room: ReviewRoom; ownerKey: string; reviewerKey: string }>('', undefined, 'POST', { snapshot, ...(lightweight ? { profile: REVIEW_PROFILE, offlineMotion } : {}), mode: project ? 'edit' : 'audit', ...(project ? { project } : {}) }, signal)
 }
 export async function uploadReviewPreview(binding: ReviewBinding, assetId: string, blob: Blob, signal?: AbortSignal, progress?: (ratio: number) => void) {
   const chunkSize = 512 * 1024
@@ -46,4 +47,12 @@ export async function uploadReviewPreview(binding: ReviewBinding, assetId: strin
     if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'Preview upload failed.') }
     progress?.(end / blob.size)
   }
+}
+
+/** Delivery and feedback revisions advance independently. Never discard newer media on a reply race. */
+export function latestReviewRoom(current: ReviewRoom | null, next: ReviewRoom): ReviewRoom {
+  if (!current || current.id !== next.id) return next
+  const feedback = current.revision > next.revision ? current : next
+  const delivery = (current.delivery?.revision || 0) > (next.delivery?.revision || 0) ? current.delivery : next.delivery
+  return { ...feedback, ...(delivery ? { delivery, published: current.published || next.published } : {}) }
 }

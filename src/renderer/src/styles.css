@@ -4312,3 +4312,6 @@ button:disabled,
 .editor-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
 .editor-shell > .app { flex: 1; min-height: 0; height: auto; }
 .shared-editor > .editor-shell { flex: 1; height: auto; }
+.review-player figure { margin: 0; }
+.review-player img { display: block; width: 100%; max-height: 360px; object-fit: contain; background: var(--color-bg-well); }
+.review-player figcaption { color: var(--color-fg-muted); font-size: var(--font-size-xs); padding-block: var(--space-1); }

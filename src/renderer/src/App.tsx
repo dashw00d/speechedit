@@ -1,3 +1,4 @@
+import { useReviewDetails } from './lib/useReviewDetails'
 import { RecordReplacementSheet } from './components/RecordReplacementSheet'
 import { recordingSlot } from './lib/replaceAudio'
 import { uploadRecording } from './lib/recordingClient'
@@ -139,6 +140,7 @@ export function App() {
   }, [])
   const [shareView, setShareView] = useState<'share' | 'inbox'>('share')
   const projectId = useEditor(s => s.project.id)
+  useReviewDetails(projectId, !isElectron && !isSharedEditor())
   const inbox = useReviewInbox(projectId, !isElectron && !isSharedEditor())
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)

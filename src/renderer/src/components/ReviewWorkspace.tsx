@@ -1,3 +1,5 @@
+import { ReviewPlayer, type ReviewPlayerHandle } from './ReviewPlayer'
+import { reviewScope } from '../../../shared/reviewMedia'
 import { useEffect, useRef, useState } from 'react'
 import { editLabel, intersects, type ReviewEdit, type ReviewProposal, type ReviewRoom, type ReviewSpan } from '../../../shared/review'
 import { reviewRequest, reviewMutation } from '../lib/reviewApi'
@@ -12,12 +14,16 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
   decisionFor?: (proposal: ReviewProposal) => 'accepted' | 'rejected' | undefined
   onDecide?: (proposal: ReviewProposal, status: 'accepted' | 'rejected') => Promise<void>
 }) {
+  const scope = reviewScope(room.snapshot)
+  const light = useRef<ReviewPlayerHandle>(null)
+  const pauseMedia = () => { media.current?.pause(); light.current?.pause() }
   const [landing] = useState(() => resolveReviewFocus(room.snapshot, focus))
   const draftId = `${room.id}:${focus ? `${focus.start}:${focus.end}:${focus.firstWordId || ''}:${focus.lastWordId || ''}` : 'whole'}`
   const [draft] = useState(() => readReviewDraft(draftId, !!onDecide, room.snapshot.sourceDuration))
   const [{ initialRange, initialIds }] = useState(() => {
     const ids = new Set(room.snapshot.words.map(w => w.id))
-    return { initialRange: draft.range || landing?.focus || { start: 0, end: Math.min(1, room.snapshot.sourceDuration) }, initialIds: (draft.selectedIds || landing?.words.map(w => w.id) || []).filter(id => ids.has(id)) }
+    const saved = draft.range || landing?.focus || { start: scope.start, end: Math.min(scope.start + 1, scope.end) }
+    return { initialRange: { start: Math.max(scope.start, Math.min(scope.end, saved.start)), end: Math.max(scope.start, Math.min(scope.end, saved.end)) }, initialIds: (draft.selectedIds || landing?.words.map(w => w.id) || []).filter(id => ids.has(id)) }
   })
   const [author, setAuthor] = useState(() => { try { return localStorage.getItem('speechedit.review-name') || '' } catch { return '' } })
   const [text, setText] = useState(draft.text || '')
@@ -68,6 +74,8 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
   }, [])
   function seek(time: number, play = false) {
     stopAt.current = null
+    time = Math.min(scope.end, Math.max(scope.start, time))
+    if (room.delivery) { light.current?.seek(time, play); return }
     const index = room.snapshot.assets.findIndex(a => time >= a.sourceOffset && time < a.sourceOffset + a.duration)
     if (index < 0) return
     if (index !== assetIndex) { seekNext.current = { time, play }; setAssetIndex(index) }
@@ -77,6 +85,8 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
   function playPassage(span: ReviewSpan, proposal?: ReviewProposal, original = false) {
     setPreview(proposal || null); setSourceOnly(original)
     const window = reviewPlaybackRange(span, room.snapshot.sourceDuration)
+    window.start = Math.max(scope.start, window.start); window.end = Math.min(scope.end, window.end)
+    if (room.delivery) { light.current?.seek(window.start, true, window.end); return }
     seek(window.start, true); stopAt.current = window.end
   }
   function nextPending() {
@@ -145,9 +155,9 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
     {landing && <section className="review-focus" aria-label="Shared passage">
       <strong>{landing.focus.question || 'Your friend shared this passage'}</strong>
       {landing.words.length > 0 && <blockquote>{landing.words.map(w => w.text).join(' ')}</blockquote>}
-      <div className="review-toolbar"><button className="chip confirm-primary" onClick={() => playPassage(landing.focus, undefined, true)}>Play passage</button><button className="chip" onClick={() => { setRange(landing.focus); setSelectedIds(landing.words.map(w => w.id)); setCorrection(landing.words.length === 1 ? landing.words[0].text : ''); feedback.current?.scrollIntoView({ block: 'start' }); feedback.current?.querySelector('input')?.focus({ preventScroll: true }) }}>Respond to this passage</button><small>{landing.focus.start.toFixed(2)}–{landing.focus.end.toFixed(2)}s · full recording available below</small></div>
+      <div className="review-toolbar"><button className="chip confirm-primary" onClick={() => playPassage(landing.focus, undefined, true)}>Play passage</button><button className="chip" onClick={() => { setRange(landing.focus); setSelectedIds(landing.words.map(w => w.id)); setCorrection(landing.words.length === 1 ? landing.words[0].text : ''); feedback.current?.scrollIntoView({ block: 'start' }); feedback.current?.querySelector('input')?.focus({ preventScroll: true }) }}>Respond to this passage</button><small>{landing.focus.start.toFixed(2)}–{landing.focus.end.toFixed(2)}s · {room.snapshot.scope ? 'only this passage is shared' : 'full recording available below'}</small></div>
     </section>}
-    {focus && !landing && <p role="status">This passage is outside the shared recording. You can still review the full video below.</p>}
+    {focus && !landing && <p role="status">This passage is outside the shared recording. You can still review the shared recording below.</p>}
     <div className="review-source">
       <div className="review-toolbar">
         <strong>Watch and review</strong>
@@ -155,21 +165,22 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
           {room.snapshot.assets.map((a, i) => <option key={a.id} value={i}>{a.name}</option>)}
         </select>
       </div>
-      <video data-audio={asset.kind === 'audio' || undefined} ref={media} controls playsInline preload="metadata" src={`/api/reviews/${room.id}/media/${asset.id}`}
+      {room.delivery ? <ReviewPlayer ref={light} room={room} accessKey={accessKey} cuts={cuts} selection={range} onClock={setClock} onRoom={onRoom} onError={onError} /> : <><video data-audio={asset.kind === 'audio' || undefined} ref={media} controls playsInline preload="metadata" src={`/api/reviews/${room.id}/media/${asset.id}`}
         onLoadedMetadata={() => { const next = seekNext.current; if (next && media.current) { media.current.currentTime = Math.max(0, next.time - asset.sourceOffset); if (next.play) void media.current.play().catch(e => onError(String(e))); seekNext.current = null } }}
         onTimeUpdate={() => { if (media.current) setClock(asset.sourceOffset + media.current.currentTime) }}
         onEnded={() => { if (stopAt.current != null && asset.sourceOffset + asset.duration >= stopAt.current) { stopAt.current = null; return } if (assetIndex + 1 < room.snapshot.assets.length) { seekNext.current = { time: room.snapshot.assets[assetIndex + 1].sourceOffset, play: true }; setAssetIndex(assetIndex + 1) } }}
         onError={() => onError('The preview could not load. Refresh this review link or ask the owner to reshare.')} />
-      <div className="review-toolbar">
-        <button className="chip" aria-pressed={sourceOnly} onClick={() => { setSourceOnly(true); seek(preview?.start ?? range.start) }}>Original source</button>
-        <button className="chip" aria-pressed={!sourceOnly} onClick={() => { setSourceOnly(false); seek(Math.max(0, (preview?.start ?? range.start) - 1)) }}>{preview ? 'With proposal' : 'Shared cuts'}</button>
-        <span>{clock.toFixed(2)}s source time</span>
-      </div>
       {asset.waveform.length > 0 && <svg className="review-waveform" viewBox="0 0 1000 60" preserveAspectRatio="none" aria-label="Source audio waveform" role="img">
         {asset.waveform.map((peak, i) => <rect key={i} x={i / asset.waveform.length * 1000} y={30 - peak * 28} width={Math.max(0.5, 1000 / asset.waveform.length - 0.5)} height={Math.max(1, peak * 56)} />)}
         <line x1={(clock - asset.sourceOffset) / asset.duration * 1000} x2={(clock - asset.sourceOffset) / asset.duration * 1000} y1="0" y2="60" />
       </svg>}
       <input aria-label="Source position" type="range" min={asset.sourceOffset} max={asset.sourceOffset + asset.duration} step="0.01" value={clock} onChange={e => seek(Math.min(asset.sourceOffset + asset.duration - 0.001, Number(e.target.value)))} />
+      </>}
+      <div className="review-toolbar">
+        <button className="chip" aria-pressed={sourceOnly} onClick={() => { setSourceOnly(true); seek(preview?.start ?? range.start) }}>Original source</button>
+        <button className="chip" aria-pressed={!sourceOnly} onClick={() => { setSourceOnly(false); seek(Math.max(0, (preview?.start ?? range.start) - 1)) }}>{preview ? 'With proposal' : 'Shared cuts'}</button>
+        <span>{clock.toFixed(2)}s source time</span>
+      </div>
       <small>This preview shows source recordings and cuts. Titles, overlays, speed changes, and final effects stay in the owner’s editor.</small>
       {preview && <p className="review-preview-note">Previewing: {editLabel(preview.edit)} <button className="chip" onClick={() => setPreview(null)}>Clear preview</button></p>}
       <div className="review-transcript" aria-label="Shared transcript" ref={transcript}>
@@ -177,7 +188,7 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
         <div className="review-toolbar">
           <button className="chip" disabled={!anchor} aria-pressed={extendSelection} onClick={() => setExtendSelection(!extendSelection)}>{extendSelection ? 'Cancel passage selection' : 'Select through another word'}</button>
           {!inbox && selectedIds.length > 0 && <button className="chip" onClick={() => { feedback.current?.scrollIntoView({ block: 'start' }); feedback.current?.querySelector('input')?.focus({ preventScroll: true }) }}>Suggest an edit</button>}
-          {!inbox && selectedIds.length > 0 && <button className="chip" disabled={busy || range.end - range.start < 0.1 || range.end - range.start > 120} onClick={() => { if (room.snapshot.cuts.some(c => intersects(c, range))) { onError('Choose a passage without shared cuts to suggest a recording.'); return } media.current?.pause(); setRecording({ ...range, words: selectedText }) }}>Re-record audio</button>}
+          {!inbox && selectedIds.length > 0 && <button className="chip" disabled={busy || range.end - range.start < 0.1 || range.end - range.start > 120} onClick={() => { if (room.snapshot.cuts.some(c => intersects(c, range))) { onError('Choose a passage without shared cuts to suggest a recording.'); return } pauseMedia(); setRecording({ ...range, words: selectedText }) }}>Re-record audio</button>}
         </div>
         {extendSelection && <p role="status">Tap the last word of your passage. Shift-click also works.</p>}
         {!room.snapshot.words.length && <p>No spoken transcript was shared. Use source times to leave feedback.</p>}
@@ -208,10 +219,10 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
       </div>}
       <details><summary>Adjust selection times</summary>
       <div className="review-range">
-        <label>From (seconds)<input type="number" min="0" max={room.snapshot.sourceDuration} step="0.01" value={range.start} onChange={e => { setSelectedIds([]); setRange({ ...range, start: Number(e.target.value) }) }} /></label>
-        <label>To (seconds)<input type="number" min="0" max={room.snapshot.sourceDuration} step="0.01" value={range.end} onChange={e => { setSelectedIds([]); setRange({ ...range, end: Number(e.target.value) }) }} /></label>
+        <label>From (seconds)<input type="number" min={scope.start} max={scope.end} step="0.01" value={range.start} onChange={e => { setSelectedIds([]); setRange({ ...range, start: Number(e.target.value) }) }} /></label>
+        <label>To (seconds)<input type="number" min={scope.start} max={scope.end} step="0.01" value={range.end} onChange={e => { setSelectedIds([]); setRange({ ...range, end: Number(e.target.value) }) }} /></label>
       </div>
-      <button className="chip" onClick={() => { setSelectedIds([]); setRange({ start: clock, end: Math.min(room.snapshot.sourceDuration, clock + 1) }) }}>Use playhead</button>
+      <button className="chip" onClick={() => { setSelectedIds([]); setRange({ start: clock, end: Math.min(scope.end, clock + 1) }) }}>Use playhead</button>
       </details>
       <label>Comment or reason (optional for edits)<textarea value={text} maxLength={2000} onChange={e => setText(e.target.value)} placeholder="What would you change, and why?" /></label>
       <div className="review-toolbar">
@@ -233,7 +244,7 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
         <strong>{editLabel(p.edit)}</strong><small>{p.start.toFixed(2)}–{p.end.toFixed(2)}s · {new Date(p.createdAt).toLocaleString()}</small>
         {p.edit?.kind === 'correctWord' ? <p className="review-word-diff"><span>Original: “{room.snapshot.words.find(w => p.edit?.kind === 'correctWord' && w.id === p.edit.wordId)?.text}”</span><span aria-hidden="true"> → </span><strong>Suggested: “{p.edit.text}”</strong></p> : <blockquote>{room.snapshot.words.filter(w => intersects(w, p)).map(w => w.text).join(' ')}</blockquote>}
         {p.text !== editLabel(p.edit) && <p>{p.text}</p>}
-        {p.edit?.kind === 'replaceAudio' && <audio controls preload="metadata" aria-label="Proposed voice recording" onPlay={() => media.current?.pause()} src={`/api/reviews/${room.id}/media/${p.edit.assetId}`} />}
+        {p.edit?.kind === 'replaceAudio' && <audio controls preload="metadata" aria-label="Proposed voice recording" onPlay={pauseMedia} src={`/api/reviews/${room.id}/media/${p.edit.assetId}`} />}
         <div className="review-toolbar">
           <button className="chip" onClick={() => { setActiveProposal(p.id); playPassage(p, p, true) }}>Play original</button>
           {p.edit?.kind !== 'replaceAudio' && <button className="chip" onClick={() => { setActiveProposal(p.id); playPassage(p, p) }}>Preview</button>}
