@@ -13,13 +13,17 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
     SPEECHEDIT_WEB_ROOT=/app/src/renderer/dist \
-    SPEECHEDIT_CACHE_DIR=/data/whisper-cache
+    SPEECHEDIT_CACHE_DIR=/data/whisper-cache \
+    SPEECHEDIT_REVIEW_DIR=/data/reviews
 
 COPY --chown=bun:bun --from=build /app/package.json ./package.json
 COPY --chown=bun:bun --from=build /app/scripts/web-server.ts ./scripts/web-server.ts
+COPY --chown=bun:bun --from=build /app/scripts/review-server.ts ./scripts/review-server.ts
+COPY --chown=bun:bun --from=build /app/src/shared/review.ts ./src/shared/review.ts
 COPY --chown=bun:bun --from=build /app/src/renderer/dist ./src/renderer/dist
 
-RUN mkdir -p /data/whisper-cache && chown -R bun:bun /data
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /data/whisper-cache /data/reviews && chown -R bun:bun /data
 USER bun
 
 VOLUME ["/data"]

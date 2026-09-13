@@ -1,3 +1,4 @@
+import { ShareSheet } from './components/ShareSheet'
 import { WorkflowSheet } from './components/WorkflowSheet'
 import { useEffect, useRef, useState } from 'react'
 import { ConfirmSheet } from './components/ConfirmSheet'
@@ -88,6 +89,7 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [mediaHealth, setMediaHealth] = useState<MediaToolsHealth | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<WorkspacePane>('script')
@@ -283,6 +285,7 @@ export function App() {
     <div className="app" data-empty={emptyReel || undefined} data-mobile-pane={mobilePane}>
       <MenuBar
         onToast={setToast}
+        onShare={() => setShareOpen(true)}
         onExport={onExportClick}
         exporting={exporting}
         onShortcuts={() => setKeysOpen(true)}
@@ -397,6 +400,7 @@ export function App() {
       <WorkflowSheet open={workflowOpen} onClose={() => setWorkflowOpen(false)} onToast={setToast} />
       <ConfirmSheet />
       <PreferencesSheet />
+      {shareOpen && <ShareSheet onClose={() => setShareOpen(false)} onToast={setToast} />}
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
       <ShortcutsOverlay open={keysOpen} onClose={() => setKeysOpen(false)} />
       <ContextMenuHost menu={contextMenu} onClose={closeContextMenu} />

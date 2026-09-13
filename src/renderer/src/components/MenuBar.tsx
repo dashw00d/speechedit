@@ -13,12 +13,13 @@ import { OverflowMenu } from './OverflowMenu'
 
 interface Props {
   onToast: (msg: string) => void
+  onShare?: () => void
   onExport: () => void
   exporting: boolean
   onShortcuts?: () => void
 }
 
-export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
+export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: Props) {
   const project = useEditor((s) => s.project)
   const dirty = useEditor((s) => s.dirty)
   const analyzing = useEditor((s) => s.analyzing)
@@ -135,7 +136,8 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
           <span className="menu-label">Settings & help</span>
           <Item onClick={() => window.dispatchEvent(new Event('speechedit:project-settings'))}>Project settings…</Item>
           <Item onClick={() => openPreferences()}>Appearance & preferences…</Item>
-          {onShortcuts && <Item onClick={onShortcuts}>Editing help & shortcuts…</Item>}
+          {onShare && <button type="button" className="tool-btn" onClick={onShare}>Share</button>}
+        {onShortcuts && <Item onClick={onShortcuts}>Editing help & shortcuts…</Item>}
         </Menu>
       </nav>
       <div className="menubar-right">
@@ -149,6 +151,7 @@ export function MenuBar({ onToast, onExport, exporting, onShortcuts }: Props) {
             (err: unknown) => onToast(err instanceof Error ? err.message : 'Save failed.')
           )
         }}>Save{dirty ? ' •' : ''}</button>
+        {onShare && <button type="button" className="tool-btn" onClick={onShare}>Share</button>}
         {onShortcuts && <button type="button" className="tool-btn" title="Editing help and keyboard shortcuts (?)" onClick={onShortcuts}>Help</button>}
         <button type="button"
           className="status-pill"

@@ -1,3 +1,4 @@
+import { createReviewHandler } from './review-server'
 import { createReadStream, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createServer } from 'node:http'
@@ -5,6 +6,8 @@ import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+
+const serveReview = createReviewHandler(process.env.SPEECHEDIT_REVIEW_DIR || '.cache/speechedit-reviews')
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 3000)
@@ -272,6 +275,7 @@ const server = createServer(async (request, response) => {
     json(response, 200, { ok: true })
     return
   }
+  if (await serveReview(request, response, pathname)) return
   if (await serveDemoAi(request, response, pathname)) return
   if (await serveWhisperModel(request, response, pathname)) return
   if (request.method !== 'GET' && request.method !== 'HEAD') {

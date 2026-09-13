@@ -1,3 +1,4 @@
+import { ReviewPage } from './components/ReviewPage'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
@@ -8,6 +9,6 @@ if (!bootstrapThemeFromQuery()) applyTheme()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {location.pathname.startsWith('/review/') ? <ReviewPage /> : <App />}
   </StrictMode>
 )

@@ -1,3 +1,4 @@
+import { createReviewHandler } from './scripts/review-server'
 import { createReadStream, createWriteStream, existsSync, readFileSync } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
@@ -208,7 +209,10 @@ export default defineConfig(({ mode }) => {
     define: {
       'process.env.SPEECHEDIT_VERSION': JSON.stringify(packageVersion())
     },
-    plugins: [browserWhisperModelServer(), demoAiServer(openRouterKey), react()],
+    plugins: [{ name: 'speechedit-reviews', configureServer(server) {
+      const handler = createReviewHandler(resolve('node_modules/.cache/speechedit-review-dev'))
+      server.middlewares.use((req, res, next) => { void handler(req, res, new URL(req.url || '/', 'http://localhost').pathname).then(handled => { if (!handled) next() }).catch(next) })
+    } }, browserWhisperModelServer(), demoAiServer(openRouterKey), react()],
     server: { port: 5173, strictPort: true }
   }
 })

@@ -221,6 +221,8 @@ export interface EncoderOption {
 }
 
 export interface Project {
+  /** Local acknowledgments make remote review decisions retryable without duplicate edits. */
+  reviewDecisions?: Record<string, 'accepted' | 'rejected'>
   id: string
   name: string
   fps: number

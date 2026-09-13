@@ -11,6 +11,8 @@
     "outDir": "out"
   },
   "include": [
+    "scripts/web-server.ts",
+    "scripts/review-server.ts",
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",

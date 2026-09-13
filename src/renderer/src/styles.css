@@ -4228,3 +4228,54 @@ button:disabled,
   font-weight: var(--font-weight-semibold);
 }
 .transcript-transcribe-button:disabled { opacity: 0.65; }
+
+/* Source review uses the same surface, typography, and action tokens as the editor. */
+.share-sheet {
+  width: min(1280px, 96vw);
+  max-height: 94dvh;
+  overflow: auto;
+  padding: var(--space-7);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  color: var(--color-fg);
+}
+.review-page { height: 100dvh; overflow: auto; padding: var(--space-7); background: var(--color-bg-app); color: var(--color-fg); }
+.review-page-header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-5); }
+.review-page h1, .share-sheet h1 { font-size: var(--font-size-xl); margin: var(--space-3) 0; }
+.review-workspace { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); gap: var(--space-6); margin-top: var(--space-6); }
+.review-source, .review-feedback { min-width: 0; padding: var(--space-5); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg-elevated); }
+.review-source video { display: block; width: 100%; max-height: 360px; min-height: 160px; background: var(--color-bg-monitor); margin: var(--space-4) 0; border-radius: var(--radius-lg); }
+.review-toolbar { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin: var(--space-3) 0; }
+.review-toolbar > span:last-child { margin-left: auto; }
+.review-range { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.review-feedback label, .review-link-box label { display: grid; gap: var(--space-2); margin: var(--space-4) 0; }
+.review-workspace input, .review-workspace select, .review-workspace textarea, .review-link-box input {
+  width: 100%; min-width: 0; padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-button); background: var(--color-bg-input); color: var(--color-fg);
+}
+.review-workspace textarea { min-height: 90px; resize: vertical; }
+.review-toolbar select { width: auto; max-width: 100%; }
+.review-workspace small, .review-link-box small { display: block; color: var(--color-fg-muted); }
+.review-transcript { margin-top: var(--space-5); max-height: 420px; overflow: auto; line-height: 2; }
+.review-word { background: transparent; border: 0; padding: var(--space-1) var(--space-2); color: var(--color-fg-transcript); border-radius: var(--radius-button); }
+.review-word[data-proposed] { border-bottom: 2px dashed var(--color-warning); }
+.review-word[data-selected] { background: var(--color-selection-bg); outline: 1px solid var(--color-selection-border); }
+.review-word[data-cut] { text-decoration: line-through; color: var(--color-fg-muted); }
+.review-proposal { border: 1px solid var(--color-border); padding: var(--space-4); border-radius: var(--radius-lg); margin: var(--space-4) 0; overflow-wrap: anywhere; }
+.review-proposal[data-status="accepted"] { border-color: var(--color-success); }
+.review-proposal[data-status="rejected"] { opacity: 0.7; }
+.review-status { font-size: var(--font-size-sm); color: var(--color-fg-muted); }
+.review-reply { border-left: 2px solid var(--color-accent-border); padding-left: var(--space-4); }
+.review-preview-note, .review-link-box { padding: var(--space-4); background: var(--color-accent-subtle); border-radius: var(--radius-lg); margin: var(--space-4) 0; }
+.review-link-box > .chip { display: inline-block; margin: var(--space-2); text-decoration: none; }
+.review-error { color: var(--color-danger); border: 1px solid var(--color-danger); padding: var(--space-4); border-radius: var(--radius-lg); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .review-workspace { grid-template-columns: minmax(0, 1fr); }
+  .review-page, .share-sheet { padding: var(--space-4); }
+  .review-page-header { align-items: start; }
+}
+
+.review-source video[data-audio] { height: 64px; min-height: 0; }
+
+.review-waveform { width: 100%; height: 48px; fill: var(--color-accent); }
+.review-waveform line { stroke: var(--color-playhead-border); stroke-width: 2px; }

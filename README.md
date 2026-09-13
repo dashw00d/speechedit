@@ -149,3 +149,27 @@ Open **Quick edit** above the transcript (also under **Edit → Quick edit prese
 Captions are on by default; manual caption/title cards are preserved. Optional **Use AI** sends the transcript to the configured Assistant provider for additional cut suggestions (and a chapter choice for highlights). Local mode makes no AI calls. Only bounded, high-confidence AI cuts are applied; other suggestions remain available for review. AI errors or a 45-second timeout fall back to the local recipe. Cancel or a project change during analysis discards the pending result.
 
 Recipes compose existing commands on a temporary project and commit once. The result shows duration and changes, with Play, Inspect edits, Export, and **Undo this preset**. Export remains a separate action.
+
+
+### Share for review
+
+The hosted web editor has a **Share** button. Create a review snapshot to compress the primary source recordings on your device (up to 640x360, 15 fps, approximately 300 kbit/s video and 48 kbit/s mono audio), then upload the previews and a transcript/chapter snapshot. Compression currently runs at roughly playback speed and pauses when the tab is hidden. Original media, local file paths, browser media keys, overlays, and private project settings are excluded. A failed encoder never falls back to uploading originals.
+
+Reviewers open the link without source files or an account. They can select transcript words or source times, propose cuts and chapter titles, leave comments, reply in threads, and compare source playback with the proposed cut. Audit proposals never change the owner's project until accepted. The owner uses **Share -> Refresh feedback -> Accept edit / Reject**; acceptance uses the normal edit commands and one undo step. Accepted server feedback can be reapplied after opening an older project save. The source snapshot is immutable: share a fresh link after substantial changes. Overlapping transcript/cut/protection or chapter changes block acceptance instead of overwriting local work.
+
+This first release is an audit workspace for source footage and cuts. It does not provide simultaneous direct editing, final rendering, or preview the owner's titles, overlays, speed changes, and effects. Native desktop sharing is not enabled yet. Reviewer names are self-reported; possession of the link grants preview and feedback access.
+
+Links expire after 30 days. The owner can revoke a link and delete its server previews and feedback. Owner capabilities are stored separately in the creating browser, not embedded in shared project data; clearing browser storage loses that management access. Local project saves retain accepted-edit receipts for safe retries after network failures. Save the project after accepting feedback.
+
+Production needs FFmpeg (included in the Docker image) and a persistent `SPEECHEDIT_REVIEW_DIR` (Docker default `/data/reviews`). FFmpeg only indexes/remuxes the already-compressed WebM into a seekable preview. Uploads use 512 KiB chunks, with a 250 MiB per-file limit, 1 GiB room limit, 8 MB metadata limit, and 20 GiB aggregate upload/feedback budget. Storage is private behind separate reviewer/owner capability tokens. Expired room directories are reclaimed during subsequent capacity checks. Per-room locks serialize revisions; filesystem leases also coordinate overlapping containers during deployment, and atomic file replacement protects completed metadata writes. The storage root must be on the same filesystem for all instances.
+
+Review API clients, including assistants, can use the ID from `/review/ID#KEY` and the fragment key as `Authorization: Bearer KEY`:
+
+- `GET /api/reviews/ID`: sanitized source snapshot, feedback, and revision.
+- `POST /api/reviews/ID/proposals`: `{ revision, author, text, edit: { kind: "cut", start, end } }`, or `{ kind: "renameChapter", sceneId, title }` for `edit`. Omit `edit` and include `start`/`end` for a timestamped comment.
+- `POST /api/reviews/ID/proposals/PROPOSAL_ID/reply`: `{ revision, author, text }`.
+- Owner-only `POST /api/reviews/ID/proposals/PROPOSAL_ID/resolve`: `{ revision, status: "accepted" | "rejected" }`. API resolution records the decision; applying it to originals happens in the owner's editor.
+
+A stale revision returns 409; refetch and review the newer feedback before resubmitting. The key never appears in API URLs. Browser media requests use a share-scoped, HttpOnly cookie established by the authenticated room read. Never share the owner key as a reviewer link.
+
+Run `bun run smoke:review http://127.0.0.1:3000` against a production web build/server. It uses deterministic Whisper output but real audio compression, upload, independent owner/reviewer browsers, proposal submission, acceptance, undo, and revocation. Set `SPEECHEDIT_REVIEW_VIDEO=1` to exercise real video compression and check proxy timing/resolution as well. The test uploads only its synthetic fixture and revokes it afterward.
