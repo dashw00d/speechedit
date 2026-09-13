@@ -14,7 +14,7 @@ export interface ReviewSnapshot {
   cuts: ReviewSpan[]
   protected: ReviewSpan[]
 }
-export type ReviewEdit = { kind: 'cut'; start: number; end: number } | { kind: 'renameChapter'; sceneId: string; title: string }
+export type ReviewEdit = { kind: 'cut'; start: number; end: number } | { kind: 'renameChapter'; sceneId: string; title: string } | { kind: 'correctWord'; wordId: string; text: string } | { kind: 'replaceAudio'; start: number; end: number; assetId: string }
 export interface ReviewReply { id: string; author: string; text: string; createdAt: number }
 export interface ReviewProposal {
   id: string
@@ -41,6 +41,10 @@ export interface ReviewRoom {
   published: boolean
   createdAt: number
   expiresAt: number
+}
+export interface ReviewSummary { id: string; name: string; revision: number; pending: number; total: number; published: boolean; createdAt: number }
+export function summarizeReview(room: ReviewRoom): ReviewSummary {
+  return { id: room.id, name: room.snapshot.name, revision: room.revision, pending: room.proposals.filter(p => p.status === 'pending').length, total: room.proposals.length, published: room.published, createdAt: room.createdAt }
 }
 export const REVIEW_MAX_ASSET_BYTES = 250 * 1024 * 1024
 export const REVIEW_MAX_ROOM_BYTES = 1024 * 1024 * 1024
@@ -83,15 +87,32 @@ export function parseReviewSnapshot(raw: unknown): ReviewSnapshot {
   if (!assets.length) throw new Error('No source recordings to share.')
   const words = list(o.words, 150000, v => {
     const w = object(v)
-    return { ...span(w, duration), id: reviewText(w.id, 120), text: reviewText(w.text, 1000), deleted: w.deleted === true }
+    // Transcript-only tokens can have no audio window. Preserve their timestamps;
+    // widening them here would let a review cut remove neighbouring speech.
+    const start = number(w.start, duration), end = number(w.end, duration)
+    if (end < start) throw new Error('Invalid word range.')
+    return { start, end, id: reviewText(w.id, 120), text: reviewText(w.text, 1000), deleted: w.deleted === true }
   })
   const scenes = list(o.scenes, 10000, v => { const s = object(v); return { ...span(s, duration), id: reviewText(s.id, 120), title: reviewText(s.title, 300) } })
   unique(assets); unique(words); unique(scenes)
   return { projectId: reviewText(o.projectId, 120), name: reviewText(o.name, 300), sourceDuration: duration, assets, words, scenes,
     cuts: list(o.cuts, 20000, v => span(v, duration)), protected: list(o.protected, 10000, v => span(v, duration)) }
 }
-export function parseReviewEdit(raw: unknown, snapshot: ReviewSnapshot): ReviewEdit {
+export function parseReviewEdit(raw: unknown, snapshot: ReviewSnapshot, recordings?: Record<string, Asset>): ReviewEdit {
   const o = object(raw)
+  if (o.kind === 'replaceAudio') {
+    const range = span(o, snapshot.sourceDuration), asset = recordings?.[o.assetId]
+    if (!asset?.isRecording || asset.kind !== 'audio' || Math.abs(asset.duration - (range.end - range.start)) > 0.02) throw new Error('Upload a recording that fits this passage before suggesting it.')
+    if (snapshot.cuts.some(c => intersects(c, range))) throw new Error('Choose a passage without shared cuts to suggest a recording.')
+    return { kind: 'replaceAudio', ...range, assetId: asset.id }
+  }
+  if (o.kind === 'correctWord') {
+    const word = snapshot.words.find(w => w.id === o.wordId)
+    if (!word) throw new Error('Choose a word from the shared transcript.')
+    const text = reviewText(o.text, 1000)
+    if (text === word.text) throw new Error('Change the word before proposing a correction.')
+    return { kind: 'correctWord', wordId: word.id, text }
+  }
   if (o.kind === 'cut') {
     const range = span(o, snapshot.sourceDuration)
     if (range.end - range.start < 0.03) throw new Error('Choose at least 0.03 seconds to cut.')
@@ -106,12 +127,13 @@ export function parseReviewEdit(raw: unknown, snapshot: ReviewSnapshot): ReviewE
   }
   throw new Error('Unsupported review edit.')
 }
-export function parseReviewSubmission(raw: unknown, snapshot: ReviewSnapshot) {
+export function parseReviewSubmission(raw: unknown, snapshot: ReviewSnapshot, recordings?: Record<string, Asset>) {
   const o = object(raw)
-  const edit = o.edit == null ? undefined : parseReviewEdit(o.edit, snapshot)
+  const edit = o.edit == null ? undefined : parseReviewEdit(o.edit, snapshot, recordings)
   const range = edit?.kind === 'renameChapter' ? snapshot.scenes.find(scene => scene.id === edit.sceneId)!
-    : edit?.kind === 'cut' ? edit : span(o, snapshot.sourceDuration)
-  return { author: reviewText(o.author, 80), text: reviewText(o.text), start: range.start, end: range.end, ...(edit ? { edit } : {}) }
+    : edit?.kind === 'correctWord' ? snapshot.words.find(word => word.id === edit.wordId)!
+    : edit?.kind === 'cut' || edit?.kind === 'replaceAudio' ? edit : span(o, snapshot.sourceDuration)
+  return { author: reviewText(o.author, 80), text: edit && (o.text == null || typeof o.text === 'string' && !o.text.trim()) ? editLabel(edit) : reviewText(o.text), start: range.start, end: range.end, ...(edit ? { edit } : {}) }
 }
 export function intersects(a: ReviewSpan, b: ReviewSpan): boolean { return a.start < b.end && b.start < a.end }
 /** Compare only the affected source passage, allowing independent edits to merge. */
@@ -121,9 +143,13 @@ export function reviewConflict(base: ReviewSnapshot, current: ReviewSnapshot, ed
     const before = base.scenes.find(s => s.id === edit.sceneId), after = current.scenes.find(s => s.id === edit.sceneId)
     return JSON.stringify(before) === JSON.stringify(after) ? null : 'This chapter changed after sharing.'
   }
+  if (edit.kind === 'correctWord') {
+    const before = base.words.find(w => w.id === edit.wordId), after = current.words.find(w => w.id === edit.wordId)
+    return before && after && JSON.stringify(before) === JSON.stringify(after) ? null : 'This word changed after sharing. Review the correction against your current transcript.'
+  }
   const affected = (s: ReviewSnapshot) => ({ words: s.words.filter(w => intersects(w, edit)), cuts: s.cuts.filter(c => intersects(c, edit)), protected: s.protected.filter(p => intersects(p, edit)) })
   return JSON.stringify(affected(base)) === JSON.stringify(affected(current)) ? null : 'This passage changed after sharing. Review it manually or create a fresh link.'
 }
 export function editLabel(edit?: ReviewEdit): string {
-  return !edit ? 'Comment' : edit.kind === 'cut' ? `Proposed cut · ${(edit.end - edit.start).toFixed(1)}s` : `Rename chapter to “${edit.title}”`
+  return !edit ? 'Comment' : edit.kind === 'cut' ? `Proposed cut · ${(edit.end - edit.start).toFixed(1)}s` : edit.kind === 'replaceAudio' ? `Replace voice · ${(edit.end - edit.start).toFixed(2)}s` : edit.kind === 'correctWord' ? `Correct word to “${edit.text}”` : `Rename chapter to “${edit.title}”`
 }

@@ -21,6 +21,6 @@ export async function writeSharedState(key: string, value: unknown): Promise<voi
 export function mountSharedProject(project: Project, roomId: string, originals?: Project): Project {
   return { ...project, assets: Object.fromEntries(Object.entries(project.assets).map(([id, asset]) => {
     const original = originals?.assets[id]
-    return [id, original ? { ...asset, displayRotation: original.displayRotation, codec: original.codec, vfr: original.vfr, path: original.path, browserMediaKey: original.browserMediaKey, proxyPath: original.proxyPath, thumbnails: original.thumbnails, proxyOnly: original.proxyOnly } : { ...asset, path: `${location.origin}/api/reviews/${roomId}/media/${id}`, proxyOnly: true }]
+    return [id, original ? { ...asset, displayRotation: original.displayRotation, codec: original.codec, vfr: original.vfr, path: original.path, browserMediaKey: original.browserMediaKey, proxyPath: original.proxyPath, thumbnails: original.thumbnails, proxyOnly: original.proxyOnly } : { ...asset, path: `${location.origin}/api/reviews/${roomId}/media/${id}`, proxyOnly: !asset.isRecording }]
   })) }
 }

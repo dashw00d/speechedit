@@ -58,6 +58,7 @@ export interface GraphLayer {
 }
 
 export interface GraphBed {
+  replaceVoice?: boolean
   path: string
   start: number
   duration: number
@@ -322,6 +323,11 @@ export function voiceAudioFilters(job: GraphJob): string[] {
   if (job.fadeIn > 0.02) af.push(`afade=t=in:st=0:d=${job.fadeIn.toFixed(2)}`)
   if (job.fadeOut > 0.02) {
     af.push(`afade=t=out:st=${Math.max(0, duration - job.fadeOut).toFixed(2)}:d=${job.fadeOut.toFixed(2)}`)
+  }
+  const replacements = activeBeds(job).filter(b => b.replaceVoice)
+  if (replacements.length) {
+    const windows = replacements.map(b => `gte(t,${b.start.toFixed(6)})*lt(t,${(b.start + b.duration).toFixed(6)})`).join('+')
+    af.push(`aeval='if(${windows},0,val(ch))':c=same`)
   }
   return af
 }

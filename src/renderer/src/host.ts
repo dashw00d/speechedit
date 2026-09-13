@@ -10,6 +10,7 @@ import {
 } from './lib/browserMediaStore'
 
 export interface SpeechHost {
+  storeRecording?: (bytes: ArrayBuffer) => Promise<string>
   openMedia: () => Promise<string | null>
   openBroll: () => Promise<string | null>
   chooseTextExport: (suggested: string) => Promise<string | null>

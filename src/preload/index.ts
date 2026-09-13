@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { ModelQueueStatus } from '../shared/modelQueue'
 
 const api = {
+  storeRecording: (bytes: ArrayBuffer) => ipcRenderer.invoke('media:storeRecording', bytes) as Promise<string>,
   openMedia: () => ipcRenderer.invoke('dialog:openMedia') as Promise<string | null>,
   openBroll: () => ipcRenderer.invoke('dialog:openBroll') as Promise<string | null>,
   chooseTextExport: (suggested: string) =>

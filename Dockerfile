@@ -19,6 +19,7 @@ ENV NODE_ENV=production \
 COPY --chown=bun:bun --from=build /app/package.json ./package.json
 COPY --chown=bun:bun --from=build /app/scripts/web-server.ts ./scripts/web-server.ts
 COPY --chown=bun:bun --from=build /app/scripts/review-server.ts ./scripts/review-server.ts
+COPY --chown=bun:bun --from=build /app/scripts/recording-server.ts ./scripts/recording-server.ts
 COPY --chown=bun:bun --from=build /app/src/shared ./src/shared
 COPY --chown=bun:bun --from=build /app/node_modules/zod ./node_modules/zod
 COPY --chown=bun:bun --from=build /app/src/renderer/dist ./src/renderer/dist

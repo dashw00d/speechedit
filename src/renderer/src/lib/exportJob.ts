@@ -58,6 +58,7 @@ export function audioBeds(project: Project) {
       duration: c.duration,
       inPoint: c.inPoint,
       volume: c.volume,
+      ...(c.replaceVoice ? { replaceVoice: true } : {}),
       fadeIn: c.fadeIn,
       fadeOut: c.fadeOut
     }))

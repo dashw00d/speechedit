@@ -4,6 +4,8 @@ const { join } = require('node:path')
 const { tmpdir } = require('node:os')
 const { spawnSync } = require('node:child_process')
 
+const recordingMode = process.env.SPEECHEDIT_RECORDING === '1'
+if (recordingMode) { app.commandLine.appendSwitch('use-fake-ui-for-media-stream'); app.commandLine.appendSwitch('use-fake-device-for-media-stream') }
 const profile = mkdtempSync(join(tmpdir(), 'speechedit-review-ui-'))
 let videoFixture = ''
 if (process.env.SPEECHEDIT_REVIEW_VIDEO === '1') {
@@ -87,9 +89,16 @@ app.whenReady().then(async () => {
     })()`)
 
   await waitFor(win, `document.querySelector('.transcript-heading small')?.textContent.includes('2 chapters')`)
+  if (recordingMode) {
+    await win.webContents.executeJavaScript(`document.querySelector('.word').click()`)
+    await click(win, 'Re-record audio'); await click(win, 'Start recording')
+    await waitFor(win, `document.querySelector('.record-sheet audio')`)
+    await click(win, 'Use recording')
+    await waitFor(win, `!document.querySelector('.record-sheet')`)
+  }
   const original = await win.webContents.executeJavaScript(`JSON.parse(localStorage.getItem('speechedit:project'))`)
 
-  await click(win, 'Share'); await click(win, 'Create editing link')
+  await click(win, 'Share'); await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('[aria-label="Share access"]'); s.value = 'edit'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`); await click(win, 'Create editing link')
   const shareStarted = Date.now()
   await waitFor(win, `!!document.querySelector('.review-link-box input')`)
   console.log('Share creation wait', { seconds: Number(((Date.now() - shareStarted) / 1000).toFixed(2)), video: Boolean(videoFixture) })
@@ -115,9 +124,21 @@ app.whenReady().then(async () => {
   await correctWord(reviewer, 0, 'RemoteWelcome')
   await click(reviewer, 'Save now')
   await waitFor(reviewer, `document.querySelector('.shared-edit-bar [role="status"]')?.textContent.includes('All changes saved')`)
+  if (recordingMode) {
+    await reviewer.webContents.executeJavaScript(`document.querySelector('.word').click()`)
+    await click(reviewer, 'Re-record audio')
+    await click(reviewer, 'Start recording')
+    await waitFor(reviewer, `document.querySelector('.record-sheet audio')`)
+    await click(reviewer, 'Use recording')
+    await waitFor(reviewer, `!document.querySelector('.record-sheet')`)
+    await click(reviewer, 'Save now')
+    await waitFor(reviewer, `document.querySelector('.shared-edit-bar [role="status"]')?.textContent.includes('All changes saved')`)
+  }
   const id = new URL(link).pathname.split('/')[2], key = new URL(link).hash.slice(1)
   const remote = await reviewer.webContents.executeJavaScript(`fetch('/api/reviews/${id}', { headers: { Authorization: 'Bearer ${key}' } }).then(r => r.json())`)
   if (remote.project.transcript.words[0].text !== 'RemoteWelcome') throw Error('Remote word was not saved')
+  if (recordingMode && Object.values(remote.project.assets).filter(a => a.isRecording).some(a => remote.media[a.id]?.mime !== 'audio/mpeg')) throw Error('Recorded originals were re-encoded during sharing')
+  if (recordingMode && !remote.project.tracks.find(t => t.id === 'voice_replacements')?.clips[0]?.replaceVoice) throw Error('Voice replacement did not survive the shared save')
   if (remote.projectRevision < 2) throw Error('No shared revision')
   const assetId = Object.keys(remote.project.assets)[0]
   const proxyBytes = await reviewer.webContents.executeJavaScript(`fetch('/api/reviews/${id}/media/${assetId}').then(r => r.arrayBuffer()).then(b => Array.from(new Uint8Array(b)))`)
@@ -175,6 +196,7 @@ app.whenReady().then(async () => {
   await click(win, 'Bring shared edits into this project')
   await waitFor(win, `JSON.parse(localStorage.getItem('speechedit:project')).transcript.words[0].text === 'MyConflict'`)
   const pulled = await win.webContents.executeJavaScript(`JSON.parse(localStorage.getItem('speechedit:project'))`)
+  if (recordingMode && Object.values(pulled.assets).some(a => a.isRecording && !a.browserMediaKey)) throw Error('Shared recording originals were not retained locally')
   if (!pulled.assets[addedImage.id]?.proxyOnly) throw Error('Remote addition lost original-quality render guard')
   if (pulled.assets[Object.keys(original.assets)[0]].path !== original.assets[Object.keys(original.assets)[0]].path) throw Error('Original media changed')
   await click(win, 'Close'); await click(win, 'Undo')
@@ -184,6 +206,6 @@ app.whenReady().then(async () => {
   await click(win, 'Revoke link…'); await click(win, 'Revoke and delete previews')
   await click(reviewer, 'Save now')
   await waitFor(reviewer, `document.querySelector('[role="alert"]')?.textContent.includes('revoked')`)
-  console.log(JSON.stringify({ fullEditor: true, compression: true, remoteSave: true, reload: true, secondEditorSync: true, conflictRecovery: true, newImageUpload: true, isolated: true, originalPreserved: true, ownerPullUndo: true, revoked: true }))
+  console.log(JSON.stringify({ collaboratorRecording: recordingMode, fullEditor: true, compression: true, remoteSave: true, reload: true, secondEditorSync: true, conflictRecovery: true, newImageUpload: true, isolated: true, originalPreserved: true, ownerPullUndo: true, revoked: true }))
   win.destroy(); reviewer.destroy(); second.destroy(); clearTimeout(timer); app.quit()
 }).catch(error => { console.error(error); app.exit(1) })

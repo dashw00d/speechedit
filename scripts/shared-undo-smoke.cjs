@@ -74,7 +74,7 @@ app.whenReady().then(async () => {
   })()`)
   await waitFor(owner, 'owner words', `document.querySelectorAll('.word').length >= 4`, 60000)
   await click(owner, 'Share')
-  await click(owner, 'Create editing link')
+  await owner.webContents.executeJavaScript(`(() => { const s = document.querySelector('[aria-label="Share access"]'); s.value = 'edit'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`); await click(owner, 'Create editing link')
   await waitFor(owner, 'share link', `!!document.querySelector('.review-link-box input')`, 60000)
   const link = await js(owner, `document.querySelector('.review-link-box input').value`)
   if (!link.includes('/edit/')) throw new Error('Not a full editing link')

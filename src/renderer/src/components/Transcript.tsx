@@ -68,7 +68,7 @@ function rectsOverlap(a: Marquee, b: DOMRect): boolean {
   return left < b.right && right > b.left && top < b.bottom && bottom > b.top
 }
 
-export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
+export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: (msg: string) => void; onSharePassage?: () => void; onReRecord?: () => void }) {
   const project = useEditor((s) => s.project)
   const selected = useEditor((s) => s.selectedWordIds)
   const selectedSceneId = useEditor((s) => s.selectedSceneId)
@@ -855,6 +855,8 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
               </button>
             ))}
             {selected.length === 1 && !islands && <button type="button" className="chip" title="Correct the transcript text without changing the recording" onClick={() => setEditing(selected[0])}>Correct word</button>}
+            {onReRecord && <button type="button" className="chip" onClick={onReRecord}>Re-record audio</button>}
+            {onSharePassage && <button type="button" className="chip" onClick={onSharePassage}>Share this passage</button>}
             <OverflowMenu tone="chip" place="below" label="More" title="More actions for these words">
               <button className="overflow-item" onClick={() => bladeAtWord()}>Split clip at selected word</button>
               <button type="button" className="overflow-item" onClick={() => applySelection(sentenceIds(words, words.findIndex((word) => word.id === selected[0])))}>Select sentence</button>

@@ -14,6 +14,8 @@
     "smoke:highlight": "env -u ELECTRON_RUN_AS_NODE electron scripts/highlight-ui-smoke.cjs",
     "smoke:proxy": "env -u ELECTRON_RUN_AS_NODE electron scripts/proxy-ui-smoke.cjs",
     "smoke:edit": "env -u ELECTRON_RUN_AS_NODE electron scripts/edit-ui-smoke.cjs",
+    "smoke:recording": "SPEECHEDIT_RECORDING=1 SPEECHEDIT_PASSAGE=1 env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
+    "smoke:passage": "SPEECHEDIT_PASSAGE=1 env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
     "smoke:review": "env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
     "smoke:first-undo": "env -u ELECTRON_RUN_AS_NODE electron scripts/first-session-undo-smoke.cjs",
     "smoke:shared-undo": "env -u ELECTRON_RUN_AS_NODE electron scripts/shared-undo-smoke.cjs",

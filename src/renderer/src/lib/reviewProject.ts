@@ -14,8 +14,14 @@ export function snapshotForReview(project: Project): ReviewSnapshot {
     protected: project.tags.filter(tag => tag.kind === 'keep').map(({ start, end }) => ({ start, end }))
   })
 }
-export function commandForReview(edit: ReviewEdit): Command {
+export function commandForReview(edit: ReviewEdit, assets?: Project['assets']): Command {
+  if (edit.kind === 'replaceAudio') {
+    const asset = assets?.[edit.assetId]
+    if (!asset) throw new Error('This replacement recording is unavailable.')
+    return { type: 'replaceRangeAudio', start: edit.start, end: edit.end, asset }
+  }
   return edit.kind === 'cut' ? { type: 'deleteRange', start: edit.start, end: edit.end, source: 'manual' }
+    : edit.kind === 'correctWord' ? { type: 'setWordText', wordId: edit.wordId, text: edit.text }
     : { type: 'renameScene', sceneId: edit.sceneId, title: edit.title }
 }
 
@@ -30,7 +36,7 @@ export function applyReviewDecision(project: Project, room: import('../../../sha
   if (decision === 'accepted' && proposal.edit) {
     const conflict = reviewConflict(room.snapshot, snapshotForReview(project), proposal.edit)
     if (conflict) throw new Error(conflict)
-    next = applyCommand(project, commandForReview(proposal.edit))
+    next = applyCommand(project, commandForReview(proposal.edit, room.mediaAssets))
     if (next === project) throw new Error('This edit could not be applied. It may already be cut or protected.')
   }
   return { ...next, reviewDecisions: { ...next.reviewDecisions, [receipt]: decision } }

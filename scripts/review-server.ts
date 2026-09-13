@@ -1,4 +1,5 @@
 import { sharedProject, sharedAssetSchema } from '../src/shared/collaboration'
+import { encodeRecording } from './recording-server'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readFile, writeFile, rename, rm, readdir, stat, utimes } from 'node:fs/promises'
@@ -7,7 +8,7 @@ import { resolve } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { spawn } from 'node:child_process'
-import { parseReviewSnapshot, parseReviewSubmission, reviewText, REVIEW_MAX_ASSET_BYTES, REVIEW_MAX_ROOM_BYTES, type ReviewRoom } from '../src/shared/review'
+import { summarizeReview, parseReviewSnapshot, parseReviewSubmission, reviewText, REVIEW_MAX_ASSET_BYTES, REVIEW_MAX_ROOM_BYTES, type ReviewRoom } from '../src/shared/review'
 
 interface StoredRoom extends ReviewRoom { ownerHash: string; reviewerHash: string }
 const hash = (key: string) => createHash('sha256').update(key).digest('hex')
@@ -28,6 +29,13 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
   const dir = resolve(root), maxBytes = options.maxBytes ?? 20 * 1024 ** 3
   const locks = new Map<string, Promise<unknown>>()
   const attempts = new Map<string, { at: number; count: number }>()
+  const recordingAttempts = new Map<string, { at: number; count: number }>()
+  const recordingQuota = (req: IncomingMessage) => {
+    const ip = req.socket.remoteAddress || 'local', now = Date.now(), prior = recordingAttempts.get(ip)
+    const entry = prior && now - prior.at < 3600_000 ? prior : { at: now, count: 0 }
+    if (entry.count >= 100) throw new HttpError(429, 'Recording limit reached. Try again later.')
+    entry.count++; recordingAttempts.set(ip, entry)
+  }
   async function locked<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const previous = locks.get(key) ?? Promise.resolve()
     const next = previous.catch(() => undefined).then(async () => {
@@ -91,10 +99,10 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
     if (value === room.reviewerHash && room.published) return 'reviewer'
     throw new HttpError(403, 'This review link does not grant access.')
   }
-  async function remux(input: string, output: string, duration: number) {
+  async function remux(input: string, output: string, duration: number, mp3 = false) {
     // Produce a seekable WebM with a duration and index; only local WebM input is permitted.
     await new Promise<void>((ok, fail) => {
-      const child = spawn(options.ffmpeg || 'ffmpeg', ['-v', 'error', '-nostdin', '-y', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'matroska,webm', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', '-t', String(duration), output], { stdio: ['ignore', 'ignore', 'pipe'] })
+      const child = spawn(options.ffmpeg || 'ffmpeg', ['-v', 'error', '-nostdin', '-y', '-protocol_whitelist', 'file,pipe', '-format_whitelist', mp3 ? 'mp3' : 'matroska,webm', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', '-t', String(duration), output], { stdio: ['ignore', 'ignore', 'pipe'] })
       let error = ''; const timer = setTimeout(() => { child.kill('SIGKILL'); fail(new Error('Preview preparation timed out.')) }, 90_000)
       child.stderr.on('data', chunk => { error = (error + chunk).slice(-2000) })
       child.once('error', err => { clearTimeout(timer); fail(err) })
@@ -102,11 +110,16 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
     })
   }
   return async (req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> => {
-    if (!pathname.startsWith('/api/reviews')) return false
+    if (!pathname.startsWith('/api/reviews') && pathname !== '/api/recordings') return false
     res.setHeader('Cache-Control', 'no-store')
     try {
       // Same-origin browser mutations; bearer credentials are also usable by explicit API clients.
       if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) throw new HttpError(403, 'Review requests must use this server.')
+      if (pathname === '/api/recordings' && req.method === 'POST') {
+        recordingQuota(req)
+        const recording = await locked('recording-encode', () => encodeRecording(req, options.ffmpeg))
+        res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': recording.bytes.length, 'Cache-Control': 'no-store' }); res.end(recording.bytes); return true
+      }
       if (pathname === '/api/reviews' && req.method === 'POST') {
         const ip = req.socket.remoteAddress || 'local'
         const prior = attempts.get(ip), now = Date.now()
@@ -126,13 +139,30 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
         })
         json(res, 201, created); return true
       }
-      const match = /^\/api\/reviews\/([a-f0-9]{32})(?:\/(media)(?:\/([a-zA-Z0-9_-]{1,120}))?|\/(publish|proposals|project|assets)(?:\/([a-f0-9-]{36})(?:\/(reply|resolve))?)?)?$/.exec(pathname)
+      const match = /^\/api\/reviews\/([a-f0-9]{32})(?:\/(media)(?:\/([a-zA-Z0-9_-]{1,120}))?|\/(publish|proposals|project|assets|summary|recordings)(?:\/([a-f0-9-]{36})(?:\/(reply|resolve))?)?)?$/.exec(pathname)
       if (!match) throw new HttpError(404, 'Review route not found.')
       const [, id, media, assetId, route, proposalId, action] = match
       await locked(id, async () => {
         const room = await read(id, req.method === 'DELETE')
         const role = auth(req, room)
         const owner = () => { if (role !== 'owner') throw new HttpError(403, 'Only the owner can do that.') }
+        if (route === 'recordings' && !proposalId && req.method === 'POST') {
+          if (!room.published) throw new HttpError(409, 'Publish this review before adding recordings.')
+          recordingQuota(req)
+          if (Object.keys(room.mediaAssets || {}).length >= 256) throw new HttpError(413, 'This review has reached its recording limit.')
+          const recording = await locked('recording-encode', () => encodeRecording(req, options.ffmpeg))
+          const asset = { id: `rec_${randomUUID()}`, name: 'Re-recorded voice.mp3', kind: 'audio' as const, duration: recording.duration, sampleRate: 48000, waveform: [], path: '', isRecording: true }
+          asset.path = `shared-media:${asset.id}`
+          await locked('capacity', async () => {
+            const roomSize = Object.values(room.media).reduce((n, m) => n + m.bytes, 0)
+            if (roomSize + recording.bytes.length > REVIEW_MAX_ROOM_BYTES || await usage() + recording.bytes.length > maxBytes) throw new HttpError(507, 'Recording storage is full.')
+            await writeFile(resolve(folder(id), `${asset.id}.mp3`), recording.bytes, { mode: 0o600 })
+            room.mediaAssets = { ...room.mediaAssets, [asset.id]: asset }; room.media[asset.id] = { bytes: recording.bytes.length, mime: 'audio/mpeg' }
+            await save(room)
+          })
+          json(res, 201, { asset }); return
+        }
+        if (route === 'summary' && !proposalId && req.method === 'GET') { owner(); json(res, 200, summarizeReview(room)); return }
         if (!media && !route && req.method === 'GET') {
           const key = req.headers.authorization?.replace(/^Bearer /, '')
           if (key) res.setHeader('Set-Cookie', `se-review-${id}=${key}; HttpOnly; SameSite=Strict; Path=/api/reviews/${id}; Max-Age=2592000${req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''}`)
@@ -176,11 +206,12 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
         if (media && assetId) {
           const asset = room.mediaAssets?.[assetId] || room.snapshot.assets.find(a => a.id === assetId)
           if (!asset) throw new HttpError(404, 'Unknown preview.')
-          const target = resolve(folder(id), `${assetId}.webm`)
+          const isMp3 = room.media[assetId]?.mime === 'audio/mpeg' || req.method === 'PUT' && 'isRecording' in asset && asset.isRecording && asset.kind === 'audio' && req.headers['content-type'] === 'audio/mpeg'
+          const target = resolve(folder(id), `${assetId}.${isMp3 ? 'mp3' : 'webm'}`)
           if (req.method === 'PUT') {
             if (room.mode !== 'edit') owner()
             if (room.media[assetId] || (room.published && room.mode !== 'edit')) throw new HttpError(409, 'Published previews are immutable. Create a new review link.')
-            if (!(asset.kind === 'image' ? /^image\/webp$/ : /^(audio|video)\/webm(?:;|$)/).test(req.headers['content-type'] || '')) throw new HttpError(415, 'Upload a compressed WebM preview.')
+            if (!isMp3 && !(asset.kind === 'image' ? /^image\/webp$/ : /^(audio|video)\/webm(?:;|$)/).test(req.headers['content-type'] || '')) throw new HttpError(415, 'Upload a compressed WebM preview.')
             const length = Number(req.headers['content-length'])
             const contentRange = req.headers['content-range']
             const range = contentRange ? /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange) : null
@@ -188,7 +219,7 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
             const offset = range ? Number(range[1]) : 0, total = range ? Number(range[3]) : length
             if (!Number.isSafeInteger(length) || length <= 0 || !Number.isSafeInteger(total) || total > REVIEW_MAX_ASSET_BYTES || total <= 0 || offset + length > total || (range && Number(range[2]) !== offset + length - 1)) throw new HttpError(413, 'Preview must be smaller than 250 MiB and have a valid upload range.')
             await locked('capacity', async () => {
-              const temp = `${target}.upload`, prepared = `${target}.prepared.webm`
+              const temp = `${target}.upload`, prepared = `${target}.prepared.${isMp3 ? 'mp3' : 'webm'}`
               const existing = await stat(temp).then(s => s.size).catch(() => 0)
               if (offset && offset !== existing) throw new HttpError(409, 'Upload offset changed. Start the share again.')
               let roomSize = 0
@@ -200,12 +231,12 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
                   bytes += chunk.length; if (magic.length < 12) magic = Buffer.concat([magic, chunk]).subarray(0, 12)
                   callback(bytes > length ? new Error('Preview exceeds its declared size.') : null, chunk)
                 } }), createWriteStream(temp, { mode: 0o600, flags: offset ? 'a' : 'w' }), { signal: AbortSignal.timeout(120000) })
-                if (bytes !== length || (!offset && (asset.kind === 'image' ? magic.subarray(0, 4).toString() !== 'RIFF' || magic.subarray(8, 12).toString() !== 'WEBP' : magic.subarray(0, 4).toString('hex') !== '1a45dfa3'))) throw new HttpError(400, 'Invalid compressed preview.')
+                if (bytes !== length || (!offset && !isMp3 && (asset.kind === 'image' ? magic.subarray(0, 4).toString() !== 'RIFF' || magic.subarray(8, 12).toString() !== 'WEBP' : magic.subarray(0, 4).toString('hex') !== '1a45dfa3'))) throw new HttpError(400, 'Invalid compressed preview.')
                 if (offset + length === total) {
                   if (asset.kind === 'image') await writeFile(prepared, await readFile(temp))
-                  else await remux(temp, prepared, asset.duration)
+                  else await remux(temp, prepared, asset.duration, !!isMp3)
                   await rename(prepared, target)
-                  room.media[assetId] = { bytes: (await stat(target)).size, mime: asset.kind === 'image' ? 'image/webp' : `${asset.kind}/webm` }; await save(room)
+                  room.media[assetId] = { bytes: (await stat(target)).size, mime: isMp3 ? 'audio/mpeg' : asset.kind === 'image' ? 'image/webp' : `${asset.kind}/webm` }; await save(room)
                   await rm(temp, { force: true })
                 }
               } catch (error) { await rm(temp, { force: true }); throw error }
@@ -254,7 +285,7 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
             proposal.replies.push({ id: randomUUID(), author: reviewText(input.author, 80), text: reviewText(input.text), createdAt: Date.now() })
           } else if (!proposalId) {
             if (room.proposals.length >= 1000) throw new HttpError(413, 'This review is full.')
-            room.proposals.push({ id: randomUUID(), ...parseReviewSubmission(input, room.snapshot), status: 'pending', replies: [], createdAt: Date.now() })
+            room.proposals.push({ id: randomUUID(), ...parseReviewSubmission(input, room.snapshot, room.mediaAssets), status: 'pending', replies: [], createdAt: Date.now() })
           } else throw new HttpError(404, 'Review action not found.')
           room.revision++
           await locked('capacity', async () => {

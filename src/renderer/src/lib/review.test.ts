@@ -5,12 +5,13 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { spawnSync } from 'node:child_process'
 import { createReviewHandler } from '../../../../scripts/review-server'
-import { parseReviewSnapshot, parseReviewEdit, reviewConflict, type ReviewRoom, type ReviewProposal } from '../../../shared/review'
+import { parseReviewSnapshot, parseReviewEdit, parseReviewSubmission, reviewConflict, type ReviewRoom, type ReviewProposal } from '../../../shared/review'
 import { applyReviewDecision, snapshotForReview } from './reviewProject'
 import { projectFromTake } from './importMedia'
 import { wordsFromAsr } from './asr'
 import { applyCommand } from './commands'
 import { useEditor } from '../store'
+import { pcmWave } from './recording'
 
 const fixture = () => projectFromTake({
   asset: { id: 'source', name: 'Source.wav', path: '/private/original.wav', kind: 'audio', duration: 3, waveform: [], sourceOffset: 0 },
@@ -21,6 +22,48 @@ const proposal = (): ReviewProposal => ({ id: 'proposal', author: 'Reviewer', te
 function room(): ReviewRoom { return { id: 'room', revision: 1, snapshot: snapshotForReview(fixture()), proposals: [], media: {}, published: true, createdAt: 1, expiresAt: Date.now() + 1000 } }
 
 describe('review decisions', () => {
+  test('sharing preserves transcript-only tokens without widening their cut ranges', () => {
+    const p = fixture()
+    p.transcript.words.unshift({ ...p.transcript.words[0], id: 'zero', start: 0, end: 0 })
+    const snapshot = snapshotForReview(p)
+    expect(snapshot.words[0]).toMatchObject({ id: 'zero', start: 0, end: 0 })
+    expect(() => parseReviewSnapshot({ ...snapshot, words: [{ ...snapshot.words[0], start: 0.1, end: 0 }] })).toThrow('word range')
+    expect(() => parseReviewEdit({ kind: 'cut', start: 0, end: 0 }, snapshot)).toThrow('nonempty')
+    const submitted = parseReviewSubmission({ author: 'Friend', edit: { kind: 'correctWord', wordId: 'zero', text: 'Corrected' } }, snapshot)
+    expect(submitted).toMatchObject({ start: 0, end: 0, text: 'Correct word to “Corrected”' })
+    const next = applyReviewDecision(p, { ...room(), snapshot }, { ...proposal(), ...submitted }, 'accepted')
+    expect(next.transcript.words[0]).toMatchObject({ text: 'Corrected', start: 0, end: 0 })
+    expect(next.cuts).toEqual(p.cuts)
+  })
+  test('word corrections require a real change and accept through normal editing with one-step undo', () => {
+    const p = fixture(), snapshot = snapshotForReview(p), word = snapshot.words[0]
+    expect(() => parseReviewEdit({ kind: 'correctWord', wordId: 'missing', text: 'Hi' }, snapshot)).toThrow('Choose a word')
+    expect(() => parseReviewEdit({ kind: 'correctWord', wordId: word.id, text: word.text }, snapshot)).toThrow('Change the word')
+    expect(() => parseReviewEdit({ kind: 'correctWord', wordId: word.id, text: ' ' }, snapshot)).toThrow('Text must')
+    const submitted = parseReviewSubmission({ author: 'Friend', text: '', start: 100, end: 200, edit: { kind: 'correctWord', wordId: word.id, text: 'Hi' } }, snapshot)
+    expect(submitted.start).toBe(word.start); expect(submitted.end).toBe(word.end)
+    const request = { ...proposal(), ...submitted }, r = { ...room(), snapshot }
+    useEditor.getState().loadProject(p, { persist: false })
+    const next = applyReviewDecision(p, r, request, 'accepted')
+    useEditor.getState().dispatch({ type: 'replaceProject', project: next })
+    expect(next.transcript.words[0].text).toBe('Hi')
+    expect(next.cuts).toEqual(p.cuts); expect(next.assets).toEqual(p.assets)
+    expect(applyReviewDecision(next, r, request, 'accepted')).toBe(next)
+    useEditor.getState().undo()
+    expect(useEditor.getState().project.transcript).toEqual(p.transcript)
+    expect(useEditor.getState().project.reviewDecisions).toBeUndefined()
+    useEditor.getState().redo(); expect(useEditor.getState().project.transcript.words[0].text).toBe('Hi')
+  })
+  test('corrections conflict on changed or missing words and allow unrelated corrections', () => {
+    const p = fixture(), snapshot = snapshotForReview(p), word = snapshot.words[0]
+    const edit = parseReviewEdit({ kind: 'correctWord', wordId: word.id, text: 'Hi' }, snapshot)
+    const changed = applyCommand(p, { type: 'setWordText', wordId: word.id, text: 'Hey' })
+    expect(reviewConflict(snapshot, snapshotForReview(changed), edit)).toContain('word changed')
+    expect(reviewConflict(snapshot, { ...snapshot, words: snapshot.words.slice(1) }, edit)).toContain('word changed')
+    const unrelated = applyCommand(p, { type: 'setWordText', wordId: snapshot.words[1].id, text: 'friend' })
+    expect(reviewConflict(snapshot, snapshotForReview(unrelated), edit)).toBeNull()
+    expect(() => applyReviewDecision(changed, { ...room(), snapshot }, { ...proposal(), edit }, 'accepted')).toThrow('word changed')
+  })
   test('snapshot removes originals, browser keys, thumbnails and private metadata', () => {
     const p = fixture(); p.assets.source.browserMediaKey = 'private-key'; p.assets.source.proxyPath = '/secret/proxy.mp4'
     const raw = JSON.stringify(snapshotForReview(p))
@@ -100,12 +143,44 @@ test('review API enforces capabilities, immutable media, optimistic revisions, r
     const results = await Promise.all([request(`/${id}/proposals`, reviewerKey, 'POST', submission), request(`/${id}/proposals`, reviewerKey, 'POST', submission)])
     expect(results.map(r => r.status).sort()).toEqual([200, 409])
     const current = await (await request(`/${id}`, ownerKey)).json() as ReviewRoom
+    expect((await request(`/${id}/summary`, reviewerKey)).status).toBe(403)
+    const summary = await (await request(`/${id}/summary`, ownerKey)).json() as any
+    expect(summary.pending).toBe(1); expect(summary.total).toBe(1)
+    expect(summary.snapshot).toBeUndefined(); expect(summary.proposals).toBeUndefined(); expect(summary.ownerHash).toBeUndefined()
     expect(current.snapshot.cuts).toEqual(data.snapshot.cuts)
     const pid = current.proposals[0].id
     expect((await request(`/${id}/proposals/${pid}/resolve`, reviewerKey, 'POST', { revision: current.revision, status: 'accepted' })).status).toBe(403)
     const replied = await request(`/${id}/proposals/${pid}/reply`, reviewerKey, 'POST', { revision: current.revision, author: 'Another editor', text: 'Agreed' })
     const replyRoom = await replied.json() as ReviewRoom; expect(replyRoom.proposals[0].replies).toHaveLength(1)
-    expect((await request(`/${id}/proposals/${pid}/resolve`, ownerKey, 'POST', { revision: replyRoom.revision, status: 'accepted' })).status).toBe(200)
+    const resolved = await (await request(`/${id}/proposals/${pid}/resolve`, ownerKey, 'POST', { revision: replyRoom.revision, status: 'accepted' })).json() as ReviewRoom
+    const correction = await request(`/${id}/proposals`, reviewerKey, 'POST', { revision: resolved.revision, author: 'Friend', edit: { kind: 'correctWord', wordId: data.snapshot.words[0].id, text: 'Hi' } })
+    expect(correction.status).toBe(200)
+    const correctedRoom = await correction.json() as ReviewRoom
+    expect(correctedRoom.snapshot.words).toEqual(data.snapshot.words)
+    expect(correctedRoom.proposals.at(-1)?.edit).toMatchObject({ kind: 'correctWord', text: 'Hi' })
+    const wav = pcmWave(new Float32Array(38400).map((_, i) => Math.sin(i * 0.1) * 0.1), 48000)
+    const uploadRecording = (key: string, path = `/api/reviews/${id}/recordings`, duration = '0.8') => fetch(`${origin}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'audio/wav', 'X-Recording-Duration': duration }, body: wav })
+    expect((await uploadRecording('invalid')).status).toBe(403)
+    expect((await uploadRecording(reviewerKey, `/api/reviews/${id}/recordings`, '1200')).status).toBe(400)
+    const recorded = await uploadRecording(reviewerKey)
+    expect(recorded.status).toBe(201)
+    const recording = (await recorded.json() as any).asset
+    expect(recording).toMatchObject({ kind: 'audio', duration: 0.8, isRecording: true })
+    const mp3 = await request(`/${id}/media/${recording.id}`, reviewerKey)
+    expect(mp3.headers.get('content-type')).toBe('audio/mpeg')
+    const decoded = spawnSync('ffmpeg', ['-v', 'error', '-i', 'pipe:0', '-f', 's16le', '-ar', '48000', '-ac', '1', 'pipe:1'], { input: Buffer.from(await mp3.arrayBuffer()) })
+    expect(decoded.status).toBe(0)
+    // Stream decoding may retain one MP3 padding frame; the clip is bounded by the slot.
+    expect(Math.abs(decoded.stdout.length / 2 / 48000 - 0.8)).toBeLessThan(0.03)
+    const replacement = await request(`/${id}/proposals`, reviewerKey, 'POST', { revision: correctedRoom.revision, author: 'Friend', edit: { kind: 'replaceAudio', start: 0.2, end: 1, assetId: recording.id } })
+    expect(replacement.status).toBe(200)
+    const replacedRoom = await replacement.json() as ReviewRoom
+    expect(replacedRoom.snapshot).toEqual(correctedRoom.snapshot)
+    const recordingProject = fixture()
+    const acceptedRecording = applyReviewDecision(recordingProject, { ...replacedRoom, snapshot: snapshotForReview(recordingProject) }, replacedRoom.proposals.at(-1)!, 'accepted')
+    expect(acceptedRecording.tracks.find(t => t.id === 'voice_replacements')?.clips[0].duration).toBe(0.8)
+    const localRecording = await uploadRecording('', '/api/recordings')
+    expect(localRecording.status).toBe(200); expect(localRecording.headers.get('content-type')).toBe('audio/mpeg')
     expect((await request(`/${id}`, reviewerKey, 'DELETE')).status).toBe(403)
     expect((await request(`/${id}`, ownerKey, 'DELETE')).status).toBe(200)
     expect((await request(`/${id}`, reviewerKey)).status).toBe(404)

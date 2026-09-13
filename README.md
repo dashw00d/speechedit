@@ -151,13 +151,28 @@ Captions are on by default; manual caption/title cards are preserved. Optional *
 Recipes compose existing commands on a temporary project and commit once. The result shows duration and changes, with Play, Inspect edits, Export, and **Undo this preset**. Export remains a separate action.
 
 
+
+Select words and choose **Share this passage** to send a review link that opens at those words with an optional question. For an existing review copy, changing the passage or question reuses the uploaded video. Passage details stay in the URL fragment alongside the access key; the rest of the recording remains available.
+
+**Feedback** in the top bar shows pending suggestions across this project's Audit links. Open it for **Needs review**, original → suggested wording, bounded playback, Accept / Reject / Reply, and **Next pending**. Unsent comments, corrections, chapter titles, and replies recover after a page reload on the same device. Feedback refreshes every 15 seconds while the editor is visible and immediately after your own decisions.
+
+### Re-record selected speech
+
+Select words or a sentence and choose **Re-record audio**. The modal shows the script and exact slot length. Press **Start recording**, allow microphone access, and speak after the 3–2–1 countdown. Capture stops automatically at the end of the slot. Listen, retry, or use the take. **Stop early** leaves silence in the remaining slot and explains how much; it never pulls the next sentence earlier.
+
+The replacement occupies an ordinary audio clip with voice-replacement mixing. The original voice is muted only inside that clip; video, captions, background music, and overall timeline length stay intact. Another take in the same slot replaces the prior take rather than layering voices. Undo restores the previous audio.
+
+In an Audit link, **Send recording suggestion** uploads an MP3 replacement for owner approval. The owner can compare original playback and the proposed recording in the feedback card. Full-editing collaborators can record directly into the shared project. Accepting a recording or bringing shared edits back downloads the MP3 into the owner's local media storage. Authored MP3 takes remain MP3 when shared again. Desktop-only recordings are stored locally as WAV; hosted recording endpoints prepare MP3.
+
+Slots support 0.1–120 seconds. Local/full editing uses the selected passage's current playback duration; Audit recordings use the shared source duration and require a passage without shared cuts. If the owner's timing changes, acceptance refuses a mismatched take. Microphone capture requires HTTPS or localhost in a browser. Server recording routes centralize conversion and upload limits; payment plans are not implemented.
+
 ### Share and collaborate
 
 In the hosted web editor, choose **Share → Full editing → Create editing link**. The link opens the same editor: timeline, transcript, chapters, captions, titles, B-roll, effects, keyframes, audio mixing, and normal editing tools. Collaborators can add recordings, music, and images. Changes automatically save to the shared project every few seconds; **Save now** and the normal Save shortcut also sync them. The sharing owner can use this link for their own remote work.
 
-Choose **Audit** instead to collect timestamped comments, replies, proposed cuts, and chapter renames. Audit changes reach the owner's project only through **Accept edit**. Acceptance uses normal editing commands and is undoable. Existing audit links retain their original permissions and immutable source snapshot.
+New links default to **Audit** to collect timestamped comments, replies, transcript corrections, voice replacement recordings, proposed cuts, and chapter renames. Reviewers need no account: they enter a name, select a word, and suggest its correction. Reasons are optional for edits. To select a passage on a phone, tap its first word, choose **Select through another word**, and tap its last word; Shift-click also works on desktop. Feedback refreshes automatically while the owner’s Share dialog is open. Audit changes reach the owner's project only through **Accept edit**. Acceptance uses normal editing commands and is undoable. Existing audit links retain their original permissions and immutable source snapshot.
 
-Both modes upload compressed previews, never original files. Video defaults to a maximum 640×360 at 8 fps, approximately 180 kbit/s VP8 plus continuous 48 kbit/s stereo Opus audio. The fast WebCodecs path samples only the required preview frames, uses low-latency VP8 encoding, and reads local files directly. Completed previews are reused from a bounded 128 MiB local cache when the same recording is shared again. The sharing progress shows the active encoder and estimated time remaining; browsers with unsupported codecs fall back to playback-speed capture and must keep the tab visible. Images use WebP at up to 960 pixels. Interframe video reuses visual information between frames, keeping low-frame-rate playback compact without maintaining a separate image-sequence player. A failed encoder never falls back to uploading originals.
+Both modes upload compressed previews of source recordings. Authored microphone MP3 takes are retained without another encode; original video files stay on the creating device. Video defaults to a maximum 640×360 at 8 fps, approximately 180 kbit/s VP8 plus continuous 48 kbit/s stereo Opus audio. The fast WebCodecs path samples only the required preview frames, uses low-latency VP8 encoding, and reads local files directly. Completed previews are reused from a bounded 128 MiB local cache when the same recording is shared again. The sharing progress shows the active encoder and estimated time remaining; browsers with unsupported codecs fall back to playback-speed capture and must keep the tab visible. Images use WebP at up to 960 pixels. Interframe video reuses visual information between frames, keeping low-frame-rate playback compact without maintaining a separate image-sequence player. A failed encoder never falls back to uploading originals.
 
 Full editing retains the editable project and previews of all its media. Local file paths, browser storage keys, thumbnails, and private local metadata are stripped. The shared editor uses separate draft storage and never hydrates or overwrites the owner's local workspace. Names in the last 100 save entries are self-reported. Link possession grants its stated access; editing links grant immediate changes to the shared project.
 
@@ -169,12 +184,15 @@ Links expire after 30 days. The owner can revoke a link and delete its previews 
 
 Production needs FFmpeg (included in Docker) and persistent `SPEECHEDIT_REVIEW_DIR` storage (default `/data/reviews`). FFmpeg indexes/remuxes already-compressed WebM into seekable previews. Uploads use 512 KiB chunks, with limits of 250 MiB per file, 1 GiB per room, 8 MB metadata, and 20 GiB total storage. Full projects support 256 media assets. Expired rooms are reclaimed during capacity checks. Filesystem leases coordinate overlapping deployments, and atomic replacement protects completed metadata writes; all instances must share the same storage filesystem.
 
-API clients use the ID and fragment key from `/edit/ID#KEY` or `/review/ID#KEY`, with `Authorization: Bearer KEY`:
+API clients use the ID and fragment key (the part before the first `&` for passage links) from `/edit/ID#KEY` or `/review/ID#KEY`, with `Authorization: Bearer KEY`:
 
+- Owner-only `GET /api/reviews/ID/summary`: pending/total feedback counts and review name, without downloading the transcript.
+- `POST /api/reviews/ID/recordings`: microphone WAV body, `Content-Type: audio/wav`, `X-Recording-Duration` in seconds. Returns an immutable authored MP3 asset for either shared editing or a `{ kind: "replaceAudio", start, end, assetId }` proposal.
+- `POST /api/recordings`: prepares a local hosted-editor take as MP3 and returns the audio body; persistence happens in local browser media storage.
 - `GET /api/reviews/ID`: room, sanitized project (editing links), project revision, recent saves, and feedback.
 - `PUT /api/reviews/ID/project`: `{ revision: projectRevision, project, author }`; full-edit links only. Invalid media references and stale revisions are rejected.
 - `POST /api/reviews/ID/assets`: `{ asset }` registers new immutable media for an editing link; upload its compressed preview with `PUT /api/reviews/ID/media/ASSET_ID` before saving the project.
-- `POST /api/reviews/ID/proposals`: `{ revision, author, text, edit: { kind: "cut", start, end } }`, or `{ kind: "renameChapter", sceneId, title }` for `edit`. Omit `edit` and include `start`/`end` for a comment.
+- `POST /api/reviews/ID/proposals`: `{ revision, author, text, edit: { kind: "cut", start, end } }`, or `{ kind: "renameChapter", sceneId, title }` or `{ kind: "correctWord", wordId, text }` for `edit`. Reasons (`text`) are optional for edits. Omit `edit` and include `start`/`end` for a comment.
 - `POST /api/reviews/ID/proposals/PROPOSAL_ID/reply`: `{ revision, author, text }`.
 - Owner-only `POST /api/reviews/ID/proposals/PROPOSAL_ID/resolve`: `{ revision, status: "accepted" | "rejected" }`. Applying audit decisions onto originals happens in the owner's editor.
 

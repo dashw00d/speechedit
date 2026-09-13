@@ -6,6 +6,7 @@ import { reviewRequest, uploadReviewPreview } from './reviewApi'
 import { mountSharedProject, readSharedState, writeSharedState, sharedSession } from './sharedSession'
 import { remountBrowserAssets } from './browserMediaStore'
 import { encodeReviewProxy } from './reviewProxy'
+import { recordingPreview } from './recordingClient'
 
 export interface CollaborationStatus { message: string; error?: string; conflicts?: string[]; revision: number; history: NonNullable<ReviewRoom['history']> }
 interface Draft { base: Project; project: Project; conflicts?: string[] }
@@ -95,7 +96,7 @@ export class CollaborationClient {
       if (room.media[asset.id]) continue
       this.report(`Compressing ${asset.name}…`)
       let encodingMode = 'fast encoder'
-      const blob = await encodeReviewProxy(asset, this.abort.signal, ratio => this.report(`Compressing ${asset.name} · ${Math.round(ratio * 100)}% · ${encodingMode}`), status => { encodingMode = status.mode === 'cached' ? 'saved preview' : status.mode === 'playback' ? 'playback speed' : `${status.mode} encoder`; this.report(`${asset.name} · ${encodingMode}`, status.mode === 'playback' ? status.detail : undefined) })
+      const blob = await recordingPreview(asset, this.abort.signal) || await encodeReviewProxy(asset, this.abort.signal, ratio => this.report(`Compressing ${asset.name} · ${Math.round(ratio * 100)}% · ${encodingMode}`), status => { encodingMode = status.mode === 'cached' ? 'saved preview' : status.mode === 'playback' ? 'playback speed' : `${status.mode} encoder`; this.report(`${asset.name} · ${encodingMode}`, status.mode === 'playback' ? status.detail : undefined) })
       this.report(`Uploading ${asset.name}…`)
       await uploadReviewPreview({ id: this.id, ownerKey: this.key, reviewerKey: this.key, projectId: this.base.id }, asset.id, blob, this.abort.signal)
     }

@@ -107,7 +107,8 @@ export function voiceLook(job: GraphJob, t: number): VoiceLook {
   const incoming = stack[stack.length - 1]
   const outgoing = stack.length > 1 ? stack[0] : undefined
   const duck = duckAt(job, t)
-  const master = masterFadeAt(job, t)
+  const replaced = (job.beds ?? []).some(b => b.replaceVoice && b.volume > 0.001 && t >= b.start && t < b.start + b.duration)
+  const master = replaced ? 0 : masterFadeAt(job, t)
   const inFull = voiceOf(job, incoming?.i, t, duck, master)
   const outFull = outgoing ? voiceOf(job, outgoing.i, t, duck, master) : 0
   const progress = outgoing ? xfadeProgress(job, outgoing.i, t) : 1
@@ -188,7 +189,7 @@ export function sampleProgram(job: GraphJob, t: number): ProgramLook {
       return {
         bed,
         local,
-        active: local >= -0.04 && local < bed.duration,
+        active: local >= (bed.replaceVoice ? 0 : -0.04) && local < bed.duration,
         gain: bedGain(job, bed, t),
         sourceTime: bed.inPoint + Math.max(0, local)
       }

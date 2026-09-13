@@ -9,8 +9,8 @@ const transform = z.object({ x: num, y: num, scale: num, rotation: num, opacity:
 const keys = z.array(z.object({ time, transform: transform.partial(), easing: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']) })).max(10000)
 const style = z.object({ fontSize: num, align: z.enum(['left', 'center', 'right']), fill: text, stroke: text, position: z.enum(['lower', 'center', 'upper']) })
 export const sharedAssetSchema = z.object({ id: mediaId, name: z.string().max(300), kind: z.enum(['video', 'audio', 'image']), duration: time,
-  width: num.optional(), height: num.optional(), fps: num.optional(), sampleRate: num.optional(), waveform: z.array(z.number().min(0).max(1)).max(2000), sourceOffset: time.optional() })
-const clip = z.object({ id, trackId: id, assetId: mediaId.optional(), start: time, duration: time, inPoint: time, outPoint: time, linkedClipId: id.optional(), transform, volume: num, muted: z.boolean(), speed: num, fadeIn: time, fadeOut: time, keyframes: keys, pan: num.optional(), text: text.optional(), style: style.optional(), effect: z.enum(['none', 'blur']).optional(), kind: z.enum(['media', 'slug']).optional(), auto: z.boolean().optional() })
+  width: num.optional(), height: num.optional(), fps: num.optional(), sampleRate: num.optional(), waveform: z.array(z.number().min(0).max(1)).max(2000), sourceOffset: time.optional(), isRecording: z.boolean().optional() })
+const clip = z.object({ id, trackId: id, assetId: mediaId.optional(), start: time, duration: time, inPoint: time, outPoint: time, linkedClipId: id.optional(), transform, volume: num, muted: z.boolean(), speed: num, fadeIn: time, fadeOut: time, keyframes: keys, pan: num.optional(), text: text.optional(), style: style.optional(), effect: z.enum(['none', 'blur']).optional(), kind: z.enum(['media', 'slug']).optional(), auto: z.boolean().optional(), replaceVoice: z.boolean().optional() })
 const rows = <T extends z.ZodType>(schema: T, max = 20000) => z.array(schema).max(max)
 const schema = z.object({ id, name: z.string().max(300), fps: num.positive(), width: num.positive(), height: num.positive(), sourceDuration: time,
   assets: z.record(mediaId, sharedAssetSchema),

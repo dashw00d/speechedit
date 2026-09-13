@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
 import { createReadStream, existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -261,6 +262,15 @@ ipcMain.handle('dialog:saveText', async (_e, suggested: string) => {
     ]
   })
   return result.canceled ? null : result.filePath
+})
+
+ipcMain.handle('media:storeRecording', async (_e, bytes: ArrayBuffer) => {
+  const data = Buffer.from(bytes)
+  if (data.length < 44 || data.length > 24_000_044 || data.toString('ascii', 0, 4) !== 'RIFF') throw new Error('Invalid microphone recording.')
+  const directory = join(app.getPath('userData'), 'recordings')
+  await mkdir(directory, { recursive: true })
+  const path = join(directory, `${randomUUID()}.wav`)
+  await writeFile(path, data, { mode: 0o600 }); return path
 })
 
 ipcMain.handle('fs:writeText', async (_e, path: string, body: string) => {

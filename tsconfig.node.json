@@ -13,6 +13,7 @@
   "include": [
     "scripts/web-server.ts",
     "scripts/review-server.ts",
+    "scripts/recording-server.ts",
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",

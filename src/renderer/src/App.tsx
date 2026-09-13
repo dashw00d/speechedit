@@ -1,3 +1,10 @@
+import { RecordReplacementSheet } from './components/RecordReplacementSheet'
+import { recordingSlot } from './lib/replaceAudio'
+import { uploadRecording } from './lib/recordingClient'
+import { snapshotForReview } from './lib/reviewProject'
+import { reviewConflict } from '../../shared/review'
+import type { Project } from './types'
+import { useReviewInbox } from './lib/useReviewInbox'
 import { isSharedEditor } from './lib/sharedSession'
 import { ShareSheet } from './components/ShareSheet'
 import { WorkflowSheet } from './components/WorkflowSheet'
@@ -112,6 +119,10 @@ export function App() {
   const [mediaHealth, setMediaHealth] = useState<MediaToolsHealth | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [recording, setRecording] = useState<{ project: Project; start: number; end: number; duration: number; words: string } | null>(null)
+  const [shareView, setShareView] = useState<'share' | 'inbox'>('share')
+  const projectId = useEditor(s => s.project.id)
+  const inbox = useReviewInbox(projectId, !isElectron && !isSharedEditor())
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<WorkspacePane>('script')
@@ -309,7 +320,10 @@ export function App() {
     <div className="app" data-empty={emptyReel || undefined} data-mobile-pane={mobilePane}>
       <MenuBar
         onToast={setToast}
-        onShare={() => { if (isSharedEditor()) { void navigator.clipboard.writeText(location.href).then(() => setToast('Full editing link copied. Anyone with it can edit this shared project.')).catch(() => setToast('Copy the address bar to share full editing access.')) } else setShareOpen(true) }}
+        onShare={() => { if (isSharedEditor()) { void navigator.clipboard.writeText(location.href).then(() => setToast('Full editing link copied. Anyone with it can edit this shared project.')).catch(() => setToast('Copy the address bar to share full editing access.')) } else { setShareView('share'); setShareOpen(true) } }}
+        onFeedback={inbox.bindings.length ? () => { setShareView('inbox'); setShareOpen(true) } : undefined}
+        feedbackCount={inbox.pending}
+        feedbackUnavailable={Object.keys(inbox.unavailable).length > 0}
         onExport={onExportClick}
         exporting={exporting}
         onShortcuts={() => setKeysOpen(true)}
@@ -407,7 +421,16 @@ export function App() {
           </div>
         )}
         <main className="workspace">
-          <Transcript onToast={setToast} />
+          <Transcript onToast={setToast} onReRecord={() => {
+            const editor = useEditor.getState(), selected = new Set(editor.selectedWordIds), words = editor.project.transcript.words.filter(w => selected.has(w.id))
+            try {
+              const range = wordRange(editor.project.transcript.words, editor.selectedWordIds)
+              if (!range) throw new Error('Select the words you want to re-record.')
+              const slot = recordingSlot(editor.project, range.start, range.end)
+              usePlayback.getState().pause()
+              setRecording({ project: editor.project, ...range, duration: slot.duration, words: words.map(w => w.text).join(' ') })
+            } catch (e) { setToast(e instanceof Error ? e.message : 'Could not select the recording slot.') }
+          }} onSharePassage={!isElectron && !isSharedEditor() ? () => { setShareView('share'); setShareOpen(true) } : undefined} />
           <Monitor onToast={setToast} />
           <Inspector onToast={setToast} />
         </main>
@@ -451,7 +474,17 @@ export function App() {
       <WorkflowSheet open={workflowOpen} onClose={() => setWorkflowOpen(false)} onToast={setToast} />
       <ConfirmSheet />
       <PreferencesSheet />
-      {shareOpen && <ShareSheet onClose={() => setShareOpen(false)} onToast={setToast} />}
+      {recording && <RecordReplacementSheet words={recording.words} duration={recording.duration} onClose={() => setRecording(null)} onUse={async (audio, signal) => {
+        const shared = isSharedEditor() ? { id: location.pathname.split('/')[2], key: location.hash.slice(1) } : undefined
+        const asset = await uploadRecording(audio, signal, shared)
+        if (signal.aborted) return
+        const current = useEditor.getState().project
+        const conflict = reviewConflict(snapshotForReview(recording.project), snapshotForReview(current), { kind: 'replaceAudio', start: recording.start, end: recording.end, assetId: asset.id })
+        if (conflict) throw new Error(conflict)
+        useEditor.getState().dispatch({ type: 'replaceRangeAudio', start: recording.start, end: recording.end, asset })
+        setToast('Replaced the selected voice recording. Undo restores the original audio.')
+      }} />}
+      {shareOpen && <ShareSheet initialView={shareView} inbox={inbox} onClose={() => setShareOpen(false)} onToast={setToast} />}
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
       <ShortcutsOverlay open={keysOpen} onClose={() => setKeysOpen(false)} />
       <ContextMenuHost menu={contextMenu} onClose={closeContextMenu} />

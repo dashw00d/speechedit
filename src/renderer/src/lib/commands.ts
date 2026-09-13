@@ -1,3 +1,4 @@
+import { replaceAudioRange } from './replaceAudio'
 import { addMissingTranscriptChapters } from './transcriptChapters'
 import { wordSelectionRanges } from './transcriptEdit'
 import {
@@ -1042,6 +1043,8 @@ export function applyCommand(project: Project, command: Command): Project {
         ...(command.volume != null ? { volume: command.volume } : {})
       })
     }
+    case 'replaceRangeAudio':
+      return replaceAudioRange(current, command.start, command.end, command.asset)
     case 'addAudio': {
       let next = current.tracks.some((t) => t.type === 'audio' && t.id !== 'a1')
         ? current

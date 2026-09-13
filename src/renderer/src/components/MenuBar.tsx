@@ -15,12 +15,15 @@ import { OverflowMenu } from './OverflowMenu'
 interface Props {
   onToast: (msg: string) => void
   onShare?: () => void
+  onFeedback?: () => void
+  feedbackCount?: number
+  feedbackUnavailable?: boolean
   onExport: () => void
   exporting: boolean
   onShortcuts?: () => void
 }
 
-export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: Props) {
+export function MenuBar({ onToast, onExport, onShare, onFeedback, feedbackCount = 0, feedbackUnavailable, exporting, onShortcuts }: Props) {
   const project = useEditor((s) => s.project)
   const dirty = useEditor((s) => s.dirty)
   const analyzing = useEditor((s) => s.analyzing)
@@ -137,7 +140,8 @@ export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: 
           <span className="menu-label">Settings & help</span>
           <Item onClick={() => window.dispatchEvent(new Event('speechedit:project-settings'))}>Project settings…</Item>
           <Item onClick={() => openPreferences()}>Appearance & preferences…</Item>
-          {onShare && <button type="button" className="tool-btn" onClick={onShare}>Share</button>}
+          {onFeedback && <button type="button" className="tool-btn" aria-label={`Feedback inbox, ${feedbackCount} pending${feedbackUnavailable ? ", some links unavailable" : ""}`} onClick={onFeedback}>Feedback{feedbackCount ? ` · ${feedbackCount}` : ""}{feedbackUnavailable ? " !" : ""}</button>}
+        {onShare && <button type="button" className="tool-btn" onClick={onShare}>Share</button>}
         {onShortcuts && <Item onClick={onShortcuts}>Editing help & shortcuts…</Item>}
         </Menu>
       </nav>
@@ -152,6 +156,7 @@ export function MenuBar({ onToast, onExport, onShare, exporting, onShortcuts }: 
             (err: unknown) => onToast(err instanceof Error ? err.message : 'Save failed.')
           )
         }}>Save{dirty ? ' •' : ''}</button>
+        {onFeedback && <button type="button" className="tool-btn" aria-label={`Feedback inbox, ${feedbackCount} pending${feedbackUnavailable ? ", some links unavailable" : ""}`} onClick={onFeedback}>Feedback{feedbackCount ? ` · ${feedbackCount}` : ""}{feedbackUnavailable ? " !" : ""}</button>}
         {onShare && <button type="button" className="tool-btn" onClick={onShare}>Share</button>}
         {onShortcuts && <button type="button" className="tool-btn" title="Editing help and keyboard shortcuts (?)" onClick={onShortcuts}>Help</button>}
         <button type="button"

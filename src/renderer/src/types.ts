@@ -22,6 +22,8 @@ export interface Interval {
 export interface Asset {
   /** Shared preview without a local original. Final rendering requires relinking. */
   proxyOnly?: boolean
+  /** An authored microphone take; the hosted file is the original recording. */
+  isRecording?: boolean
   id: string
   path: string
   name: string
@@ -100,6 +102,8 @@ export interface ProgramInsert {
 }
 
 export interface Clip {
+  /** Replace the primary voice during this audio clip while preserving other audio layers. */
+  replaceVoice?: boolean
   id: string
   trackId: string
   assetId?: string
@@ -362,6 +366,7 @@ export type Command =
       fadeIn?: number
       fadeOut?: number
     }
+  | { type: 'replaceRangeAudio'; start: number; end: number; asset: Asset }
   | { type: 'addRedaction'; start: number; duration: number }
   | { type: 'addTrack'; trackType: TrackType; name?: string }
   | { type: 'removeTrack'; trackId: string }
