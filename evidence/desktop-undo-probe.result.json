@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "before": {
+    "toast": "Removed 2 pauses. Undo to put them back.",
+    "buttons": [
+      {
+        "text": "Undo",
+        "aria": "Undo the last edit"
+      },
+      {
+        "text": "Dismiss",
+        "aria": "Dismiss message"
+      }
+    ],
+    "heading": "0 words · 0 chapters"
+  },
+  "beforeSig": {
+    "words": 0,
+    "chapters": 0,
+    "cuts": 2,
+    "applied": 2,
+    "tracks": "[{\"id\":\"v3\",\"type\":\"caption\",\"name\":\"V3 Captions\",\"locked\":false,\"muted\":false,\"hidden\":true,\"clips\":[],\"solo\":false},{\"id\":\"v2\",\"type\":\"overlay\",\"name\":\"V2 Overlay\",\"locked\":false,\"muted\":false,\"hidden\":true,\"clips\":[],\"solo\":false},{\"id\":\"v1\",\"type\":\"video\",\"name\":\"V1 Picture\",\"locked\":false,\"muted\":false,\"hidden\":false,\"clips\":[],\"solo\":false},{\"id\":\"a1\",\"type\":\"audio\",\"name\":\"A1 Voice\",\"locked\":false,\"muted\":false,\"hidden\":false,\"clips\":[],\"solo\":false}]"
+  },
+  "dismissFocused": "Dismiss message",
+  "undoFocused": "Undo the last edit",
+  "after": {
+    "toast": "Undid the last edit. Redo puts it back.",
+    "undoChipGone": true,
+    "heading": "0 words · 0 chapters"
+  },
+  "afterSig": {
+    "words": 0,
+    "chapters": 0,
+    "cuts": 0,
+    "applied": 0,
+    "tracks": "[{\"id\":\"v3\",\"type\":\"caption\",\"name\":\"V3 Captions\",\"locked\":false,\"muted\":false,\"hidden\":true,\"clips\":[],\"solo\":false},{\"id\":\"v2\",\"type\":\"overlay\",\"name\":\"V2 Overlay\",\"locked\":false,\"muted\":false,\"hidden\":true,\"clips\":[],\"solo\":false},{\"id\":\"v1\",\"type\":\"video\",\"name\":\"V1 Picture\",\"locked\":false,\"muted\":false,\"hidden\":false,\"clips\":[],\"solo\":false},{\"id\":\"a1\",\"type\":\"audio\",\"name\":\"A1 Voice\",\"locked\":false,\"muted\":false,\"hidden\":false,\"clips\":[],\"solo\":false}]"
+  },
+  "redoneSig": {
+    "words": 0,
+    "chapters": 0,
+    "cuts": 2,
+    "applied": 2,
+    "tracks": "[{\"id\":\"v3\",\"type\":\"caption\",\"name\":\"V3 Captions\",\"locked\":false,\"muted\":false,\"hidden\":true,\"clips\":[],\"solo\":false},{\"id\":\"v2\",\"type\":\"overlay\",\"name\":\"V2 Overlay\",\"locked\":false,\"muted\":false,\"hidden\":true,\"clips\":[],\"solo\":false},{\"id\":\"v1\",\"type\":\"video\",\"name\":\"V1 Picture\",\"locked\":false,\"muted\":false,\"hidden\":false,\"clips\":[],\"solo\":false},{\"id\":\"a1\",\"type\":\"audio\",\"name\":\"A1 Voice\",\"locked\":false,\"muted\":false,\"hidden\":false,\"clips\":[],\"solo\":false}]"
+  }
+}

@@ -1,0 +1,5 @@
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+Share creation wait { seconds: 0.23, video: false }
+Compressed preview { bytes: 64135, duration: '10.000000', fps: undefined, codec: 'opus' }
+Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808
+{"fullEditor":true,"compression":true,"remoteSave":true,"reload":true,"secondEditorSync":true,"conflictRecovery":true,"newImageUpload":true,"isolated":true,"originalPreserved":true,"ownerPullUndo":true,"revoked":true}
