@@ -22,7 +22,7 @@ const fixture = () => projectFromTake({
 describe('shared editing document', () => {
   test('preview-only projects cannot render until originals are relinked', () => {
     const project = fixture(); project.assets.source.proxyOnly = true
-    expect(validateExportJob(buildExportJob(project, '/tmp/final.mp4')!)).toContain('Relink shared previews')
+    expect(validateExportJob(buildExportJob(project, '/tmp/final.mp4')!)).toContain('Relink the original recording')
     const linked = applyCommand(project, { type: 'relinkAsset', assetId: 'source', path: '/local/new-original.wav' })
     expect(linked.assets.source.proxyOnly).toBe(false)
     expect(validateExportJob(buildExportJob(linked, '/tmp/final.mp4')!)).toBeNull()

@@ -1,7 +1,7 @@
 import { isSharedEditor } from './lib/sharedSession'
 import { ShareSheet } from './components/ShareSheet'
 import { WorkflowSheet } from './components/WorkflowSheet'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ConfirmSheet } from './components/ConfirmSheet'
 import { ExportSheet } from './components/ExportSheet'
 import { PreferencesSheet } from './components/PreferencesSheet'
@@ -16,7 +16,12 @@ import { Timeline } from './components/Timeline'
 import { Transcript } from './components/Transcript'
 import { findMovableClip, programLength } from './lib/commands'
 import { toastForCommand, toastForEdit } from './lib/contextActions'
-import { TOAST_UNDONE, toastOffersUndo } from './lib/toastActions'
+import {
+  TOAST_UNDONE,
+  toastOffersUndo,
+  type ToastAction,
+  type ToastEntry
+} from './lib/toastActions'
 import { copySelectedClip, pasteClipboard } from './lib/clipClipboard'
 import { copyQuoteFromContext } from './lib/quote'
 import { cutPreviousFromContext } from './lib/cutPrevious'
@@ -88,7 +93,22 @@ const WORKSPACE_PANE_LABELS: Record<WorkspacePane, string> = {
 
 export function App() {
   const [, setThemeId] = useState(activeThemeId)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToastText] = useState<string | null>(null)
+  const [toastAction, setToastAction] = useState<ToastAction | null>(null)
+  const setToast = useCallback((next: string | ToastEntry | null) => {
+    if (next === null) {
+      setToastText(null)
+      setToastAction(null)
+      return
+    }
+    if (typeof next === 'string') {
+      setToastText(next)
+      setToastAction(null)
+      return
+    }
+    setToastText(next.message)
+    setToastAction(next.action ?? null)
+  }, [])
   const [mediaHealth, setMediaHealth] = useState<MediaToolsHealth | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
@@ -232,11 +252,11 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!toast || exporting) return
-    const sticky = /failed|missing|cannot|need/i.test(toast)
+    if (!toast || exporting || toastAction) return
+    const sticky = /failed|missing|cannot|need|relink/i.test(toast)
     const id = setTimeout(() => setToast(null), sticky ? 14000 : Math.min(12000, Math.max(6000, toast.length * 60)))
     return () => clearTimeout(id)
-  }, [toast, exporting])
+  }, [toast, exporting, toastAction])
 
   useHotkeys(setToast, () => setKeysOpen((open) => !open), setMobilePane)
 
@@ -396,6 +416,20 @@ export function App() {
       {toast && (
         <div className="toast">
           <span role="status" aria-live="polite">{toast}</span>
+          {toastAction && (
+            <button
+              type="button"
+              className="chip"
+              aria-label={toastAction.ariaLabel ?? toastAction.label}
+              onClick={() => {
+                const action = toastAction
+                setToast(null)
+                action.run()
+              }}
+            >
+              {toastAction.label}
+            </button>
+          )}
           {toastOffersUndo(toast, canUndo) && (
             <button
               type="button"

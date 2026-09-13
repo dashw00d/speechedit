@@ -1,0 +1,6 @@
+buildExportJob returned a job: true
+validateExportJob: Relink shared previews to original media before rendering the final video.
+videoExportCopy: {"ready":false,"summary":"00:46 · 1 clip · 2 captions","problem":"Relink shared previews to original media before rendering the final video."}
+exportPrimaryCopy(electron=true): {"label":"Download the words","detail":"MP4 needs a recording on disk and the desktop app. This saves captions and the transcript.","kind":"pack"}
+exportPrimaryCopy(electron=false): {"label":"Download the words","detail":"MP4 needs a recording on disk and the desktop app. This saves captions and the transcript.","kind":"pack"}
+exportVideoAction messages: ["Relink shared previews to original media before rendering the final video."]

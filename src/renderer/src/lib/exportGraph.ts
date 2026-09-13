@@ -184,7 +184,7 @@ export function validateExportJob(
   job: GraphJob,
   opts?: { fontFile?: string | undefined }
 ): string | null {
-  if (job.proxyOnly) return 'Relink shared previews to original media before rendering the final video.'
+  if (job.proxyOnly) return 'Relink the original recording to render the final video.'
   if (!job.segments.length) return 'Nothing to export — the timeline is empty.'
   if (!job.input && !job.inputs?.some((row) => row.path)) return 'Open media to export a program.'
   for (const row of job.inputs ?? []) {

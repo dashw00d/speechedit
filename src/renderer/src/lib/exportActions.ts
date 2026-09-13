@@ -21,8 +21,10 @@ import { cancelExport, isJobCancelled, mediaBusyToast } from './mediaJobs'
 import { saveTextExport } from './saveText'
 import { formatClock } from './time'
 import { useEditor } from '../store'
-import type { Project } from '../types'
+import type { Asset, Project } from '../types'
 import type { ToastFn } from './fileActions'
+import type { ToastDispatch, ToastEntry } from './toastActions'
+import { relinkAssetInteractive } from './documentIo'
 import { failActivity, finishActivity, startActivity, updateActivity } from './activity'
 
 export type SidecarId =
@@ -223,18 +225,99 @@ export function canPackSidecars(project: Project): boolean {
   return SIDECARS.some((item) => item.group === 'common' && item.ready(project))
 }
 
+/** Media that only has a shared preview. Playback works; the final render needs the original. */
+export function proxyOnlyAssets(project: Project): Asset[] {
+  return Object.values(project.assets).filter((asset) => asset.proxyOnly)
+}
+
+function proxyRelinkMessage(count: number): string {
+  if (count <= 1) return 'Relink the original recording to render the final video.'
+  return `Relink ${count} original recordings to render the final video.`
+}
+
+function proxyRelinkDetail(count: number): string {
+  if (count <= 1) return 'The shared copy can preview but not render. Relink the original recording.'
+  return `The shared copies can preview but not render. Relink ${count} original recordings.`
+}
+
+/**
+ * Hand the blocked final render to the existing relink flow, one original at a time.
+ * After the last original is relinked, `retry` re-runs the export on the same path.
+ */
+export async function relinkProxyOriginals(
+  onToast: ToastDispatch,
+  retry?: () => void
+): Promise<void> {
+  const next = proxyOnlyAssets(useEditor.getState().project)[0]
+  if (!next) {
+    retry?.()
+    return
+  }
+  const result = await relinkAssetInteractive(next.id)
+  const remaining = proxyOnlyAssets(useEditor.getState().project).length
+  if (remaining === 0) {
+    retry?.()
+    return
+  }
+  const message =
+    result === null ? proxyPreviewAfterCancel(remaining) : proxyPreviewProgress(remaining)
+  onToast(proxyRelinkEntry(message, onToast, retry))
+}
+
+function proxyPreviewAfterCancel(remaining: number): string {
+  return remaining === 1
+    ? 'Still needs the original recording to render. Relink it when the file is handy.'
+    : `Still needs ${remaining} original recordings to render. Relink them when the files are handy.`
+}
+
+function proxyPreviewProgress(remaining: number): string {
+  return remaining === 1
+    ? 'Relinked. One original recording left before the final render.'
+    : `Relinked. ${remaining} original recordings left before the final render.`
+}
+
+function proxyRelinkEntry(message: string, onToast: ToastDispatch, retry?: () => void): ToastEntry {
+  return {
+    message,
+    action: {
+      label: 'Relink original media',
+      ariaLabel: 'Relink the original recording',
+      run: () => {
+        void relinkProxyOriginals(onToast, retry)
+      }
+    }
+  }
+}
+
+function offerProxyRelink(onToast: ToastDispatch, retry?: () => void): void {
+  const count = proxyOnlyAssets(useEditor.getState().project).length
+  if (!count) {
+    retry?.()
+    return
+  }
+  onToast(proxyRelinkEntry(proxyRelinkMessage(count), onToast, retry))
+}
+
 /** Render the movie when we can. Otherwise ship the words — the studio demo has no file on disk. */
 export function exportPrimaryCopy(
   project: Project,
   opts: ExportVideoOpts = {},
   electron = isElectron
-): { label: string; detail: string; kind: 'render' | 'pack' | 'blocked' } {
+): { label: string; detail: string; kind: 'render' | 'pack' | 'blocked' | 'relink' } {
   const video = videoExportCopy(project, opts)
   if (video.ready && electron) {
     return {
       label: opts.audioOnly ? 'Audio · M4A' : 'Video · MP4',
       detail: video.summary,
       kind: 'render'
+    }
+  }
+  const shared = proxyOnlyAssets(project).length
+  if (shared) {
+    return {
+      label: 'Relink original media',
+      detail: proxyRelinkDetail(shared),
+      kind: 'relink'
     }
   }
   if (canPackSidecars(project)) {
@@ -359,8 +442,11 @@ export async function exportSidecar(id: SidecarId, onToast: ToastFn): Promise<vo
   }
 }
 
-export async function exportVideoAction(onToast: ToastFn, opts: ExportVideoOpts = {}): Promise<void> {
-  if (Object.values(useEditor.getState().project.assets).some(a => a.proxyOnly)) { onToast('Relink shared previews to original media before rendering the final video.'); return }
+export async function exportVideoAction(onToast: ToastDispatch, opts: ExportVideoOpts = {}): Promise<void> {
+  if (proxyOnlyAssets(useEditor.getState().project).length) {
+    offerProxyRelink(onToast, () => void exportVideoAction(onToast, opts))
+    return
+  }
   const editor = useEditor.getState()
   if (editor.exporting) {
     void cancelExport()

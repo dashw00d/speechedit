@@ -1,0 +1,9 @@
+buildExportJob returned a job: true
+validateExportJob: Relink the original recording to render the final video.
+videoExportCopy: {"ready":false,"summary":"00:46 · 1 clip · 2 captions","problem":"Relink the original recording to render the final video."}
+exportPrimaryCopy(electron=true): {"label":"Relink original media","detail":"The shared copy can preview but not render. Relink the original recording.","kind":"relink"}
+exportPrimaryCopy(electron=false): {"label":"Relink original media","detail":"The shared copy can preview but not render. Relink the original recording.","kind":"relink"}
+exportVideoAction message: {"message":"Relink the original recording to render the final video.","action":{"label":"Relink original media","ariaLabel":"Relink the original recording"}}
+originals still needing relink: 0
+export resumed after relink: true
+relink follow-up message: null

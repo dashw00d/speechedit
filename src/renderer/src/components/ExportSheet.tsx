@@ -7,8 +7,10 @@ import {
   exportSidecar,
   exportVideoAction,
   projectHasPicture,
+  relinkProxyOriginals,
   SIDECARS
 } from '../lib/exportActions'
+import type { ToastDispatch } from '../lib/toastActions'
 import { setNormalizeFromContext } from '../lib/loudness'
 import { isVerticalFrame, setFrameFromContext } from '../lib/canvas'
 import { cancelExport, ffmpegImportBusy } from '../lib/mediaJobs'
@@ -21,7 +23,7 @@ export function ExportSheet({
 }: {
   open: boolean
   onClose: () => void
-  onToast: (msg: string) => void
+  onToast: ToastDispatch
 }) {
   const project = useEditor((s) => s.project)
   const exporting = useEditor((s) => s.exporting)
@@ -65,13 +67,15 @@ export function ExportSheet({
         <p className="confirm-copy">
           {exporting
             ? 'Rendering the program — leave this open or cancel.'
-            : hasPicture
-              ? primary.kind === 'pack'
-                ? 'MP4 needs a recording on disk and the desktop app. Download the words now.'
-                : 'The movie, or just the words. Pipeline formats stay under More.'
-              : primary.kind === 'pack'
-                ? 'This reel is audio and has no file on disk. Download the words, or open a recording for M4A.'
-                : 'This reel is audio. M4A is already selected — or export the words below.'}
+            : primary.kind === 'relink'
+              ? 'This shared copy can preview but not render. Relink the original recording, then export.'
+              : hasPicture
+                ? primary.kind === 'pack'
+                  ? 'MP4 needs a recording on disk and the desktop app. Download the words now.'
+                  : 'The movie, or just the words. Pipeline formats stay under More.'
+                : primary.kind === 'pack'
+                  ? 'This reel is audio and has no file on disk. Download the words, or open a recording for M4A.'
+                  : 'This reel is audio. M4A is already selected — or export the words below.'}
         </p>
         <div className="chips export-presets">
           <button
@@ -153,6 +157,10 @@ export function ExportSheet({
           onClick={() => {
             if (exporting) {
               void cancelExport()
+              return
+            }
+            if (primary.kind === 'relink') {
+              void relinkProxyOriginals(onToast, () => void exportVideoAction(onToast, exportOpts))
               return
             }
             if (primary.kind === 'pack') {
