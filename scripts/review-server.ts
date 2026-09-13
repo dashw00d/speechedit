@@ -1,3 +1,4 @@
+import { REVIEW_PROFILE, REVIEW_TIMEBASE, reviewScope, ticks, assertReviewRange, parseRepresentation, reviewPlayable, audioCoverage, reviewMotionComplete } from '../src/shared/reviewMedia'
 import { sharedProject, sharedAssetSchema } from '../src/shared/collaboration'
 import { encodeRecording } from './recording-server'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -109,6 +110,28 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
       child.once('exit', code => { clearTimeout(timer); code === 0 ? ok() : fail(new Error(`Could not prepare the compressed preview. ${error}`)) })
     })
   }
+  async function validateRepresentation(path: string, row: import('../src/shared/reviewMedia').ReviewRepresentation) {
+    const raw = await new Promise<string>((ok, fail) => {
+      const child = spawn(options.ffmpeg?.replace(/ffmpeg$/, 'ffprobe') || 'ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_entries', 'stream=codec_name,codec_type,channels,width,height:format=duration', '-of', 'json', path], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let output = '', errors = ''
+      const timer = setTimeout(() => { child.kill('SIGKILL'); fail(new Error('Media validation timed out.')) }, 10000)
+      child.stdout.on('data', chunk => { output += chunk; if (output.length > 16000) child.kill('SIGKILL') })
+      child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-500) })
+      child.once('error', e => { clearTimeout(timer); fail(e) })
+      child.once('exit', code => { clearTimeout(timer); code === 0 ? ok(output) : fail(new Error(`Invalid section media. ${errors}`)) })
+    })
+    const probe = JSON.parse(raw), streams = probe.streams as { codec_name: string; codec_type: string; channels?: number; width?: number; height?: number }[]
+    if (!Array.isArray(streams) || streams.length > 2) throw new HttpError(415, 'Unexpected media tracks.')
+    const audio = streams.find(s => s.codec_type === 'audio'), video = streams.find(s => s.codec_type === 'video')
+    if (row.kind === 'thumbnail') {
+      if (!video || video.codec_name !== 'webp' || (video.width || 0) > 1280 || (video.height || 0) > 1280 || audio) throw new HttpError(415, 'Invalid storyboard image.')
+    } else {
+      const duration = Number(probe.format?.duration)
+      if (!Number.isFinite(duration) || duration <= 0 || duration > (row.end - row.start) / REVIEW_TIMEBASE + 0.1) throw new HttpError(415, 'Section media exceeds its allowed interval.')
+      if (row.kind === 'audio' ? !audio || video : !video || video.codec_name !== 'vp8') throw new HttpError(415, 'Missing section track.')
+      if (audio && (audio.codec_name !== 'opus' || audio.channels !== 1)) throw new HttpError(415, 'Review audio must be mono Opus.')
+    }
+  }
   return async (req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> => {
     if (!pathname.startsWith('/api/reviews') && pathname !== '/api/recordings') return false
     res.setHeader('Cache-Control', 'no-store')
@@ -129,23 +152,120 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
         const input = await body(req), snapshot = parseReviewSnapshot(input.snapshot)
         const mode = input.mode === 'edit' ? 'edit' : 'audit'
         const project = mode === 'edit' ? sharedProject(input.project) : undefined
+        if (snapshot.scope && (mode === 'edit' || input.profile !== REVIEW_PROFILE)) throw new HttpError(400, 'Passage sharing requires the lightweight review format.')
+        if (input.profile && (input.profile !== REVIEW_PROFILE || mode !== 'audit')) throw new HttpError(400, 'Unsupported review format.')
         if (project && project.id !== snapshot.projectId) throw new HttpError(400, 'Project identifiers do not match.')
         const created = await locked('capacity', async () => {
           if (await usage() + Buffer.byteLength(JSON.stringify({ snapshot, project, mediaAssets: project?.assets })) + 2048 >= maxBytes || (await readdir(dir)).length >= 1000) throw new HttpError(507, 'Review storage is full.')
           const id = randomBytes(16).toString('hex'), ownerKey = token(), reviewerKey = token()
-          const room: StoredRoom = { id, snapshot, mode, ...(project ? { project, projectRevision: 1, mediaAssets: project.assets, history: [{ revision: 1, author: 'Owner', at: now }] } : {}), revision: 1, proposals: [], media: {}, published: false, createdAt: now, expiresAt: now + 30 * 86400_000, ownerHash: hash(ownerKey), reviewerHash: hash(reviewerKey) }
+          const room: StoredRoom = { id, snapshot, mode, ...(input.profile ? { delivery: { profile: REVIEW_PROFILE, timebase: REVIEW_TIMEBASE, revision: 1, state: 'preparing' as const, offlineMotion: input.offlineMotion === true, representations: [], requests: [], senderSeenAt: now } } : {}), ...(project ? { project, projectRevision: 1, mediaAssets: project.assets, history: [{ revision: 1, author: 'Owner', at: now }] } : {}), revision: 1, proposals: [], media: {}, published: false, createdAt: now, expiresAt: now + 30 * 86400_000, ownerHash: hash(ownerKey), reviewerHash: hash(reviewerKey) }
           await mkdir(folder(id)); await save(room)
           return { room: publicRoom(room), ownerKey, reviewerKey }
         })
         json(res, 201, created); return true
       }
-      const match = /^\/api\/reviews\/([a-f0-9]{32})(?:\/(media)(?:\/([a-zA-Z0-9_-]{1,120}))?|\/(publish|proposals|project|assets|summary|recordings)(?:\/([a-f0-9-]{36})(?:\/(reply|resolve))?)?)?$/.exec(pathname)
+      const match = /^\/api\/reviews\/([a-f0-9]{32})(?:\/(media|representations)(?:\/([a-zA-Z0-9_-]{1,120}))?|\/(publish|proposals|project|assets|summary|recordings|delivery|details)(?:\/([a-f0-9-]{36})(?:\/(reply|resolve))?)?)?$/.exec(pathname)
       if (!match) throw new HttpError(404, 'Review route not found.')
       const [, id, media, assetId, route, proposalId, action] = match
       await locked(id, async () => {
         const room = await read(id, req.method === 'DELETE')
         const role = auth(req, room)
         const owner = () => { if (role !== 'owner') throw new HttpError(403, 'Only the owner can do that.') }
+        if (media === 'representations' && assetId && room.delivery) {
+          const delivery = room.delivery
+          const target = resolve(folder(id), `representation-${assetId}`)
+          if (req.method === 'PUT') {
+            owner()
+            let raw: unknown
+            try { raw = JSON.parse(String(req.headers['x-review-representation'] || '')) } catch { throw new HttpError(400, 'Missing representation metadata.') }
+            const representation = parseRepresentation(raw, room.snapshot)
+            if (representation.id !== assetId || Number(req.headers['content-length']) !== representation.bytes || req.headers['content-type'] !== representation.mime) throw new HttpError(400, 'Representation headers do not match.')
+            const existing = delivery.representations.find(r => r.id === assetId)
+            if (existing) {
+              if (JSON.stringify(existing) !== JSON.stringify(representation)) throw new HttpError(409, 'Published media is immutable.')
+              req.resume(); json(res, 200, publicRoom(room)); return
+            }
+            if (delivery.representations.length >= 15000) throw new HttpError(413, 'Representation limit reached.')
+            if (representation.kind === 'audio' && delivery.representations.some(r => r.kind === 'audio' && r.start < representation.end && representation.start < r.end)) throw new HttpError(409, 'Audio intervals must not overlap.')
+            await locked('capacity', async () => {
+              const total = Object.values(room.media).reduce((n, m) => n + m.bytes, 0) + delivery.representations.reduce((n, r) => n + r.bytes, 0)
+              if (total + representation.bytes > REVIEW_MAX_ROOM_BYTES || await usage() + representation.bytes > maxBytes) throw new HttpError(507, 'Review storage is full.')
+              const temp = `${target}.upload`, digest = createHash('sha256'); let bytes = 0, magic = Buffer.alloc(0), committed = false
+              try {
+                await pipeline(req, new Transform({ transform(chunk: Buffer, _encoding, callback) {
+                  bytes += chunk.length; digest.update(chunk)
+                  if (magic.length < 12) magic = Buffer.concat([magic, chunk]).subarray(0, 12)
+                  callback(bytes > representation.bytes ? new Error('Representation exceeds its declared size.') : null, chunk)
+                } }), createWriteStream(temp, { mode: 0o600 }), { signal: AbortSignal.timeout(120000) })
+                if (bytes !== representation.bytes || digest.digest('hex') !== representation.sha256) throw new HttpError(400, 'Representation checksum does not match.')
+                const image = representation.kind === 'thumbnail'
+                if (image ? magic.subarray(0, 4).toString() !== 'RIFF' || magic.subarray(8, 12).toString() !== 'WEBP' : magic.subarray(0, 4).toString('hex') !== '1a45dfa3') throw new HttpError(415, 'Invalid representation format.')
+                await validateRepresentation(temp, representation)
+                await rename(temp, target)
+                delivery.representations.push(representation); delivery.revision++; delivery.senderSeenAt = Date.now()
+                if (!room.published && reviewPlayable(room.snapshot, delivery.representations)) {
+                  room.published = true; delivery.state = 'playable'; delivery.playableAt = Date.now()
+                }
+                await save(room); committed = true
+              } finally { await rm(temp, { force: true }); if (!committed) await rm(target, { force: true }) }
+            })
+            json(res, 200, publicRoom(room)); return
+          }
+          const representation = delivery.representations.find(r => r.id === assetId)
+          if (!representation) throw new HttpError(404, 'This section has not arrived yet.')
+          if (req.method === 'GET' || req.method === 'HEAD') {
+            const total = representation.bytes; let start = 0, end = total - 1
+            const range = req.headers.range
+            if (range) {
+              const r = /^bytes=(\d*)-(\d*)$/.exec(range)
+              if (!r || (!r[1] && !r[2])) throw new HttpError(416, 'Invalid media range.')
+              if (!r[1]) start = Math.max(0, total - Number(r[2]))
+              else { start = Number(r[1]); end = r[2] ? Math.min(Number(r[2]), end) : end }
+              if (start > end || start >= total) { res.setHeader('Content-Range', `bytes */${total}`); throw new HttpError(416, 'Media range outside preview.') }
+              res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
+            }
+            res.writeHead(range ? 206 : 200, { 'Content-Type': representation.mime, 'Content-Length': end - start + 1, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' })
+            if (req.method === 'HEAD') res.end()
+            else createReadStream(target, { start, end }).on('error', () => res.destroy()).pipe(res)
+            return
+          }
+        }
+        if (route === 'delivery' && room.delivery && req.method === 'POST') {
+          owner(); const input = await body(req), delivery = room.delivery
+          delivery.senderSeenAt = Date.now()
+          if (input.state === 'complete') {
+            if (!reviewPlayable(room.snapshot, delivery.representations) || ticks(audioCoverage(room.snapshot, delivery.representations)) !== ticks(reviewScope(room.snapshot).end)) throw new HttpError(409, 'Upload every audio interval before completing this review.')
+            if (delivery.offlineMotion && !reviewMotionComplete(room.snapshot, delivery.representations)) throw new HttpError(409, 'Upload the offline video sections before completing this review.')
+            delivery.state = 'complete'; delivery.completedAt = Date.now()
+          } else if (input.state === 'partial' || input.state === 'failed') delivery.state = room.published ? 'partial' : 'failed'
+          else if (input.state != null) throw new HttpError(400, 'Invalid delivery state.')
+          delivery.revision++; await save(room); json(res, 200, publicRoom(room)); return
+        }
+        if (route === 'details' && room.delivery && req.method === 'POST') {
+          if (!room.published) throw new HttpError(409, 'Wait until this review is playable.')
+          const input = await body(req), delivery = room.delivery
+          if (input.id) {
+            owner(); const request = delivery.requests.find(r => r.id === input.id)
+            if (!request) throw new HttpError(404, 'Unknown detail request.')
+            if (input.status === 'failed') { request.status = 'failed'; request.error = reviewText(input.error, 200) }
+            else {
+              let end = ticks(request.start)
+              for (const r of delivery.representations.filter(r => r.kind === request.kind && r.end > end).sort((a, b) => a.start - b.start)) { if (r.start > end) break; end = Math.max(end, r.end) }
+              if (end < ticks(request.end)) throw new HttpError(409, 'Upload this entire section first.')
+              request.status = 'ready'; delete request.error
+            }
+          } else {
+            const range = { start: input.start, end: input.end }; assertReviewRange(room.snapshot, range)
+            if (range.end <= range.start || range.end - range.start > 30 || !['motion', 'detail'].includes(input.kind)) throw new HttpError(400, 'Choose up to 30 seconds of shared video.')
+            if (!room.snapshot.assets.some(a => a.kind === 'video' && ticks(a.sourceOffset) <= ticks(range.start) && ticks(a.sourceOffset + a.duration) >= ticks(range.end))) throw new HttpError(400, 'Choose a section within one video recording.')
+            const existing = delivery.requests.find(r => r.kind === input.kind && r.start === range.start && r.end === range.end)
+            if (!existing) {
+              if (delivery.requests.length >= 100) throw new HttpError(429, 'Detail request limit reached.')
+              delivery.requests.push({ ...range, id: randomUUID(), kind: input.kind, status: 'pending' })
+            } else if (existing.status === 'failed') { existing.status = 'pending'; delete existing.error }
+          }
+          delivery.revision++; await save(room); json(res, 200, publicRoom(room)); return
+        }
         if (route === 'recordings' && !proposalId && req.method === 'POST') {
           if (!room.published) throw new HttpError(409, 'Publish this review before adding recordings.')
           recordingQuota(req)
@@ -154,7 +274,7 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
           const asset = { id: `rec_${randomUUID()}`, name: 'Re-recorded voice.mp3', kind: 'audio' as const, duration: recording.duration, sampleRate: 48000, waveform: [], path: '', isRecording: true }
           asset.path = `shared-media:${asset.id}`
           await locked('capacity', async () => {
-            const roomSize = Object.values(room.media).reduce((n, m) => n + m.bytes, 0)
+            const roomSize = Object.values(room.media).reduce((n, m) => n + m.bytes, 0) + (room.delivery?.representations.reduce((n, r) => n + r.bytes, 0) || 0)
             if (roomSize + recording.bytes.length > REVIEW_MAX_ROOM_BYTES || await usage() + recording.bytes.length > maxBytes) throw new HttpError(507, 'Recording storage is full.')
             await writeFile(resolve(folder(id), `${asset.id}.mp3`), recording.bytes, { mode: 0o600 })
             room.mediaAssets = { ...room.mediaAssets, [asset.id]: asset }; room.media[asset.id] = { bytes: recording.bytes.length, mime: 'audio/mpeg' }
@@ -203,12 +323,13 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
           }
           json(res, 200, publicRoom(room)); return
         }
-        if (media && assetId) {
+        if (media === 'media' && assetId) {
           const asset = room.mediaAssets?.[assetId] || room.snapshot.assets.find(a => a.id === assetId)
           if (!asset) throw new HttpError(404, 'Unknown preview.')
           const isMp3 = room.media[assetId]?.mime === 'audio/mpeg' || req.method === 'PUT' && 'isRecording' in asset && asset.isRecording && asset.kind === 'audio' && req.headers['content-type'] === 'audio/mpeg'
           const target = resolve(folder(id), `${assetId}.${isMp3 ? 'mp3' : 'webm'}`)
           if (req.method === 'PUT') {
+            if (room.delivery) throw new HttpError(403, 'Use passage-scoped representations for this review.')
             if (room.mode !== 'edit') owner()
             if (room.media[assetId] || (room.published && room.mode !== 'edit')) throw new HttpError(409, 'Published previews are immutable. Create a new review link.')
             if (!isMp3 && !(asset.kind === 'image' ? /^image\/webp$/ : /^(audio|video)\/webm(?:;|$)/).test(req.headers['content-type'] || '')) throw new HttpError(415, 'Upload a compressed WebM preview.')
@@ -264,6 +385,7 @@ export function createReviewHandler(root: string, options: { maxBytes?: number; 
           }
         }
         if (route === 'publish' && req.method === 'POST') {
+          if (room.delivery) throw new HttpError(409, 'Lightweight reviews publish when their first audio and visual arrive.')
           owner()
           if ((room.project ? Object.values(room.project.assets) : room.snapshot.assets).some(a => !room.media[a.id])) throw new HttpError(409, 'Upload every source preview before sharing.')
           room.published = true; await save(room); json(res, 200, publicRoom(room)); return

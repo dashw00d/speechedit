@@ -1,3 +1,4 @@
+import { assertReviewRange, scopeReviewSnapshot, type ReviewDelivery } from './reviewMedia'
 import type { Project, Asset } from '../renderer/src/types'
 /** The review contract contains source coordinates and decisions, never original media paths. */
 export interface ReviewSpan { start: number; end: number }
@@ -8,6 +9,7 @@ export interface ReviewSnapshot {
   projectId: string
   name: string
   sourceDuration: number
+  scope?: ReviewSpan
   assets: ReviewAsset[]
   words: ReviewWord[]
   scenes: ReviewScene[]
@@ -38,6 +40,7 @@ export interface ReviewRoom {
   snapshot: ReviewSnapshot
   proposals: ReviewProposal[]
   media: Record<string, { bytes: number; mime: string }>
+  delivery?: ReviewDelivery
   published: boolean
   createdAt: number
   expiresAt: number
@@ -95,11 +98,13 @@ export function parseReviewSnapshot(raw: unknown): ReviewSnapshot {
   })
   const scenes = list(o.scenes, 10000, v => { const s = object(v); return { ...span(s, duration), id: reviewText(s.id, 120), title: reviewText(s.title, 300) } })
   unique(assets); unique(words); unique(scenes)
-  return { projectId: reviewText(o.projectId, 120), name: reviewText(o.name, 300), sourceDuration: duration, assets, words, scenes,
+  const snapshot: ReviewSnapshot = { projectId: reviewText(o.projectId, 120), name: reviewText(o.name, 300), sourceDuration: duration, assets, words, scenes,
     cuts: list(o.cuts, 20000, v => span(v, duration)), protected: list(o.protected, 10000, v => span(v, duration)) }
+  return o.scope ? scopeReviewSnapshot(snapshot, span(o.scope, duration)) : snapshot
 }
 export function parseReviewEdit(raw: unknown, snapshot: ReviewSnapshot, recordings?: Record<string, Asset>): ReviewEdit {
   const o = object(raw)
+  if (o.kind === 'cut' || o.kind === 'replaceAudio') assertReviewRange(snapshot, span(o, snapshot.sourceDuration))
   if (o.kind === 'replaceAudio') {
     const range = span(o, snapshot.sourceDuration), asset = recordings?.[o.assetId]
     if (!asset?.isRecording || asset.kind !== 'audio' || Math.abs(asset.duration - (range.end - range.start)) > 0.02) throw new Error('Upload a recording that fits this passage before suggesting it.')
@@ -133,11 +138,16 @@ export function parseReviewSubmission(raw: unknown, snapshot: ReviewSnapshot, re
   const range = edit?.kind === 'renameChapter' ? snapshot.scenes.find(scene => scene.id === edit.sceneId)!
     : edit?.kind === 'correctWord' ? snapshot.words.find(word => word.id === edit.wordId)!
     : edit?.kind === 'cut' || edit?.kind === 'replaceAudio' ? edit : span(o, snapshot.sourceDuration)
+  assertReviewRange(snapshot, range)
   return { author: reviewText(o.author, 80), text: edit && (o.text == null || typeof o.text === 'string' && !o.text.trim()) ? editLabel(edit) : reviewText(o.text), start: range.start, end: range.end, ...(edit ? { edit } : {}) }
 }
 export function intersects(a: ReviewSpan, b: ReviewSpan): boolean { return a.start < b.end && b.start < a.end }
 /** Compare only the affected source passage, allowing independent edits to merge. */
 export function reviewConflict(base: ReviewSnapshot, current: ReviewSnapshot, edit: ReviewEdit): string | null {
+  if (base.scope) {
+    if (base.scope.end > current.sourceDuration) return 'The source recordings changed. Create a fresh review link.'
+    current = scopeReviewSnapshot(current, base.scope)
+  }
   if (base.projectId !== current.projectId || JSON.stringify(base.assets.map(a => [a.id, a.duration, a.sourceOffset])) !== JSON.stringify(current.assets.map(a => [a.id, a.duration, a.sourceOffset]))) return 'The source recordings changed. Create a fresh review link.'
   if (edit.kind === 'renameChapter') {
     const before = base.scenes.find(s => s.id === edit.sceneId), after = current.scenes.find(s => s.id === edit.sceneId)
@@ -145,7 +155,7 @@ export function reviewConflict(base: ReviewSnapshot, current: ReviewSnapshot, ed
   }
   if (edit.kind === 'correctWord') {
     const before = base.words.find(w => w.id === edit.wordId), after = current.words.find(w => w.id === edit.wordId)
-    return before && after && JSON.stringify(before) === JSON.stringify(after) ? null : 'This word changed after sharing. Review the correction against your current transcript.'
+    return before && after && before.id === after.id && before.text === after.text && before.start === after.start && before.end === after.end && before.deleted === after.deleted ? null : 'This word changed after sharing. Review the correction against your current transcript.'
   }
   const affected = (s: ReviewSnapshot) => ({ words: s.words.filter(w => intersects(w, edit)), cuts: s.cuts.filter(c => intersects(c, edit)), protected: s.protected.filter(p => intersects(p, edit)) })
   return JSON.stringify(affected(base)) === JSON.stringify(affected(current)) ? null : 'This passage changed after sharing. Review it manually or create a fresh link.'

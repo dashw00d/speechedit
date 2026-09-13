@@ -1,0 +1,110 @@
+{
+  "source": {
+    "name": "Staff Training - Final Pacing.mp4",
+    "start": 0,
+    "duration": 25,
+    "decodeMs": 61.866966999999995
+  },
+  "cpu": "AMD Ryzen 7 5800X3D 8-Core Processor",
+  "platform": "linux x64",
+  "createdAt": "2026-09-13T16:43:56.563Z",
+  "candidates": [
+    {
+      "name": "opus-24",
+      "file": "opus-24.webm",
+      "decoded": "opus-24.wav",
+      "kbps": 24,
+      "bytes": 77644,
+      "encodeMs": 258.959951,
+      "decodeMs": 66.062007,
+      "encodeRealtime": 96.54002444571053,
+      "browser": "native Opus; measure startup and seek separately"
+    },
+    {
+      "name": "opus-16",
+      "file": "opus-16.webm",
+      "decoded": "opus-16.wav",
+      "kbps": 16,
+      "bytes": 54987,
+      "encodeMs": 272.096488,
+      "decodeMs": 68.43980600000009,
+      "encodeRealtime": 91.87917192080774,
+      "browser": "native Opus; measure startup and seek separately"
+    },
+    {
+      "name": "nolace-12",
+      "file": "nolace-12.packets",
+      "decoded": "nolace-12.wav",
+      "kbps": 12,
+      "bytes": 43904,
+      "payloadBytes": 33896,
+      "packets": 1251,
+      "encodeMs": 257.2332329999999,
+      "decodeMs": 300.31419600000004,
+      "encodeRealtime": 97.1880643431481,
+      "opusVersion": "1.5.2",
+      "decoderComplexity": 7,
+      "browser": "NOT READY: requires a NoLACE-enabled browser/WASM decoder; WAV is only a listening copy"
+    },
+    {
+      "name": "nolace-9",
+      "file": "nolace-9.packets",
+      "decoded": "nolace-9.wav",
+      "kbps": 9,
+      "bytes": 35184,
+      "payloadBytes": 25176,
+      "packets": 1251,
+      "encodeMs": 248.49882300000013,
+      "decodeMs": 291.4636519999999,
+      "encodeRealtime": 100.6040982334954,
+      "opusVersion": "1.5.2",
+      "decoderComplexity": 7,
+      "browser": "NOT READY: requires a NoLACE-enabled browser/WASM decoder; WAV is only a listening copy"
+    }
+  ],
+  "nolace": "native CPU only; not promoted",
+  "lyra": "follow-up, not promoted",
+  "browserResults": {
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.251 Electron/37.10.3 Safari/537.36",
+    "measurements": [
+      {
+        "name": "opus-24",
+        "downloadBytes": 77644,
+        "downloadMs": 3.2000000029802322,
+        "decodeMs": 49.29999999701977,
+        "readyMs": 52.5,
+        "seekMs": 8.700000002980232,
+        "decodedDuration": 25,
+        "decoderDownloadBytes": 0,
+        "decoder": "browser native Opus",
+        "network": "localhost"
+      },
+      {
+        "name": "opus-16",
+        "downloadBytes": 54987,
+        "downloadMs": 2.7999999970197678,
+        "decodeMs": 47.400000005960464,
+        "readyMs": 50.20000000298023,
+        "seekMs": 5.199999988079071,
+        "decodedDuration": 25,
+        "decoderDownloadBytes": 0,
+        "decoder": "browser native Opus",
+        "network": "localhost"
+      }
+    ],
+    "nolace": "not measured: enhanced browser decoder is not implemented"
+  },
+  "review": {
+    "method": "Automatic browser Whisper sanity check on one 25-second single-speaker excerpt; not blind listening or a validated fidelity score.",
+    "names": "Austin's Elite recognized in all four candidates.",
+    "observations": {
+      "opus-24": "Matches reference ASR on request a position.",
+      "opus-16": "ASR changed position to physician.",
+      "nolace-12": "Extra ASR words in walkthrough shows you how; pay amounts phrase preserved.",
+      "nolace-9": "Several extra/substituted ASR words, including fine shifts; pay amounts phrase preserved."
+    },
+    "numbers": "No numeric speech in this excerpt; not evaluated.",
+    "overlappingSpeech": "Not present in this excerpt; not evaluated.",
+    "promotion": "Keep ordinary Opus 24. Broader real recordings and listening required."
+  }
+}

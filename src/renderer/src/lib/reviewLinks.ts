@@ -1,3 +1,4 @@
+import { reviewScope } from '../../../shared/reviewMedia'
 import type { ReviewSnapshot, ReviewSpan, ReviewWord } from '../../../shared/review'
 
 export interface ReviewFocus extends ReviewSpan {
@@ -31,7 +32,8 @@ export function focusForWords(words: ReviewWord[], ids: string[], question?: str
 }
 
 export function resolveReviewFocus(snapshot: ReviewSnapshot, focus?: ReviewFocus): { focus: ReviewFocus; words: ReviewWord[] } | undefined {
-  if (!focus || focus.start >= snapshot.sourceDuration || focus.end > snapshot.sourceDuration) return
+  const scope = reviewScope(snapshot)
+  if (!focus || focus.start < scope.start || focus.start >= scope.end || focus.end > scope.end) return
   const first = snapshot.words.findIndex(w => w.id === focus.firstWordId), last = snapshot.words.findIndex(w => w.id === focus.lastWordId)
   const words = first >= 0 && last >= first ? snapshot.words.slice(first, last + 1)
     : snapshot.words.filter(w => w.start >= focus.start && w.end <= focus.end)

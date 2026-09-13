@@ -4308,3 +4308,7 @@ button:disabled,
 .shared-edit-bar small { color: var(--color-fg-muted); }
 .shared-edit-bar > p, .shared-conflict { flex-basis: 100%; margin: 0; }
 .shared-edit-bar details { max-height: 140px; overflow: auto; }
+
+.review-player figure { margin: 0; }
+.review-player img { display: block; width: 100%; max-height: 360px; object-fit: contain; background: var(--color-bg-well); }
+.review-player figcaption { color: var(--color-fg-muted); font-size: var(--font-size-xs); padding-block: var(--space-1); }

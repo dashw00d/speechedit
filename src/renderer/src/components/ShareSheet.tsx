@@ -1,3 +1,7 @@
+import { scopeReviewSnapshot } from '../../../shared/reviewMedia'
+import { deliverReview, type DeliveryMetrics } from '../lib/reviewDelivery'
+import { provideReviewVideo, offlineVideoRange } from '../lib/useReviewDetails'
+import { latestReviewRoom } from '../lib/reviewApi'
 import { mergeSharedProjects, prepareSharedProject } from '../../../shared/collaboration'
 import { readSharedState, writeSharedState, mountSharedProject } from '../lib/sharedSession'
 import type { Project } from '../types'
@@ -22,6 +26,8 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
   const [view, setView] = useState(initialView)
   const [selectedIds] = useState(() => [...useEditor.getState().selectedWordIds])
   const [passage, setPassage] = useState(selectedIds.length > 0)
+  const [offlineVideo, setOfflineVideo] = useState(false)
+  const [metrics, setMetrics] = useState<DeliveryMetrics | null>(null)
   const [question, setQuestion] = useState('')
   const [room, setRoom] = useState<ReviewRoom | null>(null)
   const [mode, setMode] = useState<'audit' | 'edit'>(bindings.at(-1)?.mode || 'audit')
@@ -43,9 +49,9 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
     setRoom(current => current?.id === binding?.id ? current : null); setError('')
     if (!binding) return
     let cancelled = false
-    const refreshRoom = () => void reviewRequest<ReviewRoom>(`/${binding.id}`, binding.ownerKey).then(value => { if (!cancelled) setRoom(current => current?.id === value.id && current.revision > value.revision ? current : value) }).catch(e => { if (!cancelled) setError(String(e.message)) })
+    const refreshRoom = () => void reviewRequest<ReviewRoom>(`/${binding.id}`, binding.ownerKey).then(value => { if (!cancelled) setRoom(current => latestReviewRoom(current, value)) }).catch(e => { if (!cancelled) setError(String(e.message)) })
     refreshRoom()
-    const timer = setInterval(refreshRoom, 15000)
+    const timer = setInterval(refreshRoom, 2000)
     return () => { cancelled = true; clearInterval(timer) }
   }, [binding?.id])
   useEffect(() => { if (projectId !== originalId.current) onClose() }, [projectId])
@@ -53,16 +59,34 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
     const editor = useEditor.getState(), project = editor.project
     if (editor.analyzing || editor.exporting) { setError('Finish the current media job before sharing.'); return }
     setBusy(true); setError(''); setStatus('Preparing review'); setRatio(0)
-    const controller = new AbortController(); abort.current = controller
+    const started = performance.now(), controller = new AbortController(); abort.current = controller
     let made: ReviewBinding | null = null
     usePlayback.getState().pause()
     editor.setAnalyzing('share')
     try {
-      const snapshot = snapshotForReview(project)
+      const whole = snapshotForReview(project)
+      const snapshot = mode === 'audit' && passage && localFocus ? scopeReviewSnapshot(whole, localFocus) : whole
       const shared = mode === 'edit' ? prepareSharedProject(project) : undefined
-      const result = await createReview(snapshot, controller.signal, shared)
+      const result = await createReview(snapshot, controller.signal, shared, mode === 'audit', offlineVideo)
       made = { id: result.room.id, projectId: project.id, ownerKey: result.ownerKey, reviewerKey: result.reviewerKey, mode }
       rememberReview(made)
+      if (mode === 'audit') {
+        setBindings(reviewBindings(project.id)); setBinding(made); setRoom(result.room); setMetrics(null)
+        let useful = false
+        let published = await deliverReview(project, snapshot, made, controller.signal, (next, ratio, timing) => {
+          setRoom(current => latestReviewRoom(current, next)); setRatio(ratio); setMetrics(timing)
+          setStatus(next.published ? 'Your friend can review now. Uploading the remaining sections…' : 'Preparing the first audio and image…')
+          if (next.published && !useful) { useful = true; onToast('Link ready to send. Your friend can start reviewing while upload continues.') }
+        })
+        if (offlineVideo) {
+          setStatus('Saving video sections so your friend can watch after you leave…')
+          published = await provideReviewVideo(project, made, published, offlineVideoRange(published), 'motion', controller.signal)
+          published = await reviewRequest<ReviewRoom>(`/${made.id}/delivery`, made.ownerKey, 'POST', { state: 'complete' }, controller.signal)
+        }
+        setRoom(current => latestReviewRoom(current, published)); setStatus('Review upload complete.'); setRatio(1)
+        setMetrics(current => current ? { ...current, bytes: published.delivery!.representations.reduce((n, r) => n + r.bytes, 0), totalMs: performance.now() - started } : null)
+        return
+      }
       const assets = mode === 'edit' ? Object.values(project.assets) : snapshot.assets.map(a => project.assets[a.id])
       for (let i = 0; i < assets.length; i++) {
         const asset = assets[i]
@@ -89,10 +113,35 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
       setBindings(reviewBindings(project.id)); setBinding(made); setRoom(published); setStatus('Share link ready.'); onToast(mode === 'edit' ? 'Full editing link ready. Collaborators can use the complete editor.' : 'Audit link ready. Your originals stayed on this device.')
     } catch (e) {
       setError(controller.signal.aborted ? 'Sharing cancelled.' : e instanceof Error ? e.message : 'Sharing failed.')
-      if (made) {
+      if (made && mode === 'audit') {
+        try { const partial = await reviewRequest<ReviewRoom>(`/${made.id}/delivery`, made.ownerKey, 'POST', { state: 'partial' }); setRoom(current => latestReviewRoom(current, partial)) } catch { /* The binding remains available for retry or revocation. */ }
+      } else if (made) {
         try { await reviewRequest(`/${made.id}`, made.ownerKey, 'DELETE'); forgetReview(made.id) }
         catch { setBindings(reviewBindings(project.id)); setBinding(made); setError('Sharing did not finish. The incomplete upload is saved here so you can revoke it.') }
       }
+    } finally { setBusy(false); abort.current = null; if (useEditor.getState().project.id === project.id) useEditor.getState().setAnalyzing(null) }
+  }
+  async function resume() {
+    if (!room?.delivery || !binding || busy) return
+    const editor = useEditor.getState(), project = editor.project
+    if (editor.analyzing || editor.exporting) { setError('Finish the current media job before sharing.'); return }
+    if (room.snapshot.assets.some(a => !project.assets[a.id] || project.assets[a.id].duration !== a.duration)) { setError('The source recordings changed. Create a fresh review.'); return }
+    const started = performance.now(), controller = new AbortController(); abort.current = controller
+    setBusy(true); setError(''); editor.setAnalyzing('share'); usePlayback.getState().pause()
+    try {
+      const latest = await reviewRequest<ReviewRoom>(`/${binding.id}`, binding.ownerKey)
+      let published = await deliverReview(project, room.snapshot, binding, controller.signal, (next, ratio, timing) => {
+        setRoom(current => latestReviewRoom(current, next)); setRatio(ratio); setMetrics(timing); setStatus('Resuming upload. Previously shared sections remain available.')
+      }, latest)
+      if (latest.delivery?.offlineMotion) {
+        published = await provideReviewVideo(project, binding, published, offlineVideoRange(published), 'motion', controller.signal)
+        published = await reviewRequest<ReviewRoom>(`/${binding.id}/delivery`, binding.ownerKey, 'POST', { state: 'complete' }, controller.signal)
+      }
+      setRoom(current => latestReviewRoom(current, published)); setStatus('Review upload complete.'); setRatio(1)
+      setMetrics(current => current ? { ...current, bytes: published.delivery!.representations.reduce((n, r) => n + r.bytes, 0), totalMs: performance.now() - started } : null)
+    } catch (e) {
+      setError(controller.signal.aborted ? 'Upload paused. Available sections and feedback are saved.' : e instanceof Error ? e.message : 'Upload did not finish.')
+      try { const partial = await reviewRequest<ReviewRoom>(`/${binding.id}/delivery`, binding.ownerKey, 'POST', { state: 'partial' }); setRoom(current => latestReviewRoom(current, partial)) } catch { /* Retry remains available. */ }
     } finally { setBusy(false); abort.current = null; if (useEditor.getState().project.id === project.id) useEditor.getState().setAnalyzing(null) }
   }
   async function pullEdits() {
@@ -152,12 +201,13 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
       {view === 'share' && <>
       <p>Audit links let your friend comment, correct transcript words, and suggest cuts for your approval. Choose Full editing to let them edit the shared project directly.</p>
       <p>Anyone with the link has the access you choose. Links expire after 30 days; you can revoke them here.</p>
-      <details><summary>What gets shared?</summary><p>A compressed video preview with continuous audio and your transcript. Originals stay on this device. Previews use 8 fps; older browsers may need playback-speed capture. Original-quality rendering requires the source files.</p></details>
+      <details><summary>What gets shared?</summary><p>Audit links share continuous audio, occasional images, and the permitted transcript. Video sections are prepared when requested while your source project is open. Full editing uses a conventional compressed video preview. Originals stay on this device.</p></details>
       <label>Access <select aria-label="Share access" value={mode} disabled={busy} onChange={e => setMode(e.target.value as 'edit' | 'audit')}><option value="audit">Audit — comments and suggested edits</option><option value="edit">Full editing — changes save to the shared project</option></select></label>
       {mode === 'audit' && localFocus && <div className="review-share-passage">
-        <label><input type="checkbox" checked={passage} disabled={busy} onChange={e => setPassage(e.target.checked)} /> Open at the selected passage</label>
-        {passage && <><blockquote>{passageWords?.map(w => w.text).join(' ')}</blockquote><label>Ask your friend (optional)<textarea aria-label="Question for your friend" maxLength={500} value={question} disabled={busy} onChange={e => setQuestion(e.target.value)} placeholder="Does this sound right?" /></label><small>The link opens at these words. Your friend can still watch the whole video.</small></>}
+        <label><input type="checkbox" checked={passage} disabled={busy} onChange={e => setPassage(e.target.checked)} /> Share only the selected passage</label>
+        {passage && <><blockquote>{passageWords?.map(w => w.text).join(' ')}</blockquote><label>Ask your friend (optional)<textarea aria-label="Question for your friend" maxLength={500} value={question} disabled={busy} onChange={e => setQuestion(e.target.value)} placeholder="Does this sound right?" /></label><small>Only this passage is processed and uploaded. Feedback keeps the original source timestamps.</small></>}
       </div>}
+      {mode === 'audit' && <label><input type="checkbox" checked={offlineVideo} disabled={busy} onChange={e => setOfflineVideo(e.target.checked)} /> Include video sections for watching after I leave (larger upload)</label>}
       <div className="review-toolbar"><button className="chip confirm-primary" disabled={busy} onClick={() => void create()}>{mode === 'edit' ? 'Create editing link' : binding ? 'Create fresh review snapshot' : 'Create review link'}</button>
         {bindings.length > 0 && <select aria-label="Review link" value={binding?.id || ''} disabled={busy} onChange={e => setBinding(bindings.find(b => b.id === e.target.value) || null)}><option value="">Choose a review</option>{bindings.map((b, i) => <option key={b.id} value={b.id}>Review {i + 1} · {b.id.slice(0, 6)}</option>)}</select>}
       </div>
@@ -167,16 +217,18 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
         {inbox.bindings.map((b, i) => <button key={b.id} className="chip" aria-pressed={binding?.id === b.id} onClick={() => setBinding(b)}>{inbox.summaries[b.id]?.name || `Review ${i + 1}`} · {inbox.summaries[b.id]?.pending ?? '…'} pending{inbox.unavailable[b.id] ? ' · unavailable' : ''}</button>)}
       </div>}
       {busy && <div role="status"><p>{status}</p><progress max={1} value={ratio} /><button className="chip" onClick={() => abort.current?.abort()}>Cancel sharing</button></div>}
+      {metrics && <p role="status">{metrics.usefulMs != null ? `Link ready in ${(metrics.usefulMs / 1000).toFixed(1)}s · ` : ''}{(metrics.bytes / 1024 / 1024).toFixed(2)} MiB uploaded{!busy ? ` · elapsed ${(metrics.totalMs / 1000).toFixed(1)}s` : ''}</p>}
       {view === 'share' && binding && <div className="review-link-box">
         {passageMissing && <p role="alert">These words are not in this review copy. Create a fresh review snapshot to share this passage.</p>}
         {room?.published && !passageMissing && <><label>{binding.mode === 'edit' ? 'Full editing link' : passage && linkFocus ? 'Passage review link' : 'Audit link'}<input readOnly value={link} onFocus={e => e.target.select()} /></label><button className="chip" onClick={() => void navigator.clipboard.writeText(link).then(() => onToast('Review link copied.')).catch(() => setError('Select and copy the link above.'))}>Copy link</button><a className="chip" href={link} target="_blank" rel="noreferrer">{binding.mode === 'edit' ? 'Open full editor' : 'Open review'}</a></>}
+        {room?.delivery && room.delivery.state !== 'complete' && <button className="chip" disabled={busy} onClick={() => void resume()}>Resume upload</button>}
         <button className="chip" onClick={() => void refresh()}>Refresh feedback</button>
         {room?.mode === 'edit' && <button className="chip confirm-primary" onClick={() => void pullEdits()}>Bring shared edits into this project</button>}
         <button className="chip" onClick={() => setConfirmRevoke(!confirmRevoke)}>Revoke link…</button>
         {confirmRevoke && <p>Remove this link, its previews, and feedback from the server? Your local edits stay. <button className="chip" onClick={() => void revoke()}>Revoke and delete previews</button></p>}
         <small>Owner access is saved in this browser. Save your project after accepting edits.</small>
       </div>}
-      {room?.published && room.mode !== 'edit' && binding && <ReviewWorkspace key={`${room.id}:${view}`} inbox={view === 'inbox'} room={room} accessKey={binding.ownerKey} onRoom={setRoom} onError={setError} onDecide={decide} decisionFor={p => useEditor.getState().project.reviewDecisions?.[`${room.id}:${p.id}`]} />}
+      {room?.published && room.mode !== 'edit' && binding && <ReviewWorkspace key={`${room.id}:${view}`} inbox={view === 'inbox'} room={room} accessKey={binding.ownerKey} onRoom={next => setRoom(current => latestReviewRoom(current, next))} onError={setError} onDecide={decide} decisionFor={p => useEditor.getState().project.reviewDecisions?.[`${room.id}:${p.id}`]} />}
     </>}
   </section></div>
 }
