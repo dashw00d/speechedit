@@ -1,3 +1,4 @@
+import { syncMediaPlayback, mediaPlaybackExhausted } from './lib/mediaPlayback'
 import { useEffect, useMemo, useRef } from 'react'
 import { programLength } from './lib/commands'
 import { projectToExportJob, type ProgramExportJob } from './lib/exportJob'
@@ -8,8 +9,6 @@ import {
   boundPlayhead,
   readMediaClock,
   shouldHardSeek,
-  shouldSeek,
-  shouldSetMediaTime,
   stepProgramPlayback
 } from './lib/seek'
 import { primaryAssetAt, sourceOffsetOf } from './lib/takes'
@@ -38,24 +37,7 @@ function syncVideo(
   fps = 30,
   hard = false
 ) {
-  if (!video?.src) return
-  video.playbackRate = speed * reviewRateOf()
-  applyGain(video, gain)
-  if (
-    shouldSetMediaTime({
-      current: video.currentTime,
-      desired: sourceTime,
-      seeking: video.seeking,
-      readyState: video.readyState,
-      playing,
-      hard,
-      fps
-    })
-  ) {
-    video.currentTime = sourceTime
-  }
-  if (playing && video.paused) void video.play().catch(() => undefined)
-  if (!playing && !video.paused) video.pause()
+  if (video) syncMediaPlayback(video, sourceTime, playing, speed * reviewRateOf(), gain, fps, hard)
 }
 
 function syncBeds(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
@@ -63,15 +45,8 @@ function syncBeds(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
     const id = item.bed.id ?? item.bed.path
     const el = document.querySelector(`audio[data-bed="${id}"]`) as HTMLAudioElement | null
     if (!el) continue
-    el.muted = false
-    el.volume = Math.min(1, Math.max(0, item.gain))
-    el.playbackRate = reviewRateOf()
-    if (!item.active || !playing) {
-      if (!el.paused) el.pause()
-      continue
-    }
-    if (shouldSeek(el.currentTime, item.sourceTime, playing && !hard, fps)) el.currentTime = item.sourceTime
-    if (el.paused) void el.play().catch(() => undefined)
+    if (!item.active) { if (!el.paused) el.pause(); continue }
+    syncMediaPlayback(el, item.sourceTime, playing, reviewRateOf(), item.gain, fps, hard)
   }
 }
 
@@ -84,9 +59,7 @@ function syncOverlays(look: ProgramLook, playing: boolean, fps = 30, hard = fals
       if (!el.paused) el.pause()
       continue
     }
-    el.playbackRate = (item.layer.speed || 1) * reviewRateOf()
-    if (shouldSeek(el.currentTime, item.sourceTime, playing && !hard, fps)) el.currentTime = item.sourceTime
-    if (el.paused) void el.play().catch(() => undefined)
+    syncMediaPlayback(el, item.sourceTime, playing, (item.layer.speed || 1) * reviewRateOf(), 0, fps, hard)
   }
 }
 
@@ -130,7 +103,7 @@ export function useEngine(
   useEffect(() => {
     const prime = () => {
       const video = videoRef.current
-      if (video && usePlayback.getState().playing && video.paused) {
+      if (video && usePlayback.getState().playing && video.paused && !video.ended && !mediaPlaybackExhausted(video)) {
         const look = sampleProgram(jobRef.current, usePlayback.getState().programTime)
         applyGain(video, look.voice.incomingGain)
         void video.play().catch(() => undefined)
@@ -201,7 +174,7 @@ export function useEngine(
     let lastInput: string | undefined
     let lastProgram = nowPlay.programTime
     const video = videoRef.current
-    if (video && video.src && video.paused) {
+    if (video && video.src && video.paused && !video.ended && !mediaPlaybackExhausted(video)) {
       const look = sampleProgram(jobRef.current, nowPlay.programTime)
       applyGain(video, look.voice.incomingGain)
       void video.play().catch(() => undefined)
@@ -232,10 +205,9 @@ export function useEngine(
       const take = primaryAssetAt(proj, programToSourceOf(proj, state.programTime))
       const offset = sourceOffsetOf(take)
       const video = videoRef.current
-      const moreProgram = state.programTime < duration - 1 / Math.max(12, fps)
       const onSlug = segmentAtProgram(proj, state.programTime)?.kind === 'slug'
       const clockRead =
-        onSlug || (video?.ended && moreProgram)
+        onSlug || video?.ended || mediaPlaybackExhausted(video)
           ? { source: null, present: false }
           : readMediaClock(video)
       const dt = wall * rate

@@ -128,6 +128,8 @@ app.whenReady().then(async () => {
     await reviewer.webContents.executeJavaScript(`document.querySelector('.word').click()`)
     await click(reviewer, 'Re-record audio')
     await click(reviewer, 'Start recording')
+    await waitFor(reviewer, `document.querySelector('.record-sheet progress')?.value >= 0.1`)
+    await click(reviewer, 'Stop early')
     await waitFor(reviewer, `document.querySelector('.record-sheet audio')`)
     await click(reviewer, 'Use recording')
     await waitFor(reviewer, `!document.querySelector('.record-sheet')`)
@@ -141,6 +143,10 @@ app.whenReady().then(async () => {
   if (recordingMode && !remote.project.tracks.find(t => t.id === 'voice_replacements')?.clips[0]?.replaceVoice) throw Error('Voice replacement did not survive the shared save')
   if (remote.projectRevision < 2) throw Error('No shared revision')
   const assetId = Object.keys(remote.project.assets)[0]
+  if (recordingMode) {
+    await waitFor(reviewer, `document.querySelector('[data-monitor-video]')?.src.includes('/media/${assetId}')`, 5000)
+    if (remote.project.tracks.find(t => t.id === 'voice_replacements')?.clips.length !== 1) throw Error('The collaborator take did not replace the previous take')
+  }
   const proxyBytes = await reviewer.webContents.executeJavaScript(`fetch('/api/reviews/${id}/media/${assetId}').then(r => r.arrayBuffer()).then(b => Array.from(new Uint8Array(b)))`)
   const proxyPath = join(profile, 'downloaded-proxy.webm'); writeFileSync(proxyPath, Buffer.from(proxyBytes))
   const probe = JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', proxyPath], { encoding: 'utf8' }).stdout)

@@ -10,6 +10,8 @@ import { projectToExportJob } from './exportJob'
 import { sampleProgram } from './programLook'
 import { validateExportJob, voiceAudioFilters } from './exportGraph'
 import { spawnSync } from 'node:child_process'
+import { primaryTakes } from './takes'
+import { prepareSharedProject, sharedProject } from '../../../shared/collaboration'
 
 function microphone() {
   let Processor: any
@@ -67,6 +69,18 @@ test('another take replaces overlapping replacement audio without layering voice
   const p = applyCommand(fixture(), { type: 'replaceRangeAudio', start: 1, end: 4, asset: asset('one', 3) })
   const next = applyCommand(p, { type: 'replaceRangeAudio', start: 2, end: 3, asset: asset('two', 1) })
   expect(next.tracks.find(t => t.id === 'voice_replacements')?.clips.map(c => [c.start, c.duration, c.inPoint])).toEqual([[1, 1, 0], [2, 1, 0], [3, 1, 2]])
+})
+test('a superseded recording never becomes source media after another collaborator replaces the entire slot', () => {
+  const original = fixture()
+  const first = applyCommand(original, { type: 'replaceRangeAudio', start: 1, end: 4, asset: asset('owner', 3) })
+  const second = applyCommand(first, { type: 'replaceRangeAudio', start: 1, end: 4, asset: asset('collaborator', 3) })
+  for (const project of [second, { ...sharedProject(prepareSharedProject(second)), assets: second.assets }]) {
+    expect(primaryTakes(project).map(a => a.id)).toEqual(['video'])
+    expect(projectToExportJob(project).segments.map(s => s.input)).toEqual(projectToExportJob(original).segments.map(s => s.input))
+    expect(project.tracks.find(t => t.id === 'voice_replacements')?.clips.map(c => [c.assetId, c.start, c.duration])).toEqual([['collaborator', 1, 3]])
+    expect(sampleProgram(projectToExportJob(project), 3.99).voice.gain).toBe(0)
+    expect(sampleProgram(projectToExportJob(project), 4).voice.gain).toBeGreaterThan(0)
+  }
 })
 test('re-recording preserves ordinary audio and trims moved takes while respecting track locks', () => {
   const p = applyCommand(fixture(), { type: 'replaceRangeAudio', start: 1, end: 4, asset: asset('one', 3) })

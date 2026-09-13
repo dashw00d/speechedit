@@ -162,7 +162,7 @@ export function stepProgramPlayback(input: {
   if (abs != null && !sourceInHoleOn(input.resolved, abs)) {
     const fromMedia = sourceToProgramOn(input.resolved, abs)
     if (Math.abs(fromMedia - wallProgram) <= seekSlop(true, fps)) {
-      return { program: fromMedia, clock: 'media', hard: false }
+      return { program: Math.max(input.lastProgram, fromMedia), clock: 'media', hard: false }
     }
     return { program: wallProgram, clock: 'wall', hard: true }
   }

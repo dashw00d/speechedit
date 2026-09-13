@@ -407,3 +407,18 @@ describe('program-master playback across cuts', () => {
     expect(holesSeen).toBeGreaterThan(20)
   })
 })
+
+test('decoder drift cannot move the program backwards near a recording boundary', () => {
+  const resolved = resolveProgram(videoAssetProject())
+  const stepped = stepProgramPlayback({ lastProgram: 0.5, requestedProgram: 0.5, dt: 1 / 60, mediaSource: 0.49, mediaPresent: true, resolved })
+  expect(stepped.program).toBe(0.5)
+})
+
+test('an exhausted primary decoder lets the last fraction of the program finish', () => {
+  const resolved = resolveProgram(videoAssetProject())
+  let program = resolved.length - 0.01
+  for (let frame = 0; frame < 3; frame++) {
+    program = stepProgramPlayback({ lastProgram: program, requestedProgram: program, dt: 1 / 60, mediaSource: null, mediaPresent: false, resolved }).program
+  }
+  expect(program).toBeGreaterThan(resolved.length)
+})

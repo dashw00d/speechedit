@@ -1,3 +1,4 @@
+import { mediaPlaybackExhausted } from '../lib/mediaPlayback'
 import { AddContentMenu } from './AddContentMenu'
 import { blocksEditorShortcut } from '../lib/keyboard'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type CSSProperties } from 'react'
@@ -142,7 +143,7 @@ export function Monitor({ onToast }: { onToast?: (msg: string) => void }) {
   function onPlayClick() {
     const willPlay = !playing
     const video = videoRef.current
-    if (video && willPlay) {
+    if (video && willPlay && !video.ended && !mediaPlaybackExhausted(video)) {
       video.muted = false
       video.volume = Math.min(1, Math.max(0, incomingGain))
       void video.play().catch(() => undefined)

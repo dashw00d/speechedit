@@ -13,7 +13,7 @@ function overlayAssetIds(tracks: Track[]): Set<string> {
 
 export function isPrimaryTake(project: Pick<Project, 'assets' | 'tracks'>, asset: Asset): boolean {
   if (asset.sourceOffset != null) return true
-  if (!asset.path || asset.kind === 'image') return false
+  if (asset.isRecording || !asset.path || asset.kind === 'image') return false
   return !overlayAssetIds(project.tracks).has(asset.id)
 }
 
