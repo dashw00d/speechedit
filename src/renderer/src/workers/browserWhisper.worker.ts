@@ -3,9 +3,9 @@ import wasmUrl from '../../../../node_modules/@huggingface/transformers/dist/ort
 import runtimeUrl from '../../../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs?url'
 import { browserGpuUnavailableReason } from '../lib/browserGpu'
 
-const MODEL = 'onnx-community/whisper-tiny.en'
-const MODEL_REVISION = '2575352d61be1bf7225cf8f8b268a4678025fc58'
-const MODEL_CACHE_VERSION = 'v2'
+const MODEL = 'onnx-community/whisper-tiny.en_timestamped'
+const MODEL_REVISION = 'aeaa13760958b03fac5062f457d317d3319c3168'
+const MODEL_CACHE_VERSION = 'v3'
 
 type WorkerRequest =
   | { type: 'load'; backend?: 'wasm'; fallbackReason?: string }
@@ -135,10 +135,9 @@ scope.onmessage = (event) => {
       const run = await load()
       send({ type: 'transcription-status', id: request.id, detail: `Listening locally with ${backend === 'webgpu' ? 'WebGPU' : 'the compatibility engine'}` })
       const output = await run(request.audio, {
-        // The compact WebGPU export does not include cross-attention tensors,
-        // so native word timestamps are unavailable. Segment timestamps are
-        // stable; SpeechEdit expands those phrases onto its Word timeline.
-        return_timestamps: true,
+        // This export includes the cross-attention tensors needed to align
+        // individual words with speech, including on the CPU fallback.
+        return_timestamps: 'word',
         chunk_length_s: 30,
         stride_length_s: 5,
         force_full_sequences: false,
@@ -149,8 +148,10 @@ scope.onmessage = (event) => {
         const text = chunk.text?.trim() ?? ''
         const start = chunk.timestamp?.[0]
         const end = chunk.timestamp?.[1]
-        if (!text || typeof start !== 'number') return []
-        return [{ text, start, end: typeof end === 'number' ? Math.max(start, end) : Math.min(duration, start + 0.5) }]
+        if (!text || typeof start !== 'number' || !Number.isFinite(start) || start >= duration) return []
+        const boundedStart = Math.max(0, start)
+        const boundedEnd = typeof end === 'number' && Number.isFinite(end) ? end : start + 0.5
+        return [{ text, start: boundedStart, end: Math.min(duration, Math.max(boundedStart, boundedEnd)) }]
       })
       send({
         type: 'result',

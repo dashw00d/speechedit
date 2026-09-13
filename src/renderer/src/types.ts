@@ -450,6 +450,8 @@ export type Command =
       assetId: string
       /** Final ASR result: add missing chapters without replacing existing ones. */
       complete?: boolean
+      /** Explicit re-transcription may replace an existing, longer transcript. */
+      replaceWords?: boolean
       words?: Word[]
       analysis?: Pick<AnalysisCache, 'silence' | 'staticRegions' | 'loudness'> & {
         sceneTimes?: number[]

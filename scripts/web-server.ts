@@ -15,8 +15,10 @@ const webRoot = resolve(process.env.SPEECHEDIT_WEB_ROOT || 'src/renderer/dist')
 const whisperCacheRoot = resolve(
   process.env.SPEECHEDIT_CACHE_DIR || '.cache/speechedit-browser-whisper'
 )
-const whisperModelRevision = '2575352d61be1bf7225cf8f8b268a4678025fc58'
-const whisperBrowserCacheVersion = 'v2'
+const whisperModelRevisions: Record<string, string> = {
+  'onnx-community/whisper-tiny.en': '2575352d61be1bf7225cf8f8b268a4678025fc58',
+  'onnx-community/whisper-tiny.en_timestamped': 'aeaa13760958b03fac5062f457d317d3319c3168'
+}
 const demoAiModel = 'openrouter/free'
 const demoAiKey = process.env.OPENROUTER_API_KEY || ''
 const demoLimit = Math.max(1, Number(process.env.SPEECHEDIT_DEMO_REQUESTS_PER_HOUR || 10))
@@ -175,7 +177,7 @@ async function serveWhisperModel(
 ): Promise<boolean> {
   if (!pathname.startsWith('/whisper-models/')) return false
   const parts = decodeURIComponent(pathname.slice('/whisper-models/'.length)).split('/').filter(Boolean)
-  const resourceParts = parts[0] === whisperBrowserCacheVersion ? parts.slice(1) : parts
+  const resourceParts = ['v2', 'v3'].includes(parts[0]) ? parts.slice(1) : parts
   if (resourceParts.length < 3 || resourceParts.some((part) => part === '..' || part.includes('\\'))) {
     response.statusCode = 400
     response.end('Invalid model path')
@@ -203,6 +205,12 @@ async function serveWhisperModel(
       return true
     }
     const [owner, model, ...fileParts] = resourceParts
+    const whisperModelRevision = whisperModelRevisions[`${owner}/${model}`]
+    if (!whisperModelRevision) {
+      response.statusCode = 404
+      response.end('Unknown Whisper model')
+      return true
+    }
     const upstreamUrl = `https://huggingface.co/${encodeURIComponent(owner)}/${encodeURIComponent(model)}/resolve/${whisperModelRevision}/${fileParts.map(encodeURIComponent).join('/')}`
     const upstream = await fetch(upstreamUrl, { redirect: 'follow' })
     if (!upstream.ok || !upstream.body) {

@@ -47,7 +47,7 @@ export async function transcribeCurrentRecording(onToast: (message: string) => v
     if (!stillCurrent()) { onToast('The recording or transcript changed. Run transcription again to include those changes.'); return }
     const words = wordsFromAsr(cues, project.transcript.speakers[0]?.id ?? 'ryan')
     if (!words.length) throw new Error('Whisper found no spoken words. Try another recording or import a transcript.')
-    useEditor.getState().dispatch({ type: 'attachTakeIntel', assetId: asset.id, words, whispered: cues, complete: true })
+    useEditor.getState().dispatch({ type: 'attachTakeIntel', assetId: asset.id, words, whispered: cues, complete: true, replaceWords: true })
     onToast(`Transcript ready · ${words.length} words · ${useEditor.getState().project.scenes.length} chapters. Undo restores the previous transcript.`)
   } catch (error) {
     failed = !isJobCancelled(error)

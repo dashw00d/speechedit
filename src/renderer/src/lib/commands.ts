@@ -1662,16 +1662,19 @@ export function applyCommand(project: Project, command: Command): Project {
         }
       }
       if (command.words?.length) {
-        const inRange = next.transcript.words.filter((word) => overlap(word, span) > 0)
+        // ASR can return zero-duration words. They still belong to this take
+        // and must be replaced, otherwise each retry duplicates them.
+        const inTake = (word: Word) => overlap(word, span) > 0 || (word.start >= span.start && word.start < span.end)
+        const inRange = next.transcript.words.filter(inTake)
         const incoming = command.words.map((word) => ({
           ...word,
           id: word.id || uid('w'),
           start: word.start + offset,
           end: word.end + offset
         }))
-        if (takeWordsNeedReplace(inRange, incoming)) {
+        if (command.replaceWords || takeWordsNeedReplace(inRange, incoming)) {
           const words = [
-            ...next.transcript.words.filter((word) => overlap(word, span) <= 0),
+            ...next.transcript.words.filter((word) => !inTake(word)),
             ...incoming
           ]
           next = applyCommand(next, { type: 'setTranscript', words })

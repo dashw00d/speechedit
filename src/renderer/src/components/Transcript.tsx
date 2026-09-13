@@ -3,10 +3,11 @@ import { transcribeCurrentRecording } from '../lib/transcribeAction'
 import { addSceneLowerThirdsFromContext } from '../lib/lowerThird'
 import { generateCaptionsFromContext } from '../lib/captionGenerate'
 import { blocksEditorShortcut, shortcutLabel } from '../lib/keyboard'
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { leftoverForSpan, reviewGap } from '../lib/analysis'
 import { isFillerToken, isPlaceholderWord, transcriptIsPlaceholder } from '../lib/transcript'
 import { ingestDroppedFile } from '../lib/fileActions'
+import { projectForPlayback } from '../lib/playbackProject'
 import { currentWord } from '../lib/edl'
 import { programToSourceOf, sourceToProgramOf } from '../lib/resolver'
 import {
@@ -74,11 +75,15 @@ export function Transcript({ onToast }: { onToast?: (msg: string) => void }) {
   const selectWords = useEditor((s) => s.selectWords)
   const selectScene = useEditor((s) => s.selectScene)
   const dispatch = useEditor((s) => s.dispatch)
-  const programTime = usePlayback((s) => s.programTime)
-  const sourceTime = programToSourceOf(project, programTime)
+  const previewSafeCuts = useEditor((s) => s.previewSafeCuts)
+  const playbackProject = useMemo(() => projectForPlayback(project, previewSafeCuts), [project, previewSafeCuts])
   const seekSource = usePlayback((s) => s.seekSource)
   const playLoop = usePlayback((s) => s.playLoop)
-  const active = currentWord(project.transcript.words, sourceTime)
+  // Subscribe to word changes, not every video frame: long transcripts should
+  // not rebuild their entire button tree sixty times a second.
+  const active = usePlayback((s) => currentWord(
+    playbackProject.transcript.words, programToSourceOf(playbackProject, s.programTime)
+  ))
   const [editing, setEditing] = useState<string | null>(null)
   const [paintIds, setPaintIds] = useState<string[] | null>(null)
   const [marquee, setMarquee] = useState<Marquee | null>(null)

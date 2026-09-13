@@ -82,3 +82,41 @@ describe('transcription completion', () => {
     } finally { host.transcribe = saved }
   })
 })
+
+
+test('explicit re-transcription replaces equal-length timings and shorter results; undo restores edits', async () => {
+  const saved = host.transcribe
+  const project = projectFromTake(take)
+  const cutProject = applyCommand(project, { type: 'deleteRange', start: 3, end: 4, source: 'transcript' })
+  useEditor.getState().loadProject(cutProject)
+  useEditor.getState().setAnalyzing(null)
+  useEditor.getState().setExporting(false)
+  const revised = cues.map(cue => ({ ...cue, start: cue.start + 0.2, end: cue.end - 0.2 }))
+  host.transcribe = async () => revised
+  try {
+    await transcribeCurrentRecording(() => undefined)
+    const result = useEditor.getState().project
+    expect(result.transcript.words[0].start).toBe(0.2)
+    expect(result.transcript.words.length).toBe(cutProject.transcript.words.length)
+    expect(result.cuts).toEqual(cutProject.cuts)
+    expect(result.scenes).toEqual(cutProject.scenes)
+    useEditor.getState().undo()
+    expect(useEditor.getState().project.transcript).toEqual(cutProject.transcript)
+    host.transcribe = async () => revised.slice(0, 1)
+    await transcribeCurrentRecording(() => undefined)
+    expect(useEditor.getState().project.transcript.words).toHaveLength(4)
+  } finally { host.transcribe = saved }
+})
+
+
+test('re-transcription removes old zero-duration words only from the selected take', () => {
+  const project = projectFromTake(take)
+  const zero = { ...project.transcript.words[0], id: 'zero', start: 4, end: 4 }
+  const other = { ...zero, id: 'other', start: 12, end: 12 }
+  project.transcript = { ...project.transcript, words: [...project.transcript.words, zero, other] }
+  const result = applyCommand(project, {
+    type: 'attachTakeIntel', assetId: 'source', words: take.words, replaceWords: true
+  })
+  expect(result.transcript.words.some(word => word.id === 'zero')).toBe(false)
+  expect(result.transcript.words.find(word => word.id === 'other')).toEqual(other)
+})
