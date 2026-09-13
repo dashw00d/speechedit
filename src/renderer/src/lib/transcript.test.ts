@@ -10,6 +10,7 @@ import {
   transcriptIsPlaceholder,
   wordsFromIslands
 } from './transcript'
+import { currentWord } from './edl'
 
 const whisperCli = {
   text: 'Hello there um world',
@@ -62,6 +63,19 @@ describe('drop / open transcript JSON', () => {
       words: [{ id: 'w_keep', text: 'Kept', start: 1, end: 2, speaker: 'ryan', deleted: true }]
     })
     expect(kept[0]).toMatchObject({ id: 'w_keep', deleted: true, text: 'Kept' })
+  })
+
+  test('native SpeechEdit words[] with a zero-duration row stays highlightable', () => {
+    const words = parseTranscriptJson({
+      words: [
+        { id: 'a', text: 'Hello', start: 0, end: 0.3, speaker: 'ryan', deleted: false },
+        { id: 'zero', text: 'uh', start: 0.3, end: 0.3, speaker: 'ryan', deleted: false },
+        { id: 'b', text: 'world', start: 0.3, end: 0.6, speaker: 'ryan', deleted: false }
+      ]
+    })
+    const zero = words.find((w) => w.id === 'zero')
+    expect(zero!.end).toBeGreaterThan(zero!.start)
+    expect(currentWord(words, zero!.start)?.id).toBe('zero')
   })
 
   test('openai-whisper segments.words[] keep provider times (no lerp)', () => {

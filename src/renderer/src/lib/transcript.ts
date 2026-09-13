@@ -1,28 +1,31 @@
 import type { Word } from '../types'
 import { parseAsrPayload } from '../../../shared/asr'
 import { wordsFromAsr } from './asr'
+import { withPlayableWordDurations } from './edl'
 import { uid } from './time'
 
 function mapNativeWords(list: unknown[]): Word[] {
-  return list
-    .map((item) => {
-      if (!item || typeof item !== 'object') {
-        return { id: uid('w'), text: '', start: 0, end: 0, speaker: 'ryan', deleted: false }
-      }
-      const row = item as Partial<Word> & { word?: string }
-      const text = String(row.text ?? row.word ?? '').trim()
-      const start = Number(row.start ?? 0)
-      const end = Number(row.end ?? start + 0.2)
-      return {
-        id: typeof row.id === 'string' ? row.id : uid('w'),
-        text,
-        start,
-        end,
-        speaker: row.speaker ?? 'ryan',
-        deleted: Boolean(row.deleted)
-      }
-    })
-    .filter((w) => w.text)
+  return withPlayableWordDurations(
+    list
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return { id: uid('w'), text: '', start: 0, end: 0, speaker: 'ryan', deleted: false }
+        }
+        const row = item as Partial<Word> & { word?: string }
+        const text = String(row.text ?? row.word ?? '').trim()
+        const start = Number(row.start ?? 0)
+        const end = Number(row.end ?? start + 0.2)
+        return {
+          id: typeof row.id === 'string' ? row.id : uid('w'),
+          text,
+          start,
+          end,
+          speaker: row.speaker ?? 'ryan',
+          deleted: Boolean(row.deleted)
+        }
+      })
+      .filter((w) => w.text)
+  )
 }
 
 function looksNativeWordRow(item: unknown): boolean {
@@ -87,7 +90,7 @@ export function parseSrt(text: string): Word[] {
       words.push({ id: uid('w'), text: token, start: t0, end: t1, speaker: 'ryan', deleted: false })
     })
   }
-  return words
+  return withPlayableWordDurations(words)
 }
 
 export function parseVtt(text: string): Word[] {

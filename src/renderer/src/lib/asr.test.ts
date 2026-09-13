@@ -13,6 +13,7 @@ import {
   TRANSCRIPT_PROVIDERS
 } from '../../../shared/asr'
 import { wordsFromAsr, wordsFromCues } from './asr'
+import { currentWord } from './edl'
 
 const whisperWords = {
   text: 'Hello there world',
@@ -208,6 +209,21 @@ describe('cues → Word[]', () => {
       ['world', 0.75, 1.1]
     ])
     expect(words.every((w) => w.id.startsWith('w'))).toBe(true)
+  })
+
+  test('whisper zero-duration tokens get a reachable highlight window', () => {
+    const words = wordsFromCues(
+      [
+        { text: 'Hello', start: 0.1, end: 0.4 },
+        { text: 'uh', start: 0.4, end: 0.4 },
+        { text: 'world', start: 0.4, end: 0.8 }
+      ],
+      { wordLevel: true }
+    )
+    const zero = words.find((w) => w.text === 'uh')
+    expect(zero).toBeDefined()
+    expect(zero!.end).toBeGreaterThan(zero!.start)
+    expect(currentWord(words, zero!.start)?.text).toBe('uh')
   })
 
   test('phrase cues split only when words[] were absent', () => {

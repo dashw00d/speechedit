@@ -70,6 +70,15 @@ export function projectKept(project: Project): Interval[] {
   return invertIntervals(projectCuts(project), project.sourceDuration)
 }
 
+export const MIN_WORD_DURATION = 0.06
+
+/** ASR zero-duration tokens (start === end) are unreachable for highlight and cut; give them a frame-visible window. */
+export function withPlayableWordDurations(words: Word[]): Word[] {
+  return words.map((word) =>
+    word.end > word.start ? word : { ...word, end: word.start + MIN_WORD_DURATION }
+  )
+}
+
 export function currentWord(words: Word[], sourceTime: number): Word | undefined {
   return words.find((w) => !w.deleted && sourceTime >= w.start && sourceTime < w.end)
 }

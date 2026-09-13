@@ -6,6 +6,7 @@ import {
   type AsrCue,
   type AsrResult
 } from '../../../shared/asr'
+import { withPlayableWordDurations } from './edl'
 import { uid } from './time'
 
 export {
@@ -27,14 +28,16 @@ export function wordsFromCues(
   opts?: { wordLevel?: boolean; speaker?: string }
 ): Word[] {
   const speaker = opts?.speaker ?? 'ryan'
-  return expandAsrCues(cues, opts?.wordLevel).map((c) => ({
-    id: uid('w'),
-    text: c.text,
-    start: c.start,
-    end: c.end,
-    speaker: c.speaker || speaker,
-    deleted: false
-  }))
+  return withPlayableWordDurations(
+    expandAsrCues(cues, opts?.wordLevel).map((c) => ({
+      id: uid('w'),
+      text: c.text,
+      start: c.start,
+      end: c.end,
+      speaker: c.speaker || speaker,
+      deleted: false
+    }))
+  )
 }
 
 export function wordsFromAsr(
