@@ -1,3 +1,4 @@
+import { prepareReviewRecording } from '../lib/recordingEdges'
 import { ReviewPlayer, type ReviewPlayerHandle } from './ReviewPlayer'
 import { reviewScope } from '../../../shared/reviewMedia'
 import { useEffect, useRef, useState } from 'react'
@@ -260,10 +261,11 @@ export function ReviewWorkspace({ room, accessKey, onRoom, onError, onDecide, de
         }) }}><label>Reply<textarea maxLength={2000} value={reply} onChange={e => setReply(e.target.value)} /></label><button className="chip" disabled={busy || !author.trim() || !reply.trim()}>Post reply</button></form>}
       </article>)}
     </div>
-  </div>{recording && <RecordReplacementSheet words={recording.words} duration={recording.end - recording.start} name={author} onName={setAuthor} onClose={() => setRecording(null)} submitLabel="Send recording suggestion" onUse={async (audio, signal) => {
+  </div>{recording && <RecordReplacementSheet words={recording.words} duration={recording.end - recording.start} prepare={signal => prepareReviewRecording(room, recording, signal)} name={author} onName={setAuthor} onClose={() => setRecording(null)} submitLabel="Send recording suggestion" onUse={async (audio, signal, preparedRange) => {
+    const takeRange = preparedRange ?? recording
     const asset = await uploadRecording(audio, signal, { id: room.id, key: accessKey })
     if (signal.aborted) return
-    const next = await reviewMutation(room.id, '/proposals', accessKey, room.revision, { author, text: text.trim() || 'Suggested voice replacement', edit: { kind: 'replaceAudio', start: recording.start, end: recording.end, assetId: asset.id } })
+    const next = await reviewMutation(room.id, '/proposals', accessKey, room.revision, { author, text: text.trim() || 'Suggested voice replacement', edit: { kind: 'replaceAudio', start: takeRange.start, end: takeRange.end, assetId: asset.id } })
     onRoom(next); setText(''); setNotice('Recording sent. The owner can listen and accept it.')
   }} />}</>
 }

@@ -1,3 +1,4 @@
+import { prepareProjectRecording } from './lib/recordingEdges'
 import { useReviewDetails } from './lib/useReviewDetails'
 import { RecordReplacementSheet } from './components/RecordReplacementSheet'
 import { recordingSlot } from './lib/replaceAudio'
@@ -486,14 +487,15 @@ export function App() {
       <WorkflowSheet open={workflowOpen} onClose={() => setWorkflowOpen(false)} onToast={setToast} />
       <ConfirmSheet />
       <PreferencesSheet />
-      {recording && <RecordReplacementSheet words={recording.words} duration={recording.duration} onClose={() => setRecording(null)} onUse={async (audio, signal) => {
+      {recording && <RecordReplacementSheet words={recording.words} duration={recording.duration} prepare={signal => prepareProjectRecording(recording.project, recording, signal)} onClose={() => setRecording(null)} onUse={async (audio, signal, preparedRange) => {
+        const range = preparedRange ?? recording
         const shared = isSharedEditor() ? { id: location.pathname.split('/')[2], key: location.hash.slice(1) } : undefined
         const asset = await uploadRecording(audio, signal, shared)
         if (signal.aborted) return
         const current = useEditor.getState().project
-        const conflict = reviewConflict(snapshotForReview(recording.project), snapshotForReview(current), { kind: 'replaceAudio', start: recording.start, end: recording.end, assetId: asset.id })
+        const conflict = reviewConflict(snapshotForReview(recording.project), snapshotForReview(current), { kind: 'replaceAudio', start: range.start, end: range.end, assetId: asset.id })
         if (conflict) throw new Error(conflict)
-        useEditor.getState().dispatch({ type: 'replaceRangeAudio', start: recording.start, end: recording.end, asset })
+        useEditor.getState().dispatch({ type: 'replaceRangeAudio', start: range.start, end: range.end, asset })
         setToast('Replaced the selected voice recording. Undo restores the original audio.')
       }} />}
       {shareOpen && <ShareSheet initialView={shareView} inbox={inbox} onClose={() => setShareOpen(false)} onToast={setToast} />}

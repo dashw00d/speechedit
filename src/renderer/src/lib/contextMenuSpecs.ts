@@ -1,3 +1,4 @@
+import { cleanRecordingEdges } from './recordingEdgeActions'
 import type { Command } from '../types'
 import {
   gapInspectorDetail,
@@ -299,6 +300,17 @@ function clipMenu(clipId: string): ContextMenuSpec {
       run: () => playback.seekProgram(clip.start)
     }
   ]
+
+  if (clip.replaceVoice) items.unshift({
+    id: 'clean-recording-edges',
+    label: 'Clean up recording edges',
+    hint: 'Find nearby pauses and mute leftover original voice. Keeps this take in place.',
+    run: async () => {
+      toast('Finding quiet edges…')
+      try { toast(await cleanRecordingEdges(clip.id)) }
+      catch (error) { toast(error instanceof Error ? error.message : 'Could not clean up the recording edges.') }
+    }
+  })
 
   if (!isPrimary) {
     items.push({

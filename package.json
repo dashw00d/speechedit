@@ -19,6 +19,7 @@
     "bench:codecs": "bun scripts/codec-experiment/bench.ts",
     "smoke:real-speech": "env -u ELECTRON_RUN_AS_NODE electron scripts/real-speech-playback-smoke.cjs",
     "smoke:track-visibility": "env -u ELECTRON_RUN_AS_NODE electron scripts/track-visibility-smoke.cjs",
+    "smoke:recording-edges": "env -u ELECTRON_RUN_AS_NODE electron scripts/recording-edges-smoke.cjs",
     "smoke:recording-playback": "env -u ELECTRON_RUN_AS_NODE electron scripts/recording-playback-smoke.cjs",
     "smoke:passage": "SPEECHEDIT_PASSAGE=1 env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
     "smoke:review": "env -u ELECTRON_RUN_AS_NODE electron scripts/review-ui-smoke.cjs",
