@@ -1,0 +1,7 @@
+runs/
+reviews-*/
+whisper-*/
+service-*.log
+service-*.pid
+*.log
+qa429-debug.cjs

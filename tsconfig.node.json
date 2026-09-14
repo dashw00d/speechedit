@@ -21,7 +21,11 @@
     "vite.web.config.ts",
     "src/renderer/src/lib/exportGraph.ts",
     "src/renderer/src/types.ts",
-    "src/renderer/src/lib/theme.ts"
+    "src/renderer/src/lib/theme.ts",
+    "src/renderer/src/lib/resolver.ts",
+    "src/renderer/src/lib/edl.ts",
+    "src/renderer/src/lib/takes.ts",
+    "src/renderer/src/lib/keyframes.ts"
   ],
   "exclude": ["src/main/**/*.test.ts", "src/shared/**/*.test.ts"]
 }
