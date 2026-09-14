@@ -4308,3 +4308,7 @@ button:disabled,
 .shared-edit-bar small { color: var(--color-fg-muted); }
 .shared-edit-bar > p, .shared-conflict { flex-basis: 100%; margin: 0; }
 .shared-edit-bar details { max-height: 140px; overflow: auto; }
+
+.editor-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.editor-shell > .app { flex: 1; min-height: 0; height: auto; }
+.shared-editor > .editor-shell { flex: 1; height: auto; }

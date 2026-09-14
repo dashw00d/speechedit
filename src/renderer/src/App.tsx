@@ -6,6 +6,7 @@ import { reviewConflict } from '../../shared/review'
 import type { Project } from './types'
 import { useReviewInbox } from './lib/useReviewInbox'
 import { isSharedEditor } from './lib/sharedSession'
+import { OwnerSharedEdits } from './components/OwnerSharedEdits'
 import { ShareSheet } from './components/ShareSheet'
 import { WorkflowSheet } from './components/WorkflowSheet'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -317,6 +318,8 @@ export function App() {
   }, [])
 
   return (
+    <div className="editor-shell">
+      {!isElectron && !isSharedEditor() && <OwnerSharedEdits key={projectId} projectId={projectId} onToast={setToast} />}
     <div className="app" data-empty={emptyReel || undefined} data-mobile-pane={mobilePane}>
       <MenuBar
         onToast={setToast}
@@ -488,6 +491,7 @@ export function App() {
       <ExportSheet open={exportOpen} onClose={() => setExportOpen(false)} onToast={setToast} />
       <ShortcutsOverlay open={keysOpen} onClose={() => setKeysOpen(false)} />
       <ContextMenuHost menu={contextMenu} onClose={closeContextMenu} />
+    </div>
     </div>
   )
 }
