@@ -60,6 +60,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
     { mode: 'anchor'; viewX: number } | { mode: 'center' } | null
   >(null)
   const [scrollTick, setScrollTick] = useState(0)
+  const [laneViewport, setLaneViewport] = useState(0)
   const [fitPps, setFitPps] = useState(60)
   const [editFilter, setEditFilter] = useState<EditBlockFilter>('all')
   const editBlocks = useMemo(() => buildEditBlocks(project), [project])
@@ -97,6 +98,8 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
     const scroll = scrollRef.current
     if (!scroll) return
     const updateFit = () => {
+      const labelWidth = scroll.querySelector<HTMLElement>('.track-label')?.offsetWidth ?? LABEL_WIDTH
+      setLaneViewport(scroll.clientWidth - labelWidth)
       const next = Math.min(
         PPS_MAX,
         Math.max(PPS_MIN, (scroll.clientWidth - LABEL_WIDTH - 48) / Math.max(duration, 0.5))
@@ -138,8 +141,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   useLayoutEffect(() => {
     const scroll = scrollRef.current
     if (!playing || !scroll) return
-    const labelWidth = scroll.querySelector<HTMLElement>('.track-label')?.offsetWidth ?? LABEL_WIDTH
-    const viewport = scroll.clientWidth - labelWidth
+    const viewport = laneViewport
     if (viewport <= 0) return
     const playhead = programTime * pps
     const right = viewport * 0.8
@@ -149,7 +151,7 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
     if (Math.abs(next - scroll.scrollLeft) < 1) return
     scroll.scrollLeft = next
     setScrollTick(t => t + 1)
-  }, [playing, programTime, pps, fitPps])
+  }, [playing, programTime, pps, laneViewport])
 
   function zoomAroundPlayhead(nextPps: number) {
     const scroll = scrollRef.current
@@ -174,7 +176,14 @@ export function Timeline({ onToast }: { onToast?: (msg: string) => void } = {}) 
   }
 
   const scrollLeft = useMemo(() => scrollRef.current?.scrollLeft ?? 0, [scrollTick])
-  const overlayLeft = programTime * pps - scrollLeft
+  const playheadViewX = programTime * pps - scrollLeft
+  const followRight = laneViewport * 0.8
+  // scrollLeft is rounded to device pixels. Subtracting it from fractional
+  // playback time makes the pinned marker oscillate by a pixel while following.
+  // Keep that visual anchor steady; paused seeking still uses the exact position.
+  const overlayLeft = playing && laneViewport > 0 && Math.abs(playheadViewX - followRight) <= 1
+    ? followRight
+    : playheadViewX
   const overlayLeftAt = (t: number) => t * pps - scrollLeft
 
   function startPaint(clientX: number, opts: { erase: boolean; shift: boolean }) {
