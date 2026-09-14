@@ -1,0 +1,165 @@
+{
+  "baseline": {
+    "scenarios": {
+      "rya342": {
+        "undoEnabledBeforeMerge": true,
+        "undoWorkedBeforeMerge": true,
+        "mergeObservedAfterPeerSave": true,
+        "word3BeforeUndo": "G3",
+        "projectRevisionBefore": 3,
+        "projectRevisionAfter": 4,
+        "revisionAdvanced": true,
+        "undoEnabledAfterMerge": false,
+        "undoButtonAcceptedClick": false,
+        "word3AfterUndoAttempt": "G3",
+        "undoAfterMergeWorked": false,
+        "peerWord5Preserved": true,
+        "checks": {
+          "undoEnabledBeforeMerge": true,
+          "undoWorkedBeforeMerge": true,
+          "mergeObservedAfterPeerSave": true,
+          "revisionAdvanced": true,
+          "undoEnabledAfterMerge": false,
+          "undoAfterMergeWorked": false,
+          "peerEditPreserved": true
+        },
+        "ok": false
+      },
+      "crossCueControl": {
+        "guestStatus": "All changes saved \u00b7 v6",
+        "peerStatus": "All changes saved \u00b7 v6",
+        "guestConflict": "",
+        "peerConflict": "",
+        "serverWord0": "CrossA",
+        "serverWord4": "CrossB",
+        "guestWords": [
+          "CrossA",
+          "CrossB"
+        ],
+        "peerWords": [
+          "CrossA",
+          "CrossB"
+        ],
+        "checks": {
+          "noBlockingConflict": true,
+          "bothWordsPersisted": true,
+          "clientsConverged": true
+        },
+        "ok": true
+      },
+      "rya343": {
+        "guestSavedWord6": "SameCueA",
+        "peerLocalWord7": "SameCueB",
+        "peerStatus": "Resolve simultaneous edits \u00b7 v6",
+        "peerConflict": "Another editor changed the same items.\n\ntracks[v3].clips[cap_1y2bcc4src].text\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+        "guestStatus": "All changes saved \u00b7 v7",
+        "guestConflict": "",
+        "peerWord6": "different",
+        "peerWord7": "SameCueB",
+        "guestWord6": "SameCueA",
+        "guestWord7": "chapter.",
+        "serverWord6": "SameCueA",
+        "serverWord7": "chapter.",
+        "conflictTextObserved": "Another editor changed the same items.\n\ntracks[v3].clips[cap_1y2bcc4src].text\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+        "noBlockingConflict": false,
+        "bothWordsPersisted": false,
+        "clientsConverged": false,
+        "checks": {
+          "noBlockingConflict": false,
+          "bothWordsPersisted": false,
+          "clientsConverged": false
+        },
+        "ok": false
+      }
+    },
+    "failures": [
+      "RYA-342: Undo is disabled after the peer merge (merge wiped local history)",
+      "RYA-343: same-cue different-word edits hit a blocking \"Resolve simultaneous edits\" state (tracks[v3].clips[cap_1y2bcc4src].text)",
+      "RYA-343: both words did not persist (server word6=SameCueA, word7=chapter.)",
+      "RYA-343: clients did not converge on both words"
+    ],
+    "finishedAt": "2026-09-14T05:03:45.253Z",
+    "suiteExit": 2
+  },
+  "candidate": {
+    "scenarios": {
+      "rya342": {
+        "undoEnabledBeforeMerge": true,
+        "undoWorkedBeforeMerge": true,
+        "mergeObservedAfterPeerSave": true,
+        "word3BeforeUndo": "G3",
+        "projectRevisionBefore": 3,
+        "projectRevisionAfter": 4,
+        "revisionAdvanced": true,
+        "undoEnabledAfterMerge": true,
+        "undoButtonAcceptedClick": true,
+        "word3AfterUndoAttempt": "recording.",
+        "undoAfterMergeWorked": true,
+        "peerWord5Preserved": true,
+        "checks": {
+          "undoEnabledBeforeMerge": true,
+          "undoWorkedBeforeMerge": true,
+          "mergeObservedAfterPeerSave": true,
+          "revisionAdvanced": true,
+          "undoEnabledAfterMerge": true,
+          "undoAfterMergeWorked": true,
+          "peerEditPreserved": true
+        },
+        "ok": true
+      },
+      "crossCueControl": {
+        "guestStatus": "All changes saved \u00b7 v7",
+        "peerStatus": "All changes saved \u00b7 v7",
+        "guestConflict": "",
+        "peerConflict": "",
+        "serverWord0": "CrossA",
+        "serverWord4": "CrossB",
+        "guestWords": [
+          "CrossA",
+          "CrossB"
+        ],
+        "peerWords": [
+          "CrossA",
+          "CrossB"
+        ],
+        "checks": {
+          "noBlockingConflict": true,
+          "bothWordsPersisted": true,
+          "clientsConverged": true
+        },
+        "ok": true
+      },
+      "rya343": {
+        "guestSavedWord6": "SameCueA",
+        "peerLocalWord7": "SameCueB",
+        "peerStatus": "Resolve simultaneous edits \u00b7 v7",
+        "peerConflict": "Another editor changed the same items.\n\ntracks[v3].clips[cap_jqhmj8gsre].text\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+        "guestStatus": "All changes saved \u00b7 v8",
+        "guestConflict": "",
+        "peerWord6": "different",
+        "peerWord7": "SameCueB",
+        "guestWord6": "SameCueA",
+        "guestWord7": "chapter.",
+        "serverWord6": "SameCueA",
+        "serverWord7": "chapter.",
+        "conflictTextObserved": "Another editor changed the same items.\n\ntracks[v3].clips[cap_jqhmj8gsre].text\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+        "noBlockingConflict": false,
+        "bothWordsPersisted": false,
+        "clientsConverged": false,
+        "checks": {
+          "noBlockingConflict": false,
+          "bothWordsPersisted": false,
+          "clientsConverged": false
+        },
+        "ok": false
+      }
+    },
+    "failures": [
+      "RYA-343: same-cue different-word edits hit a blocking \"Resolve simultaneous edits\" state (tracks[v3].clips[cap_jqhmj8gsre].text)",
+      "RYA-343: both words did not persist (server word6=SameCueA, word7=chapter.)",
+      "RYA-343: clients did not converge on both words"
+    ],
+    "finishedAt": "2026-09-14T05:03:45.253Z",
+    "suiteExit": 2
+  }
+}
