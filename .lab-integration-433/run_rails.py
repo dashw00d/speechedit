@@ -34,6 +34,8 @@ RAILS = [
     ("qa363-auto", ".lab-rya363/qa363-auto.cjs", "QA365_OUT", "QA365_RUN_MS", 360000),
     ("qa437", ".lab-rya429/qa437.cjs", "QA437_OUT", "QA437_RUN_MS", 300000),
     ("rya479", "scripts/owner-workspace-sync-smoke.cjs", "QA471_OUT", "QA471_RUN_MS", 360000),
+    # RYA-504 wrong-key rail: needs the harness to write evidence into the rail dir.
+    ("rya504", "scripts/edit-key-smoke.cjs", "RYA504_OUT", "RYA504_RUN_MS", 300000, ["--out={out}"]),
 ]
 RAIL_BY_NAME = {r[0]: r for r in RAILS}
 
@@ -58,7 +60,9 @@ def base_env():
 
 
 def run_rail(name):
-    _, harness, out_var, run_var, run_ms = RAIL_BY_NAME[name]
+    entry = RAIL_BY_NAME[name]
+    _, harness, out_var, run_var, run_ms = entry[:5]
+    extra = entry[5] if len(entry) > 5 else []
     out = RUNS / name
     out.mkdir(parents=True, exist_ok=True)
     port = free_port()
@@ -90,9 +94,11 @@ def run_rail(name):
         if not ready:
             raise RuntimeError("service did not become ready")
         with (out / "harness.log").open("w") as hlog:
+            argv = [ELECTRON, "--no-sandbox", str(ROOT / harness),
+                    f"http://127.0.0.1:{port}"]
+            argv += [a.format(out=out) for a in extra]
             proc = subprocess.run(
-                [ELECTRON, "--no-sandbox", str(ROOT / harness),
-                 f"http://127.0.0.1:{port}"],
+                argv,
                 cwd=ROOT, env=env, stdout=hlog, stderr=subprocess.STDOUT,
                 timeout=run_ms / 1000 + HARNESS_TIMEOUT_PAD,
             )
