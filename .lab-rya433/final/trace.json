@@ -1,0 +1,48 @@
+[
+  {
+    "denial": {
+      "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour microphone is blocked. Allow microphone access in your browser or system settings, then retry. Nothing was recorded.\n\nRetry recording",
+      "uses": 0,
+      "observed": [
+        {
+          "clock": false,
+          "take": false
+        },
+        {
+          "clock": false,
+          "take": false
+        }
+      ]
+    },
+    "requests": 1
+  },
+  {
+    "retry": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour recording fits the selected slot. Listen for clipped words or extra silence before using it.\n\nRetry recording\nUse recording"
+  },
+  {
+    "injected": "PermissionDeniedError",
+    "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour microphone is blocked. Allow microphone access in your browser or system settings, then retry. Nothing was recorded.\n\nRetry recording"
+  },
+  {
+    "injected": "SecurityError",
+    "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour microphone is blocked. Allow microphone access in your browser or system settings, then retry. Nothing was recorded.\n\nRetry recording"
+  },
+  {
+    "injected": "NotFoundError",
+    "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nNo microphone was found. Connect a microphone, then retry. Nothing was recorded.\n\nRetry recording"
+  },
+  {
+    "injected": "NotReadableError",
+    "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour microphone could not start. Check that it works and is not in use by another app, then retry. Nothing was recorded.\n\nRetry recording"
+  },
+  {
+    "injected": "missing",
+    "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nMicrophone access is unavailable in this window. Open SpeechEdit using HTTPS or the desktop app, then retry. Nothing was recorded.\n\nRetry recording"
+  },
+  {
+    "stopEarlyCancel": "passed"
+  },
+  {
+    "countdownCancel": "passed"
+  }
+]

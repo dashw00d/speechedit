@@ -1,0 +1,22 @@
+[
+  {
+    "denial": {
+      "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour microphone is blocked. Allow microphone access in your browser or system settings, then retry. Nothing was recorded.\n\nRetry recording",
+      "uses": 0,
+      "observed": [
+        {
+          "clock": false,
+          "take": false
+        },
+        {
+          "clock": false,
+          "take": false
+        }
+      ]
+    },
+    "requests": 1
+  },
+  {
+    "retry": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nYour recording fits the selected slot. Listen for clipped words or extra silence before using it.\n\nRetry recording\nUse recording"
+  }
+]
