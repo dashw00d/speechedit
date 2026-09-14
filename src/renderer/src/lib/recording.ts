@@ -47,7 +47,7 @@ registerProcessor('slot-recorder', SlotRecorder);
 export async function captureAudio(duration: number, signal: AbortSignal, progress: (value: CaptureProgress) => void): Promise<{ result: Promise<CapturedAudio>; finish: () => void }> {
   if (!Number.isFinite(duration) || duration < 0.1 || duration > 120) throw new Error('Choose a passage between 0.1 and 120 seconds to re-record.')
   if (signal.aborted) throw new DOMException('Recording cancelled.', 'AbortError')
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone recording needs HTTPS or a local app window.')
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access is unavailable in this window. Open SpeechEdit using HTTPS or the desktop app, then retry. Nothing was recorded.')
   const context = new AudioContext({ sampleRate: 48000 })
   let stream: MediaStream | undefined, node: AudioWorkletNode | undefined
   const cleanup = () => { stream?.getTracks().forEach(track => track.stop()); node?.disconnect(); void context.close().catch(() => undefined) }
@@ -76,5 +76,18 @@ export async function captureAudio(duration: number, signal: AbortSignal, progre
     signal.removeEventListener('abort', cleanup)
     source.connect(node); node.connect(context.destination)
     return { result, finish: () => node?.port.postMessage('finish') }
-  } catch (e) { signal.removeEventListener('abort', cleanup); cleanup(); throw e }
+  } catch (e) {
+    signal.removeEventListener('abort', cleanup); cleanup()
+    const name = e instanceof Error ? e.name : ''
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+      throw new Error('Your microphone is blocked. Allow microphone access in your browser or system settings, then retry. Nothing was recorded.')
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      throw new Error('No microphone was found. Connect a microphone, then retry. Nothing was recorded.')
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError') {
+      throw new Error('Your microphone could not start. Check that it works and is not in use by another app, then retry. Nothing was recorded.')
+    }
+    throw e
+  }
 }

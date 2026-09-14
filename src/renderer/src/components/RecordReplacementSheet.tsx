@@ -39,7 +39,7 @@ export function RecordReplacementSheet({ words, duration, onClose, onUse, submit
     <p>Your slot is <strong>{duration.toFixed(2)} seconds</strong>. The video and everything after this passage stay in place.</p>
     {onName && <label>Your name<input value={name || ''} maxLength={80} onChange={e => onName(e.target.value)} placeholder="Name shown on the recording suggestion" /></label>}
     {error && <p className="review-error" role="alert">{error}</p>}
-    {stage === 'ready' && <><p>Get ready, then press Start. After 3–2–1, speak until the timer ends. You can listen and retry before using the take.</p><button className="chip confirm-primary" onClick={() => void start()}>Start recording</button></>}
+    {stage === 'ready' && <>{!error && <p>Get ready, then press Start. After 3–2–1, speak until the timer ends. You can listen and retry before using the take.</p>}<button className="chip confirm-primary" onClick={() => void start()}>{error ? 'Retry recording' : 'Start recording'}</button></>}
     {stage === 'permission' && <p role="status">Allow microphone access to begin the countdown…</p>}
     {stage === 'recording' && <>
       <div className="record-clock" role="status">{progress.countdown ? progress.countdown : `${Math.max(0, duration - progress.elapsed).toFixed(1)}s left`}</div>
