@@ -1,0 +1,159 @@
+{
+  "url": "http://127.0.0.1:57933",
+  "results": {
+    "scenarios": {
+      "A": {
+        "guestWords": [
+          "Cue1x",
+          "Cue2x"
+        ],
+        "peerWords": [
+          "Cue1x",
+          "Cue2x"
+        ],
+        "guestStatus": "All changes saved · v3",
+        "peerStatus": "All changes saved · v3",
+        "guestConflict": "",
+        "peerConflict": "",
+        "serverWords": [
+          "Cue1x",
+          "Cue2x"
+        ],
+        "mergedBothSides": true,
+        "ok": true
+      },
+      "B": {
+        "guestSaved": "SameCueA",
+        "peerStatus": "All changes saved · v5",
+        "peerConflict": "",
+        "peerWord6": "SameCueA",
+        "peerWord7": "SameCueB",
+        "guestWord6": "SameCueA",
+        "guestWord7": "SameCueB",
+        "serverWord6": "SameCueA",
+        "serverWord7": "SameCueB",
+        "conflictRaised": false,
+        "ok": true
+      }
+    },
+    "editLink": "http://127.0.0.1:57933/edit/056d94c44a6094a718f1991be38e3b56/edit/<room>#<key>",
+    "structure": {
+      "words": [
+        {
+          "id": "w_zepnpn21en",
+          "text": "Welcome"
+        },
+        {
+          "id": "w_59j9z5y1en",
+          "text": "to"
+        },
+        {
+          "id": "w_wvpcp3t1en",
+          "text": "this"
+        },
+        {
+          "id": "w_v3bw65f1en",
+          "text": "recording."
+        },
+        {
+          "id": "w_h95pfcj1en",
+          "text": "Now"
+        },
+        {
+          "id": "w_o8ics561en",
+          "text": "a"
+        },
+        {
+          "id": "w_k1wnwge1en",
+          "text": "different"
+        },
+        {
+          "id": "w_7ur9qbl1en",
+          "text": "chapter."
+        }
+      ],
+      "clips": [
+        {
+          "track": 0,
+          "id": "cap_rjqin891fc",
+          "text": "Welcome to this recording.",
+          "wordIds": null
+        },
+        {
+          "track": 0,
+          "id": "cap_aw8rvrs1fc",
+          "text": "Now a different chapter.",
+          "wordIds": null
+        }
+      ]
+    }
+  },
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "failed": [
+        {
+          "url": "https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&family=Nunito:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap",
+          "error": "net::ERR_BLOCKED_BY_CLIENT"
+        }
+      ]
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [
+        {
+          "url": "http://127.0.0.1:57933/api/reviews/056d94c44a6094a718f1991be38e3b56/project",
+          "status": 409,
+          "method": "PUT"
+        }
+      ],
+      "gone": [],
+      "failed": [
+        {
+          "url": "https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&family=Nunito:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap",
+          "error": "net::ERR_BLOCKED_BY_CLIENT"
+        }
+      ]
+    },
+    "peer": {
+      "partition": "peer",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "failed": [
+        {
+          "url": "https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&family=Nunito:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap",
+          "error": "net::ERR_BLOCKED_BY_CLIENT"
+        },
+        {
+          "url": "http://127.0.0.1:57933/api/reviews/056d94c44a6094a718f1991be38e3b56",
+          "error": "net::ERR_BLOCKED_BY_CLIENT"
+        }
+      ]
+    }
+  },
+  "finishedAt": "2026-09-14T08:05:44.912Z"
+}

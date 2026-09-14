@@ -51,15 +51,44 @@ export function prepareSharedProject(project: Project): Project {
   return sharedProject({ ...project, assets: Object.fromEntries(Object.entries(project.assets).map(([key, a]) => [key, { ...a, waveform: a.waveform.filter((_, i) => i % Math.max(1, Math.ceil(a.waveform.length / 2000)) === 0).map(n => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0))) }])) })
 }
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+/** Merge only clearly separate word spans; ambiguous/overlapping changes need a decision.
+ * Keep whitespace as tokens so merging never reformats the user's caption. Each side is
+ * conservatively treated as one changed span (linear time, even for long captions).
+ */
+function mergeCaptionText(base: string, local: string, remote: string): string | undefined {
+  const tokens = (value: string) => value.match(/\s+|[^\s]+/gu) || []
+  const original = tokens(base)
+  const change = (value: string) => {
+    const next = tokens(value)
+    let start = 0, end = original.length, nextEnd = next.length
+    while (start < end && start < nextEnd && original[start] === next[start]) start++
+    while (end > start && nextEnd > start && original[end - 1] === next[nextEnd - 1]) { end--; nextEnd-- }
+    return { start, end, replacement: next.slice(start, nextEnd) }
+  }
+  const a = change(local), b = change(remote)
+  const [first, second] = a.start <= b.start ? [a, b] : [b, a]
+  // Also reject touching spans: adjacent corrections have an unchanged whitespace
+  // token between them; insertions at the same boundary have no stable ordering.
+  if (first.end >= second.start) return undefined
+  return [...original.slice(0, first.start), ...first.replacement,
+    ...original.slice(first.end, second.start), ...second.replacement,
+    ...original.slice(second.end)].join('')
+}
 /** Three-way merge of stable editorial objects. Conflicting edits remain explicit and never overwrite silently. */
 export function mergeSharedProjects(base: Project, local: Project, remote: Project): { project: Project; conflicts: string[] } {
   const conflicts: string[] = []
-  function merge(b: any, l: any, r: any, path: string): any {
+  const captionIds = (p: Project) => new Set(p.tracks.filter(t => t.type === 'caption').flatMap(t => t.clips.map(c => c.id)))
+  const captions = [base, local, remote].map(captionIds)
+  function merge(b: any, l: any, r: any, path: string, captionText = false): any {
     if (equal(l, r) || equal(b, r)) return l
     if (equal(b, l)) return r
+    if (captionText && [b, l, r].every(v => typeof v === 'string')) {
+      const combined = mergeCaptionText(b, l, r)
+      if (combined !== undefined) return combined
+    }
     if (path === 'updatedAt') return Math.max(l, r)
     if (l && r && b && !Array.isArray(l) && !Array.isArray(r) && typeof l === 'object' && typeof r === 'object') {
-      return Object.fromEntries([...new Set([...Object.keys(b), ...Object.keys(l), ...Object.keys(r)])].map(k => [k, merge(b[k], l[k], r[k], path ? `${path}.${k}` : k)]).filter(([, value]) => value !== undefined))
+      return Object.fromEntries([...new Set([...Object.keys(b), ...Object.keys(l), ...Object.keys(r)])].map(k => [k, merge(b[k], l[k], r[k], path ? `${path}.${k}` : k, k === 'text' && b.id === l.id && b.id === r.id && typeof b.trackId === 'string' && captions.every(ids => ids.has(b.id)))]).filter(([, value]) => value !== undefined))
     }
     if ([b, l, r].every(v => Array.isArray(v) && v.every(x => x && typeof x.id === 'string') && new Set(v.map(x => x.id)).size === v.length)) {
       const ids = (v: any[]) => v.map(x => x.id)

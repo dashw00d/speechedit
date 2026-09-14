@@ -1,0 +1,6 @@
+# RYA-351 lab runtime output (not harness source)
+runs/
+reviews/
+whisper/
+*.log
+service.pid
