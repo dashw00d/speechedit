@@ -24,7 +24,10 @@ once on the complete build. No new product behavior.
 - Merge commits (`--no-ff`, `ort`, zero conflicts):
   - `d14ad5f456c38457d1b8a2edc71534b76670b397` — RYA-505 (parents `1f61c4f` + `4a20be0`).
   - `48407728457069eece86827fb72e78227a454f1c` — RYA-504 (parents `d14ad5f` + `73b5225`).
-    **New candidate tip.**
+    **Integration merge commit / candidate product tree.**
+- Checkpoint/evidence commit on top of `4840772` adds only this doc and the `rya504` rail in
+  `.lab-integration-433/run_rails.py`. Its product tree is identical to `4840772`, so the
+  `index-BMU_WyFb.js` / `c2c9d035…` fingerprint below applies to it too.
 - Ancestry checks: `git merge-base --is-ancestor` → true for `4a20be0`, `73b5225`,
   `d85e8ef` (RYA-479), `3b8fd2b` (RYA-497), `355556e` (RYA-463), `1f61c4f`.
 - Merged scope `git diff --stat 1f61c4f HEAD` is exactly the two accepted diffs:
@@ -119,5 +122,5 @@ product ranges above.
 - ASR/microphone are mocked and media is synthetic; no real human two-person session was run here.
 - Exact ServerChirp deployed commit/asset hash remains unconfirmed.
 - **Next owner: independent GLM reviewer via [RYA-537](/RYA/issues/RYA-537)** (already blocked by
-  this issue; Dispatcher-created). Verify this exact candidate `4840772` + asset hash
-  `c2c9d035…` and rerun the campaign two-user journey on the integrated build. Not self-approved.
+  this issue; Dispatcher-created). Verify this exact candidate `4840772` + asset hash `c2c9d035…`
+  and rerun the campaign two-user journey on the integrated build. Not self-approved.
