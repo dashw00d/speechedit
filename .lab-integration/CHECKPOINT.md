@@ -45,14 +45,28 @@ only; it changes no product behavior and no emitted bundle. `bun run typecheck` 
 
 ## Build + deployment fingerprint
 
-- `bun run build:web` — PASS (`✓ built`; pre-existing zod/source-map/chunk-size warnings only).
-- Output dir `src/renderer/dist` (git-ignored, rebuilt from the candidate source). `index.html`
-  references:
+Both commands build the identical committed source; the main-chunk filename/hash depends on the
+JS runtime that invokes Vite (bun vs node changes the esbuild minifier's identifier assignment,
+not behavior). The previously recorded `index-BPf3wiR7.js` hash is therefore **superseded** as
+the canonical fingerprint. Use `index-CEANCXUr.js` for the reviewer-reproducible node build, or
+the `BPf3wiR7` file when you deliberately build with `bun run build:web`.
+
+- `bun run build:web` (task-specified; bun invokes Vite) — PASS:
   - `assets/index-BPf3wiR7.js` — 970,878 B — sha256 `7280de50a2a2cee70bf4e5912bfff8cad56a014ba3527e58c53c90e8f865183c`
+- `node node_modules/vite/bin/vite.js build --config vite.web.config.ts` (command used by the
+  accepted RYA-429 checkpoint; independently reproduced by the reviewer) — PASS:
+  - `assets/index-CEANCXUr.js` — 970,882 B — sha256 `a0061eec4a2501238806e0d5c0255022985084f8843437bdd5785130ac1b4b0e`
+- Shared by both builds (unchanged):
   - `assets/index-CMZUotNj.css` — 136,200 B — sha256 `2f08967ed0ebe8d559981b82632d4325e1417a4082d3e70185a3d9e275ac88f1`
-- Other emitted bundles for completeness:
   - `assets/index-D4CZzrgb.js` — 691,409 B — sha256 `96f3d92ab141c3a92fcadccad6c89027e712c0efa4d464ba10e9c3fe516b5d89`
   - `assets/browserWhisper.worker-DrMuM1nz.js` — 870,047 B — sha256 `49720ab52fd45280e5d0a3e8866552cdf0271d561549b0fd522d35a25e94d823`
+  - `index.html` references the main `index-*.js` above plus `index-CMZUotNj.css`.
+- Root cause of the earlier mismatch: the checkpoint recorded the `bun`-invoked `BPf3wiR7` hash
+  without naming its command, so the reviewer's `node`-invoked build could not reproduce it. Both
+  are valid builds of `2f6725d`; the recorded Build row below exercised `bun run build:web`.
+- Re-verification: the reviewer independently rebuilt `2f6725d` (three node-invoked builds,
+  byte-identical `CEANCXUr`) and re-ran every browser rail against that bundle — all passed (this
+  issue). The Builder's rails ran against the `BPf3wiR7` bundle. Both sets pass.
 - Reference: deployment-approximate `e9b6590` asset was `index-B26-WSjr.js` 965,453 B /
   `index-CreKLqQ_.css` 136,011 B (planning/SPEECHEDIT_DEPLOY_PLAN.md).
 

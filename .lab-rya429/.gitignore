@@ -1,0 +1,6 @@
+# RYA-429 lab runtime output (not harness source)
+reviews/
+cache/
+browser/
+service.log
+*.pid
