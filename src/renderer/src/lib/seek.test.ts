@@ -269,6 +269,28 @@ describe('program time follows the media clock', () => {
 })
 
 describe('program-master playback across cuts', () => {
+  test('a delayed UI reaches the cut boundary instead of replaying speech before it', () => {
+    const project = videoAssetProject()
+    const resolved = resolveProgram(project)
+    const stepped = stepProgramPlayback({
+      lastProgram: 0.75, requestedProgram: 0.75, dt: 0.08,
+      mediaSource: 1.05, mediaPresent: true, resolved
+    })
+    expect(stepped).toEqual({ program: 1, clock: 'wall', hard: true })
+    expect(programToSourceOf(project, stepped.program)).toBeCloseTo(1.1, 6)
+    const waiting = stepProgramPlayback({
+      lastProgram: stepped.program, requestedProgram: stepped.program, dt: 0.08,
+      mediaSource: null, mediaPresent: true, resolved
+    })
+    expect(waiting).toEqual({ program: 1, clock: 'hold', hard: false })
+    const nearBoundary = stepProgramPlayback({
+      lastProgram: 0.99, requestedProgram: 0.99, dt: 0.08,
+      mediaSource: 1.05, mediaPresent: true, resolved
+    })
+    expect(nearBoundary.program).toBe(1)
+    expect(programToSourceOf(project, nearBoundary.program)).toBeCloseTo(1.1, 6)
+  })
+
   test('a decoder sitting in a hole does not stall the playhead', () => {
     const project = videoAssetProject()
     const resolved = resolveProgram(project)
@@ -285,7 +307,7 @@ describe('program-master playback across cuts', () => {
     })
     expect(stepped.clock).toBe('wall')
     expect(stepped.hard).toBe(true)
-    expect(stepped.program).toBeCloseTo(1.006, 5)
+    expect(stepped.program).toBeCloseTo(1, 5)
     expect(sourceInHole(project, programToSourceOf(project, stepped.program))).toBe(false)
   })
 
@@ -314,6 +336,17 @@ describe('program-master playback across cuts', () => {
     expect(drifted.clock).toBe('media')
     expect(drifted.hard).toBe(false)
     expect(drifted.program).toBeCloseTo(0.9, 5)
+  })
+
+  test('catching up at a cut preserves an inserted pause before the next recording', () => {
+    const project = { ...videoAssetProject(), inserts: [{ id: 'pause', programStart: 1, duration: 0.5, kind: 'silence' as const }] }
+    const resolved = resolveProgram(project)
+    const stepped = stepProgramPlayback({
+      lastProgram: 0.75, requestedProgram: 0.75, dt: 0.08,
+      mediaSource: 1.05, mediaPresent: true, resolved
+    })
+    expect(stepped.program).toBe(1)
+    expect(resolved.segments.find(seg => seg.start === stepped.program)?.kind).toBe('slug')
   })
 
   test('holds one post-cut target while Chromium completes the audio/video seek', () => {

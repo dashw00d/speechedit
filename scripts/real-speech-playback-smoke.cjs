@@ -6,6 +6,7 @@ const { tmpdir } = require('node:os')
 const { spawnSync } = require('node:child_process')
 const { createServer } = require('node:http')
 const corpus = process.env.SPEECHEDIT_SPEECH_CORPUS || '/tmp/speechedit-real-speech'
+const cutStress = process.env.SPEECHEDIT_CUTS === '1'
 const dir = mkdtempSync(join(tmpdir(), 'speechedit-real-playback-'))
 app.setPath('userData', join(dir, 'profile'))
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
@@ -37,6 +38,8 @@ window.check=async()=>{
   const source=location.origin+(kind==='original'?'/source.mp4':'/shared.webm');
   let project=projectFromTake({asset:{id:'source',path:source,name:'Training speech',kind:'video',duration:25,fps:30,width:640,height:360,waveform:[],sourceOffset:0},words:${JSON.stringify(cues)}.map((w,i)=>({...w,id:'w'+i,deleted:false,speaker:'staff'})),whispered:null,analysis:{silence:[],scenes:{times:[],staticRegions:[]},loudness:[]}});
   if(kind==='replaced')for(const id of ['owner','collaborator'])project=applyCommand(project,{type:'replaceRangeAudio',start:0,end:4.56,asset:{id,path:location.origin+'/replacement.mp3',name:id,kind:'audio',duration:4.56,waveform:[],isRecording:true}});
+  if(${JSON.stringify(cutStress)})for(const start of [2,4,6,8,10,12,14,16,18,20,22])project=applyCommand(project,{type:'deleteRange',start,end:start+0.2});
+  const expected=programLengthOf(project);
   useEditor.getState().loadProject(project,{persist:false});usePlayback.setState({playing:false,programTime:0,loop:false,loopFrom:null,playUntil:null,pixelsPerSecond:160});
   await wait(()=>document.querySelector('.monitor video')?.readyState>=2 && [...document.querySelectorAll('audio')].every(e=>e.readyState>=2));
   const nodes=[...document.querySelectorAll('.monitor video,.monitor audio')];
@@ -53,13 +56,19 @@ window.check=async()=>{
   const timeline=document.querySelector('.timeline-body'),outside=[];let maxScroll=0,samples=0,outsideCount=0;
   if(!timeline.clientWidth)throw Error('The test must show the timeline pane');
   const follow=setInterval(()=>{if(!usePlayback.getState().playing)return;const bounds=document.querySelector('.timeline-overlay').getBoundingClientRect(),marker=document.querySelector('.playhead').getBoundingClientRect();maxScroll=Math.max(maxScroll,timeline.scrollLeft);samples++;if(marker.left<bounds.left-2||marker.left>bounds.right-2){outsideCount++;if(outside.length<5)outside.push({time:usePlayback.getState().programTime,left:marker.left,bounds:[bounds.left,bounds.right]})}},50);
-  const load=kind==='loaded'?setInterval(()=>{const end=performance.now()+300;while(performance.now()<end){}},600):null;
+  let blocked=false;
+  const load=kind==='loaded'?setInterval(()=>{
+    // Put the delayed frame across a spoken cut, rather than depending on the
+    // periodic load happening to land inside a deleted interval.
+    if(${JSON.stringify(cutStress)}){const time=nodes[0]?.currentTime;if(blocked||time<5.8||time>=6)return;blocked=true;}
+    const end=performance.now()+300;while(performance.now()<end){}
+  },${cutStress ? 5 : 600}):null;
   processor.port.postMessage('start');usePlayback.getState().playFromSource(0);await wait(()=>!usePlayback.getState().playing);if(load)clearInterval(load);clearInterval(follow);processor.port.postMessage('stop');await captured;
   const pcm=new Float32Array(chunks.reduce((n,c)=>n+c.length,0));let offset=0;chunks.forEach(c=>{pcm.set(c,offset);offset+=c.length});
   await fetch('/capture-'+kind+'.wav',{method:'POST',body:pcmWave(pcm,48000)});
   const backwards=seeks.filter(s=>s.to<s.from-0.04);
-  const result={kind,seeks,plays,backwards,follow:{samples,maxScroll,outsideCount,outside},capturedSeconds:pcm.length/48000,program:usePlayback.getState().programTime};results.push(result);console.log(JSON.stringify(result));
-  if(backwards.length || Math.abs(pcm.length/48000-25)>1)throw Error('Speech repeated or playback stalled: '+JSON.stringify(result));
+  const result={kind,seeks,plays,backwards,follow:{samples,maxScroll,outsideCount,outside},capturedSeconds:pcm.length/48000,expected,program:usePlayback.getState().programTime};results.push(result);console.log(JSON.stringify(result));
+  if(backwards.length || Math.abs(pcm.length/48000-expected)>1)throw Error('Speech repeated or playback stalled: '+JSON.stringify(result));
   if(!samples||!maxScroll||outside.length)throw Error('Timeline lost the playhead: '+JSON.stringify(result.follow));
   timeline.scrollLeft=123;usePlayback.getState().seekProgram(0);await delay(100);
   if(Math.abs(timeline.scrollLeft-123)>1)throw Error('Paused seeking moved the timeline');

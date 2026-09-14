@@ -172,6 +172,16 @@ export function stepProgramPlayback(input: {
     }
     return { program: wallProgram, clock: 'wall', hard: true }
   }
+  // The audio clock can reach a cut while a busy UI still shows an earlier
+  // frame. The capped wall step must not seek back into that already-heard
+  // speech. Finish the current segment, without skipping any following insert.
+  if (abs != null) {
+    const current = input.resolved.segments.find(seg =>
+      input.lastProgram >= seg.start && input.lastProgram < seg.start + seg.duration)
+    if (current && current.kind !== 'slug' && abs > current.outPoint) {
+      return { program: current.start + current.duration, clock: 'wall', hard: true }
+    }
+  }
   // The first frame inside a cut advances to the next kept source and starts a
   // hard seek. While that seek is pending, hold this program frame instead of
   // moving the target and issuing a fresh seek every RAF.
