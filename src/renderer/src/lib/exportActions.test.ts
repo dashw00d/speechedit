@@ -54,6 +54,19 @@ describe('export sheet helpers', () => {
     expect(exportPrimaryCopy(createEmptyProject(), { audioOnly: true }, false).kind).toBe('blocked')
   })
 
+  test('shared editor leads with usable words while owner proxy relink stays unchanged', () => {
+    const project = createDemoProject()
+    for (const asset of Object.values(project.assets)) asset.proxyOnly = true
+    for (const electron of [false, true]) {
+      const guest = exportPrimaryCopy(project, { audioOnly: true }, electron, true)
+      expect(guest.kind).toBe('pack')
+      expect(guest.label).toBe('Download the words')
+      expect(guest.detail).toContain('not render without the original recording')
+      expect(exportPrimaryCopy(project, {}, electron).kind).toBe('relink')
+    }
+    expect(exportPrimaryCopy(createEmptyProject(), {}, false, true).kind).toBe('blocked')
+  })
+
   test('a video asset means the reel has picture', () => {
     const demo = createDemoProject()
     const asset = Object.values(demo.assets)[0]!

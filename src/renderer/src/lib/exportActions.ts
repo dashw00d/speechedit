@@ -302,7 +302,8 @@ function offerProxyRelink(onToast: ToastDispatch, retry?: () => void): void {
 export function exportPrimaryCopy(
   project: Project,
   opts: ExportVideoOpts = {},
-  electron = isElectron
+  electron = isElectron,
+  sharedEditor = false
 ): { label: string; detail: string; kind: 'render' | 'pack' | 'blocked' | 'relink' } {
   const video = videoExportCopy(project, opts)
   if (video.ready && electron) {
@@ -313,6 +314,13 @@ export function exportPrimaryCopy(
     }
   }
   const shared = proxyOnlyAssets(project).length
+  if (shared && sharedEditor && canPackSidecars(project)) {
+    return {
+      label: 'Download the words',
+      detail: 'This shared copy can preview but not render without the original recording. Download the words and chapters now.',
+      kind: 'pack'
+    }
+  }
   if (shared) {
     return {
       label: 'Relink original media',

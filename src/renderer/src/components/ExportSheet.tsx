@@ -1,3 +1,4 @@
+import { isSharedEditor } from '../lib/sharedSession'
 import { useDialog } from '../useDialog'
 import { useEffect, useState } from 'react'
 import { captionsForExport } from '../lib/captions'
@@ -33,7 +34,7 @@ export function ExportSheet({
   const [audioOnly, setAudioOnly] = useState(false)
   const [burnCaptions, setBurnCaptions] = useState(true)
   const exportOpts = { markedOnly, audioOnly, burnCaptions }
-  const primary = exportPrimaryCopy(project, exportOpts)
+  const primary = exportPrimaryCopy(project, exportOpts, undefined, isSharedEditor())
   const hasMarks = project.markIn != null && project.markOut != null
   const hasCaptions = captionsForExport(project).length > 0
   const hasPicture = projectHasPicture(project)
@@ -67,6 +68,8 @@ export function ExportSheet({
         <p className="confirm-copy">
           {exporting
             ? 'Rendering the program — leave this open or cancel.'
+            : isSharedEditor() && primary.kind === 'pack'
+              ? primary.detail
             : primary.kind === 'relink'
               ? 'This shared copy can preview but not render. Relink the original recording, then export.'
               : hasPicture
