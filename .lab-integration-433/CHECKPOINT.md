@@ -15,6 +15,10 @@ campaign can run its full two-user journey on one complete build. No new product
   base `e9b6590`), fetched from `/home/ryan/.paperclip/workspaces/speechedit/astra-rya433`.
 - Merge commit: `3feecc9a8528ff14045627faf509248786bf9c4a`
   (parents `53adef5` + `b109fb3`).
+- Final branch tip at submission: the commit that last touches this file — resolve with
+  `git -C /home/ryan/dev/speechedit-integration rev-parse spe-integration/release-candidate-433`.
+  Commits after `3feecc9` add only `.lab-integration-433/` documentation (this file, the rail
+  runner, `.gitignore`), so the asset hashes below are for the identical product source tree.
 - Product files changed by the merge (exactly the accepted RYA-433 diff; verified byte-identical
   to `c07ae38`):
   - `src/renderer/src/components/RecordReplacementSheet.tsx`
