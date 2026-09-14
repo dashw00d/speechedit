@@ -57,6 +57,19 @@ export function mergeSharedProjects(base: Project, local: Project, remote: Proje
     if (equal(l, r) || equal(b, r)) return l
     if (equal(b, l)) return r
     if (path === 'updatedAt') return Math.max(l, r)
+    // Concurrent first recordings create the same track container. Merge that
+    // container only when its settings agree and the takes occupy separate slots.
+    // Keep overlapping takes, incompatible settings and deletion/edit conflicts explicit.
+    if (b === undefined && /^tracks\[[^\]]+\]$/.test(path) && l && r &&
+        Array.isArray(l.clips) && Array.isArray(r.clips)) {
+      const { clips: lc, ...ls } = l, { clips: rc, ...rs } = r
+      const independent = lc.every((a: any) => rc.every((c: any) =>
+        a.id === c.id ? equal(a, c) : a.start + a.duration <= c.start || c.start + c.duration <= a.start))
+      if (equal(ls, rs) && independent) {
+        return { ...ls, clips: merge([], lc, rc, `${path}.clips`)
+          .sort((a: any, c: any) => a.start - c.start || a.id.localeCompare(c.id)) }
+      }
+    }
     if (l && r && b && !Array.isArray(l) && !Array.isArray(r) && typeof l === 'object' && typeof r === 'object') {
       return Object.fromEntries([...new Set([...Object.keys(b), ...Object.keys(l), ...Object.keys(r)])].map(k => [k, merge(b[k], l[k], r[k], path ? `${path}.${k}` : k)]).filter(([, value]) => value !== undefined))
     }

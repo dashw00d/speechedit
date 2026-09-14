@@ -13,6 +13,7 @@ import { projectFromTake } from './importMedia'
 import { wordsFromAsr } from './asr'
 import { applyCommand } from './commands'
 import { snapshotForReview } from './reviewProject'
+import { replaceAudioRange } from './replaceAudio'
 
 const fixture = () => projectFromTake({
   asset: { id: 'source', name: 'Source.wav', path: '/private/original.wav', browserMediaKey: 'private-key', kind: 'audio', duration: 3, waveform: [], sourceOffset: 0 },
@@ -47,6 +48,30 @@ describe('shared editing document', () => {
     const conflict = mergeSharedProjects(base, mine, applyCommand(base, { type: 'setWordText', wordId: base.transcript.words[0].id, text: 'Goodbye' }))
     expect(conflict.conflicts.some(p => p.includes('.text'))).toBe(true)
     expect(conflict.project.transcript.words[0].text).toBe('Welcome')
+  })
+  test('first recordings merge separate slots but preserve overlap, settings and deletion conflicts', () => {
+    const base = prepareSharedProject(fixture())
+    const record = (start: number, end: number, id: string) => replaceAudioRange(base, start, end,
+      { id, name: id, path: `/private/${id}.wav`, kind: 'audio', duration: end - start, waveform: [], isRecording: true })
+    const a = record(0, 1, 'take-a'), b = record(1, 2, 'take-b')
+    const voice = (p: typeof base) => p.tracks.find(t => t.id === 'voice_replacements')!
+    const before = JSON.stringify([base, a, b])
+    for (const [local, remote] of [[a, b], [b, a]]) {
+      const result = mergeSharedProjects(base, local, remote)
+      expect(result.conflicts).toEqual([])
+      expect(voice(result.project).clips.map(c => c.assetId)).toEqual(['take-a', 'take-b'])
+      expect(() => sharedProject(result.project)).not.toThrow()
+    }
+    expect(JSON.stringify([base, a, b])).toBe(before)
+    const overlap = record(0.5, 1.5, 'overlap')
+    for (const [local, remote] of [[a, overlap], [overlap, a]]) {
+      expect(mergeSharedProjects(base, local, remote).conflicts).toContain('tracks[voice_replacements]')
+    }
+    const settings = structuredClone(b); voice(settings).muted = true
+    expect(mergeSharedProjects(base, a, settings).conflicts).toContain('tracks[voice_replacements]')
+    const edited = structuredClone(a); voice(edited).clips[0].volume = 0.5
+    expect(mergeSharedProjects(a, base, edited).conflicts).toContain('tracks[voice_replacements]')
+    expect(mergeSharedProjects(base, a, edited).conflicts).toContain('tracks[voice_replacements]')
   })
   test('concurrent track moves conflict without duplicating or resurrecting clips', () => {
     let base = prepareSharedProject(fixture())
