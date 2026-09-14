@@ -253,8 +253,10 @@ app.whenReady().then(async () => {
   if (savedWait < 0) throw Error('Guest save did not report "All changes saved" within 60 s')
   await shot(guest, '03-guest-saved.png')
 
-  const notified = await waitFor(host, `(() => { const t=document.querySelector('[aria-label="Collaborator updates"] [role="status"]')?.textContent||''; return /saved|update|change/i.test(t) && !/No new updates/i.test(t) })()`, 25000)
-  if (notified < 0) throw Error('Host was not notified of the guest save within 25 s')
+  // RYA-479 replaced the idle copy "No new updates." with "Your changes are shared.";
+  // wait for the actual actionable pull control instead of loose copy matching.
+  const notified = await waitFor(host, `[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Bring shared edits into this project' && !b.disabled)`, 25000)
+  if (notified < 0) throw Error('Host was not offered "Bring shared edits into this project" within 25 s')
   await js(host, clickButton('Bring shared edits into this project'))
   const pulled = await waitFor(host, `document.querySelectorAll('.word')[2]?.textContent === 'TakeTwo'`, 20000)
   step('hostPulled', { waitMs: pulled })

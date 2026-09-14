@@ -33,6 +33,7 @@ RAILS = [
     ("qa365", "scripts/qa365-two-records-loss.cjs", "QA365_OUT", "QA365_RUN_MS", 360000),
     ("qa363-auto", ".lab-rya363/qa363-auto.cjs", "QA365_OUT", "QA365_RUN_MS", 360000),
     ("qa437", ".lab-rya429/qa437.cjs", "QA437_OUT", "QA437_RUN_MS", 300000),
+    ("rya479", "scripts/owner-workspace-sync-smoke.cjs", "QA471_OUT", "QA471_RUN_MS", 360000),
 ]
 RAIL_BY_NAME = {r[0]: r for r in RAILS}
 
