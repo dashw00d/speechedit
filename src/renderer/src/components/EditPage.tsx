@@ -4,24 +4,36 @@ import { CollaborationClient, type CollaborationStatus } from '../lib/collaborat
 import { useEditor } from '../store'
 
 export function EditPage() {
+  const [linkKey, setLinkKey] = useState(() => location.hash.slice(1))
+  useEffect(() => {
+    const changed = () => setLinkKey(location.hash.slice(1))
+    window.addEventListener('hashchange', changed)
+    return () => window.removeEventListener('hashchange', changed)
+  }, [])
+  // A new fragment is a new access attempt, even on the same room. Remount
+  // so the old client stops and its ready editor cannot survive a bad key.
+  return <EditSession key={linkKey} linkKey={linkKey} />
+}
+
+function EditSession({ linkKey }: { linkKey: string }) {
   const [ready, setReady] = useState(false), [error, setError] = useState('')
   const [status, setStatus] = useState<CollaborationStatus>({ message: 'Opening shared editor…', revision: 0, history: [] })
   const [name, setName] = useState(() => localStorage.getItem('speechedit.editor-name') || '')
   const nameRef = useRef(name); nameRef.current = name
   const client = useRef<CollaborationClient | null>(null)
   useEffect(() => {
-    const active = new CollaborationClient(location.pathname.split('/')[2], location.hash.slice(1), () => nameRef.current, setStatus)
+    const active = new CollaborationClient(location.pathname.split('/')[2], linkKey, () => nameRef.current, setStatus)
     client.current = active; let cancelled = false
     void active.open().then(() => { if (!cancelled) setReady(true) }).catch(e => { if (!cancelled) setError(String(e.message)) })
     return () => { cancelled = true; active.stop() }
-  }, [])
+  }, [linkKey])
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(useEditor.getState().project, null, 2)], { type: 'application/json' }))
     const a = document.createElement('a'); a.href = url; a.download = 'shared-edit-draft.speechedit.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
   return <div className="shared-editor">
     <aside className="shared-edit-bar" aria-label="Shared editing">
-      <strong>Full editing</strong><span role="status">{status.message} {status.revision ? `· v${status.revision}` : ''}</span>
+      <strong>Full editing</strong><span role="status">{error ? 'Link not opened' : status.message} {status.revision ? `· v${status.revision}` : ''}</span>
       <label>Your name <input aria-label="Editor name" maxLength={80} value={name} onChange={e => { setName(e.target.value); localStorage.setItem('speechedit.editor-name', e.target.value) }} placeholder="Editor" /></label>
       <button className="chip" disabled={!ready} onClick={() => void client.current?.sync()}>Save now</button>
       <button className="chip" disabled={!ready} onClick={download}>Download edit copy</button>
