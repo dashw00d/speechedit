@@ -462,3 +462,34 @@ test('a delayed frame cannot use a later keep to skip a cut or a different sourc
   const stepped = stepProgramPlayback({ lastProgram: 0.5, requestedProgram: 0.5, dt: 0.08, mediaSource: 1.6, mediaPresent: true, resolved })
   expect(stepped).toEqual({ program: 0.58, clock: 'wall', hard: true })
 })
+
+
+test('replacement audio drives program time through picture stalls and cuts', () => {
+  const resolved = resolveProgram(videoAssetProject())
+  for (const mediaSource of [null, 0.2, 1.05, 1.6]) {
+    const step = stepProgramPlayback({ lastProgram: 0.5, requestedProgram: 0.5, dt: 0.08,
+      mediaSource, mediaPresent: true, resolved,
+      audioClock: { program: 1.1, end: 1.4, exhausted: false } })
+    expect(step).toEqual({ program: 1.1, clock: 'media', hard: false })
+  }
+})
+
+test('a replacement waiting for audio holds its position; a short recording finishes its silent slot', () => {
+  const base = { lastProgram: 0.5, requestedProgram: 0.5, dt: 0.08,
+    mediaSource: 0.8, mediaPresent: true, resolved: resolveProgram(videoAssetProject()) }
+  expect(stepProgramPlayback({ ...base, audioClock: { program: null, end: 1, exhausted: false } }))
+    .toEqual({ program: 0.5, clock: 'hold', hard: false })
+  expect(stepProgramPlayback({ ...base, audioClock: { program: null, end: 1, exhausted: true } }))
+    .toEqual({ program: 0.58, clock: 'wall', hard: false })
+  expect(stepProgramPlayback({ ...base, audioClock: { program: null, end: 0.55, exhausted: true } }).program).toBe(0.55)
+})
+
+test('replacement clocks respect user seeks, never bounce backwards, and stop at the next slot', () => {
+  const base = { lastProgram: 0.5, requestedProgram: 0.5, dt: 0.08,
+    mediaSource: 0.8, mediaPresent: true, resolved: resolveProgram(videoAssetProject()),
+    audioClock: { program: 0.49, end: 1, exhausted: false } }
+  expect(stepProgramPlayback(base).program).toBe(0.5)
+  expect(stepProgramPlayback({ ...base, audioClock: { ...base.audioClock, program: 1.2 } }).program).toBe(1)
+  expect(stepProgramPlayback({ ...base, requestedProgram: 0.1 }))
+    .toEqual({ program: 0.1, clock: 'jump', hard: true })
+})

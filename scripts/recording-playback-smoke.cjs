@@ -24,7 +24,7 @@ createRoot(document.getElementById('root')).render(React.createElement(Monitor))
 const audio = duration => URL.createObjectURL(pcmWave(new Float32Array(Math.round(duration*48000)).fill(0.1),48000));
 window.check = async () => {
   const results=[];
-  for (const recorded of [0.25, 1.49]) {
+  for (const { recorded, stallPicture } of [{recorded:0.25}, {recorded:1.49}, {recorded:1.49,stallPicture:true}]) {
     // Source metadata and MP3 decoders can disagree by a fraction of a frame.
     const source=audio(1.99), first=audio(1.5), second=audio(recorded);
     let project=projectFromTake({asset:{id:'source',path:source,name:'Source',kind:'audio',duration:2,waveform:[],sourceOffset:0},words:[{id:'w',text:'Replace this passage',start:0.5,end:2,deleted:false,speaker:'s'}],whispered:null,analysis:{silence:[],scenes:{times:[],staticRegions:[]},loudness:[]}});
@@ -33,7 +33,17 @@ window.check = async () => {
     useEditor.getState().loadProject(project,{persist:false}); usePlayback.setState({playing:false,programTime:0,loop:false,loopFrom:null,playUntil:null});
     await wait(()=>document.querySelector('audio[data-bed]')?.readyState>=2 && document.querySelector('.monitor video')?.readyState>=2);
     const bed=document.querySelector('audio[data-bed]'), video=document.querySelector('.monitor video');
-    let bedEnds=0, videoEnds=0, plays=0, backward=0, silenceFrames=0, last=0;
+    let bedEnds=0, videoEnds=0, plays=0, backward=0, silenceFrames=0, last=0, audioSeeks=0, stalls=0;
+    const timeProperty=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'currentTime');
+    Object.defineProperty(bed,'currentTime',{configurable:true,get(){return timeProperty.get.call(this)},set(value){if(usePlayback.getState().playing&&!this.paused)audioSeeks++;timeProperty.set.call(this,value)}});
+    let buffering=false;
+    const picturePlay=video.play.bind(video);
+    video.play=()=>buffering?Promise.resolve():picturePlay();
+    const stall=stallPicture?setInterval(()=>{
+      const time=usePlayback.getState().programTime;
+      if(!usePlayback.getState().playing||time<0.6||time>1.6||buffering)return;
+      stalls++;buffering=true;video.pause();setTimeout(()=>{buffering=false;if(usePlayback.getState().playing)void video.play()},250);
+    },300):null;
     bed.addEventListener('ended',()=>bedEnds++); video.addEventListener('ended',()=>videoEnds++);
     const nativePlay=bed.play.bind(bed); bed.play=()=>{plays++;return nativePlay();};
     const unsub=usePlayback.subscribe(state=>{
@@ -46,13 +56,14 @@ window.check = async () => {
     });
     usePlayback.getState().playFromSource(0);
     await wait(()=>!usePlayback.getState().playing);
-    unsub();
+    unsub();if(stall)clearInterval(stall);
+    if(stallPicture && (!stalls || audioSeeks))throw Error('Picture buffering interrupted replacement audio: '+JSON.stringify({stalls,audioSeeks}));
     if(usePlayback.getState().programTime!==2 || bedEnds>1 || videoEnds>1 || plays!==1 || backward || (recorded===0.25 && !silenceFrames))throw Error(JSON.stringify({recorded,time:usePlayback.getState().programTime,bedEnds,videoEnds,plays,backward,silenceFrames}));
     // Seeking back intentionally must still replay an exhausted recording.
     usePlayback.getState().seekProgram(0); await delay(50); usePlayback.getState().playFromSource(0);
     await wait(()=>!usePlayback.getState().playing);
     if(bedEnds>2 || videoEnds>2 || plays!==2)throw Error('Intentional replay failed: '+JSON.stringify({bedEnds,videoEnds,plays}));
-    results.push({recorded,fullSlot:1.5,plays,bedEnds,videoEnds,silenceFrames,backward});
+    results.push({recorded,stallPicture:!!stallPicture,stalls,audioSeeks,fullSlot:1.5,plays,bedEnds,videoEnds,silenceFrames,backward});
     for(const url of [source,first,second])URL.revokeObjectURL(url);
   }
   return {sequentialOwnerAndCollaboratorTakes:true,shortTailSilent:true,programStops:true,intentionalReplay:true,results};
@@ -69,6 +80,7 @@ const deadline = setTimeout(() => { console.error('Recording playback smoke time
 app.whenReady().then(async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok))
   const win = new BrowserWindow({ show: true, webPreferences: { backgroundThrottling: false } })
+  win.webContents.setAudioMuted(true);
   await win.loadURL('http://127.0.0.1:'+server.address().port)
   console.log(JSON.stringify(await win.webContents.executeJavaScript('window.check()')))
   clearTimeout(deadline); win.destroy(); app.quit()

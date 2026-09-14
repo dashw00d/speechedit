@@ -40,10 +40,27 @@ function syncVideo(
   if (video) syncMediaPlayback(video, sourceTime, playing, speed * reviewRateOf(), gain, fps, hard)
 }
 
+function bedElement(bed: ProgramExportJob['beds'][number]): HTMLAudioElement | null {
+  const id = bed.id ?? bed.path
+  return document.querySelector(`audio[data-bed="${id}"]`)
+}
+
+function replacementClock(job: ProgramExportJob, time: number) {
+  const bed = job.beds.find(bed => bed.replaceVoice && bed.volume > 0.001 && time >= bed.start && time < bed.start + bed.duration)
+  if (!bed) return undefined
+  const el = bedElement(bed)
+  if (!el?.src) return undefined
+  const read = readMediaClock(el)
+  return {
+    program: read.source == null || el.paused ? null : bed.start + read.source - bed.inPoint,
+    end: bed.start + bed.duration,
+    exhausted: el.ended || mediaPlaybackExhausted(el)
+  }
+}
+
 function syncBeds(look: ProgramLook, playing: boolean, fps = 30, hard = false) {
   for (const item of look.beds) {
-    const id = item.bed.id ?? item.bed.path
-    const el = document.querySelector(`audio[data-bed="${id}"]`) as HTMLAudioElement | null
+    const el = bedElement(item.bed)
     if (!el) continue
     if (!item.active) { if (!el.paused) el.pause(); continue }
     syncMediaPlayback(el, item.sourceTime, playing, reviewRateOf(), item.gain, fps, hard)
@@ -69,7 +86,8 @@ function syncProgram(
   look: ProgramLook,
   playing: boolean,
   fps = 30,
-  hard = false
+  hard = false,
+  audioHard = hard
 ) {
   syncVideo(video, look.incomingSource, look.incomingSpeed, playing, look.voice.incomingGain, fps, hard)
   if (look.outgoing && under) {
@@ -77,7 +95,7 @@ function syncProgram(
   } else if (under && !under.paused) {
     under.pause()
   }
-  syncBeds(look, playing, fps, hard)
+  syncBeds(look, playing, fps, audioHard)
   syncOverlays(look, playing, fps, hard)
 }
 
@@ -133,7 +151,8 @@ export function useEngine(
         look,
         usePlayback.getState().playing,
         projectRef.current.fps || 30,
-        true
+        true,
+        false
       )
     }
     video.addEventListener('loadeddata', onLoaded)
@@ -218,6 +237,7 @@ export function useEngine(
         mediaSource: clockRead.source,
         mediaPresent: clockRead.present,
         sourceOffset: offset,
+        audioClock: replacementClock(job, state.programTime),
         resolved: resolveProgram(proj),
         fps
       })
@@ -249,10 +269,12 @@ export function useEngine(
           looped: bounded.looped,
           cut: advanced.hard && advanced.clock === 'wall'
         })
+      // A picture cut or decoder catch-up does not move a continuous audio clip.
+      const audioHard = lastSource == null || advanced.clock === 'jump' || bounded.looped
       lastSource = look.incomingSource
       lastInput = look.incomingInput
       lastProgram = program
-      syncProgram(videoRef.current, underRef?.current ?? null, look, true, fps, hard)
+      syncProgram(videoRef.current, underRef?.current ?? null, look, true, fps, hard, audioHard)
       usePlayback.setState({ programTime: program })
       raf = requestAnimationFrame(step)
     }

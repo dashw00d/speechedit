@@ -6,6 +6,7 @@ const { tmpdir } = require('node:os')
 const { spawnSync } = require('node:child_process')
 const { createServer } = require('node:http')
 const corpus = process.env.SPEECHEDIT_SPEECH_CORPUS || '/tmp/speechedit-real-speech'
+const stallPicture = process.env.SPEECHEDIT_STALL_VIDEO === '1'
 const cutStress = process.env.SPEECHEDIT_CUTS === '1'
 const dir = mkdtempSync(join(tmpdir(), 'speechedit-real-playback-'))
 app.setPath('userData', join(dir, 'profile'))
@@ -56,6 +57,12 @@ window.check=async()=>{
   const timeline=document.querySelector('.timeline-body'),outside=[];let maxScroll=0,samples=0,outsideCount=0;
   if(!timeline.clientWidth)throw Error('The test must show the timeline pane');
   const follow=setInterval(()=>{if(!usePlayback.getState().playing)return;const bounds=document.querySelector('.timeline-overlay').getBoundingClientRect(),marker=document.querySelector('.playhead').getBoundingClientRect();maxScroll=Math.max(maxScroll,timeline.scrollLeft);samples++;if(marker.left<bounds.left-2||marker.left>bounds.right-2){outsideCount++;if(outside.length<5)outside.push({time:usePlayback.getState().programTime,left:marker.left,bounds:[bounds.left,bounds.right]})}},50);
+  let buffering=false,stalls=0;
+  const picturePlay=nodes[0].play.bind(nodes[0]);nodes[0].play=()=>buffering?Promise.resolve():picturePlay();
+  const stall=${JSON.stringify(stallPicture)}&&kind==='replaced'?setInterval(()=>{
+    if(!usePlayback.getState().playing||usePlayback.getState().programTime>4.4||buffering)return;
+    stalls++;buffering=true;nodes[0].pause();setTimeout(()=>{buffering=false;if(usePlayback.getState().playing)void nodes[0].play()},300);
+  },600):null;
   let blocked=false;
   const load=kind==='loaded'?setInterval(()=>{
     // Put the delayed frame across a spoken cut, rather than depending on the
@@ -63,11 +70,12 @@ window.check=async()=>{
     if(${JSON.stringify(cutStress)}){const time=nodes[0]?.currentTime;if(blocked||time<5.8||time>=6)return;blocked=true;}
     const end=performance.now()+300;while(performance.now()<end){}
   },${cutStress ? 5 : 600}):null;
-  processor.port.postMessage('start');usePlayback.getState().playFromSource(0);await wait(()=>!usePlayback.getState().playing);if(load)clearInterval(load);clearInterval(follow);processor.port.postMessage('stop');await captured;
+  processor.port.postMessage('start');usePlayback.getState().playFromSource(0);await wait(()=>!usePlayback.getState().playing);if(load)clearInterval(load);if(stall)clearInterval(stall);clearInterval(follow);processor.port.postMessage('stop');await captured;
   const pcm=new Float32Array(chunks.reduce((n,c)=>n+c.length,0));let offset=0;chunks.forEach(c=>{pcm.set(c,offset);offset+=c.length});
   await fetch('/capture-'+kind+'.wav',{method:'POST',body:pcmWave(pcm,48000)});
   const backwards=seeks.filter(s=>s.to<s.from-0.04);
-  const result={kind,seeks,plays,backwards,follow:{samples,maxScroll,outsideCount,outside},capturedSeconds:pcm.length/48000,expected,program:usePlayback.getState().programTime};results.push(result);console.log(JSON.stringify(result));
+  const result={kind,seeks,plays,backwards,stalls,follow:{samples,maxScroll,outsideCount,outside},capturedSeconds:pcm.length/48000,expected,program:usePlayback.getState().programTime};results.push(result);console.log(JSON.stringify(result));
+  if(stall && (!stalls || seeks.some(s=>s.index>0)))throw Error('Picture buffering sought replacement audio: '+JSON.stringify(result));
   if(backwards.length || Math.abs(pcm.length/48000-expected)>1)throw Error('Speech repeated or playback stalled: '+JSON.stringify(result));
   if(!samples||!maxScroll||outside.length)throw Error('Timeline lost the playhead: '+JSON.stringify(result.follow));
   timeline.scrollLeft=123;usePlayback.getState().seekProgram(0);await delay(100);
@@ -97,5 +105,6 @@ const deadline=setTimeout(()=>{console.error('Real speech playback timed out');a
 app.whenReady().then(async()=>{
  await new Promise(ok=>server.listen(0,'127.0.0.1',ok));const win=new BrowserWindow({show:true,width:Number(process.env.SPEECHEDIT_VIEWPORT_WIDTH||1400),webPreferences:{backgroundThrottling:false}});
  win.webContents.on('console-message',(_e,_l,message)=>{console.log(message)});
+ win.webContents.setAudioMuted(true);
  await win.loadURL('http://127.0.0.1:'+server.address().port);console.log(JSON.stringify(await win.webContents.executeJavaScript('window.check()')));clearTimeout(deadline);win.destroy();app.quit();
 }).catch(e=>{console.error(e);app.exit(1)})

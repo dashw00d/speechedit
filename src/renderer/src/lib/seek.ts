@@ -148,6 +148,8 @@ export function stepProgramPlayback(input: {
   mediaSource: number | null
   mediaPresent?: boolean
   sourceOffset?: number
+  /** An audible replacement is already in program time; picture must follow it. */
+  audioClock?: { program: number | null; end: number; exhausted: boolean }
   resolved: ResolvedProgram
   fps?: number
 }): { program: number; clock: PlayheadClock; hard: boolean } {
@@ -157,6 +159,12 @@ export function stepProgramPlayback(input: {
     return { program: input.requestedProgram, clock: 'jump', hard: true }
   }
   const wallProgram = input.lastProgram + input.dt
+  if (input.audioClock) {
+    const audio = input.audioClock
+    if (audio.exhausted) return { program: Math.min(audio.end, wallProgram), clock: 'wall', hard: false }
+    if (audio.program == null) return { program: input.lastProgram, clock: 'hold', hard: false }
+    return { program: Math.max(input.lastProgram, Math.min(audio.end, audio.program)), clock: 'media', hard: false }
+  }
   const source = input.mediaSource
   const abs = source == null ? null : source + (input.sourceOffset ?? 0)
   if (abs != null && !sourceInHoleOn(input.resolved, abs)) {
