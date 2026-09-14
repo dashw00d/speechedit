@@ -1,0 +1,137 @@
+{
+  "url": "http://127.0.0.1:3367",
+  "results": {
+    "steps": [
+      {
+        "name": "recordA",
+        "value": {
+          "slot": "2.00 seconds"
+        },
+        "at": 1789361265243
+      },
+      {
+        "name": "recordB",
+        "value": {
+          "slot": "2.00 seconds"
+        },
+        "at": 1789361270525
+      },
+      {
+        "name": "outcome",
+        "value": {
+          "clipsAfterA": [
+            {
+              "assetId": "rec_e8a7f7f4-d2e1-4155-89ca-d56efe685f69",
+              "start": 0,
+              "duration": 2
+            }
+          ],
+          "bLocalClipBeforeSave": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+          "serverClipsAfterResolve": [
+            {
+              "assetId": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+              "start": 4,
+              "duration": 2
+            }
+          ],
+          "ownerLocalClipsAfterSettle": [
+            {
+              "assetId": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+              "start": 4,
+              "duration": 2
+            }
+          ],
+          "serverKeepsA": false,
+          "serverKeepsB": true,
+          "ownerKeepsA": false
+        },
+        "at": 1789361277627
+      }
+    ],
+    "editLink": "http://127.0.0.1:3367/edit/7f1b96aecaae9107b31dbb7917cfed09/edit/<room>#<key>",
+    "baselineWords": [
+      "Welcome",
+      "to",
+      "this",
+      "recording.",
+      "Now",
+      "a",
+      "different",
+      "chapter."
+    ],
+    "clipsAfterA": [
+      {
+        "assetId": "rec_e8a7f7f4-d2e1-4155-89ca-d56efe685f69",
+        "start": 0,
+        "duration": 2
+      }
+    ],
+    "ownerConflictAfterA": false,
+    "bLocalClipBeforeSave": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+    "guestConflictBanner": true,
+    "guestConflictText": "Another editor changed the same items.\n\ntracks[voice_replacements]\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+    "serverClipsAfterResolve": [
+      {
+        "assetId": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+        "start": 4,
+        "duration": 2
+      }
+    ],
+    "ownerLocalClipsAfterSettle": [
+      {
+        "assetId": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+        "start": 4,
+        "duration": 2
+      }
+    ],
+    "aRecordingId": "rec_e8a7f7f4-d2e1-4155-89ca-d56efe685f69",
+    "bRecordingId": "rec_e0a64031-1d4e-4815-a37e-0157357ae05b",
+    "serverKeepsA": false,
+    "serverKeepsB": true,
+    "ownerKeepsA": false,
+    "completed": true,
+    "pass": false
+  },
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 3,
+          "message": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808"
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    }
+  },
+  "failures": [
+    "owner A's recording was dropped from the server project after B chose 'Keep my conflicting edits'",
+    "owner A's own screen lost A's recording after B chose 'Keep my conflicting edits'",
+    "recordings not both retained: serverKeepsA=false serverKeepsB=true ownerKeepsA=false"
+  ],
+  "finishedAt": "2026-09-14T04:47:57.627Z"
+}

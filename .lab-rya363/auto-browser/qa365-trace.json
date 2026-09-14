@@ -1,0 +1,152 @@
+{
+  "url": "http://127.0.0.1:3383",
+  "results": {
+    "steps": [
+      {
+        "name": "recordA",
+        "value": {
+          "slot": "2.00 seconds"
+        },
+        "at": 1789371190144
+      },
+      {
+        "name": "recordB",
+        "value": {
+          "slot": "2.00 seconds"
+        },
+        "at": 1789371195439
+      },
+      {
+        "name": "outcome",
+        "value": {
+          "clipsAfterA": [
+            {
+              "assetId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+              "start": 0,
+              "duration": 2
+            }
+          ],
+          "bLocalClipBeforeSave": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+          "serverClipsAfterResolve": [
+            {
+              "assetId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+              "start": 0,
+              "duration": 2
+            },
+            {
+              "assetId": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+              "start": 4,
+              "duration": 2
+            }
+          ],
+          "ownerLocalClipsAfterSettle": [
+            {
+              "assetId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+              "start": 0,
+              "duration": 2
+            },
+            {
+              "assetId": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+              "start": 4,
+              "duration": 2
+            }
+          ],
+          "serverKeepsA": true,
+          "serverKeepsB": true,
+          "ownerKeepsA": true
+        },
+        "at": 1789371201697
+      }
+    ],
+    "editLink": "http://127.0.0.1:3383/edit/fb95be01b0e7f53b9cb389848bef7740/edit/<room>#<key>",
+    "baselineWords": [
+      "Welcome",
+      "to",
+      "this",
+      "recording.",
+      "Now",
+      "a",
+      "different",
+      "chapter."
+    ],
+    "clipsAfterA": [
+      {
+        "assetId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+        "start": 0,
+        "duration": 2
+      }
+    ],
+    "ownerConflictAfterA": false,
+    "bLocalClipBeforeSave": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+    "guestConflictBanner": false,
+    "serverClipsAfterResolve": [
+      {
+        "assetId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+        "start": 0,
+        "duration": 2
+      },
+      {
+        "assetId": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+        "start": 4,
+        "duration": 2
+      }
+    ],
+    "ownerLocalClipsAfterSettle": [
+      {
+        "assetId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+        "start": 0,
+        "duration": 2
+      },
+      {
+        "assetId": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+        "start": 4,
+        "duration": 2
+      }
+    ],
+    "aRecordingId": "rec_0861c8a6-4661-4408-8661-d3ed03936c11",
+    "bRecordingId": "rec_f0618d43-5760-4f89-adfa-86b3a56fcb64",
+    "serverKeepsA": true,
+    "serverKeepsB": true,
+    "ownerKeepsA": true,
+    "completed": true,
+    "pass": true
+  },
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 3,
+          "message": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808"
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    }
+  },
+  "failures": [],
+  "finishedAt": "2026-09-14T07:33:21.697Z"
+}

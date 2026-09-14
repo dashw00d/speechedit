@@ -1,0 +1,161 @@
+fixture: A clip=[0,2]  B clip=[4,6]  baseHasVoiceTrack=false
+[KEEP] stale-save:B-local+A-remote  kept=["take-A","take-B"]  conflicts=[]
+[KEEP] stale-save:A-local+B-remote  kept=["take-A","take-B"]  conflicts=[]
+[KEEP] resolve:B-keep-local -> peer:A-sees-server  kept=["take-A","take-B"]  conflicts=[]
+[KEEP] resolve:A-keep-local -> peer:B-sees-server  kept=["take-A","take-B"]  conflicts=[]
+[KEEP] control:single-A  kept=["take-A"]  conflicts=[]
+[KEEP] control:single-B  kept=["take-B"]  conflicts=[]
+[KEEP] control:no-op  kept=[]  conflicts=[]
+[KEEP] control:identical-edit-both  kept=["take-A"]  conflicts=[]
+[KEEP] control:voice-vs-unrelated-track  kept=["take-A"]  conflicts=[]
+[KEEP] candidate-sim:union-both-clips  kept=["take-A","take-B"]  conflicts=[]
+[KEEP] candidate-sim:conflict-resolved-both-clips  kept=["take-A","take-B"]  conflicts=["tracks[voice_replacements]"]
+{
+  "results": [
+    {
+      "name": "stale-save:B-local+A-remote",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "stale-save:A-local+B-remote",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "resolve:B-keep-local -> peer:A-sees-server",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "resolve:A-keep-local -> peer:B-sees-server",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:single-A",
+      "expected": [
+        "take-A"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:single-B",
+      "expected": [
+        "take-B"
+      ],
+      "kept": [
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:no-op",
+      "expected": [],
+      "kept": [],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:identical-edit-both",
+      "expected": [
+        "take-A"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:voice-vs-unrelated-track",
+      "expected": [
+        "take-A"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "candidate-sim:union-both-clips",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "candidate-sim:conflict-resolved-both-clips",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [
+        "tracks[voice_replacements]"
+      ],
+      "ok": true,
+      "mustPass": true
+    }
+  ],
+  "failures": [],
+  "pass": true
+}
+QA365 PASS: both non-overlapping recordings survive every modeled merge and resolve step.

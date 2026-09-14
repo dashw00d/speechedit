@@ -107,6 +107,30 @@ describe('shared editing document', () => {
     deleted.tracks.find(t => t.type === 'caption')!.clips = []
     expect(mergeSharedProjects(base, deleted, edited('One  café\tthree last.')).conflicts).toContain(`tracks[${caption.trackId}].clips[${caption.id}]`)
   })
+  test('first recordings merge separate slots but preserve overlap, settings and deletion conflicts', () => {
+    const base = prepareSharedProject(fixture())
+    const record = (start: number, end: number, id: string) => replaceAudioRange(base, start, end,
+      { id, name: id, path: `/private/${id}.wav`, kind: 'audio', duration: end - start, waveform: [], isRecording: true })
+    const a = record(0, 1, 'take-a'), b = record(1, 2, 'take-b')
+    const voice = (p: typeof base) => p.tracks.find(t => t.id === 'voice_replacements')!
+    const before = JSON.stringify([base, a, b])
+    for (const [local, remote] of [[a, b], [b, a]]) {
+      const result = mergeSharedProjects(base, local, remote)
+      expect(result.conflicts).toEqual([])
+      expect(voice(result.project).clips.map(c => c.assetId)).toEqual(['take-a', 'take-b'])
+      expect(() => sharedProject(result.project)).not.toThrow()
+    }
+    expect(JSON.stringify([base, a, b])).toBe(before)
+    const overlap = record(0.5, 1.5, 'overlap')
+    for (const [local, remote] of [[a, overlap], [overlap, a]]) {
+      expect(mergeSharedProjects(base, local, remote).conflicts).toContain('tracks[voice_replacements]')
+    }
+    const settings = structuredClone(b); voice(settings).muted = true
+    expect(mergeSharedProjects(base, a, settings).conflicts).toContain('tracks[voice_replacements]')
+    const edited = structuredClone(a); voice(edited).clips[0].volume = 0.5
+    expect(mergeSharedProjects(a, base, edited).conflicts).toContain('tracks[voice_replacements]')
+    expect(mergeSharedProjects(base, a, edited).conflicts).toContain('tracks[voice_replacements]')
+  })
   test('concurrent track moves conflict without duplicating or resurrecting clips', () => {
     let base = prepareSharedProject(fixture())
     base = applyCommand(base, { type: 'addTitle', start: 0, duration: 2, text: 'Move me' })
