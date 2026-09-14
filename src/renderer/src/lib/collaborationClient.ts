@@ -2,11 +2,10 @@ import type { Project } from '../types'
 import type { ReviewRoom } from '../../../shared/review'
 import { mergeSharedProjects, prepareSharedProject } from '../../../shared/collaboration'
 import { useEditor, usePlayback } from '../store'
-import { reviewRequest, uploadReviewPreview } from './reviewApi'
+import { reviewRequest } from './reviewApi'
 import { mountSharedProject, readSharedState, writeSharedState, sharedSession } from './sharedSession'
 import { remountBrowserAssets } from './browserMediaStore'
-import { encodeReviewProxy } from './reviewProxy'
-import { recordingPreview } from './recordingClient'
+import { uploadSharedMedia } from './sharedMediaUpload'
 
 export interface CollaborationStatus { message: string; error?: string; conflicts?: string[]; revision: number; history: NonNullable<ReviewRoom['history']> }
 interface Draft { base: Project; project: Project; conflicts?: string[] }
@@ -90,16 +89,7 @@ export class CollaborationClient {
     if (same(local, this.base)) { useEditor.setState({ dirty: false }); this.report('All changes saved'); return }
     this.report('Saving changes…')
     await this.remember(current)
-    for (const asset of Object.values(current.assets)) {
-      if (room.media[asset.id]) continue
-      room = await reviewRequest<ReviewRoom>(`/${this.id}/assets`, this.key, 'POST', { asset: local.assets[asset.id] }, this.abort.signal)
-      if (room.media[asset.id]) continue
-      this.report(`Compressing ${asset.name}…`)
-      let encodingMode = 'fast encoder'
-      const blob = await recordingPreview(asset, this.abort.signal) || await encodeReviewProxy(asset, this.abort.signal, ratio => this.report(`Compressing ${asset.name} · ${Math.round(ratio * 100)}% · ${encodingMode}`), status => { encodingMode = status.mode === 'cached' ? 'saved preview' : status.mode === 'playback' ? 'playback speed' : `${status.mode} encoder`; this.report(`${asset.name} · ${encodingMode}`, status.mode === 'playback' ? status.detail : undefined) })
-      this.report(`Uploading ${asset.name}…`)
-      await uploadReviewPreview({ id: this.id, ownerKey: this.key, reviewerKey: this.key, projectId: this.base.id }, asset.id, blob, this.abort.signal)
-    }
+    await uploadSharedMedia(room, current, local, { id: this.id, ownerKey: this.key, reviewerKey: this.key, projectId: current.id }, this.abort.signal, (message, error) => this.report(message, error))
     // A new keystroke during upload stays dirty and is sent on the following save.
     room = await reviewRequest<ReviewRoom>(`/${this.id}/project`, this.key, 'PUT', { revision: this.revision, project: local, author: this.author().trim() || 'Editor' }, this.abort.signal)
     this.latest = room; this.base = room.project!; this.revision = room.projectRevision!
