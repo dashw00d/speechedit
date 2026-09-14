@@ -1,0 +1,22 @@
+{
+  "traces": [
+    {
+      "denial": {
+        "text": "Re-record selected words\nCancel\nKeep these words\n\nYour slot is 1.50 seconds. The video and everything after this passage stay in place.\n\nPermission denied\n\nGet ready, then press Start. After 3–2–1, speak until the timer ends. You can listen and retry before using the take.\n\nStart recording",
+        "uses": 0,
+        "observed": [
+          {
+            "clock": false,
+            "take": false
+          },
+          {
+            "clock": false,
+            "take": false
+          }
+        ]
+      },
+      "requests": 1
+    }
+  ],
+  "error": "AssertionError [ERR_ASSERTION]: The input did not match the regular expression /microphone is blocked/i. Input:\n\n'Re-record selected words\\n' +\n  'Cancel\\n' +\n  'Keep these words\\n' +\n  '\\n' +\n  'Your slot is 1.50 seconds. The video and everything after this passage stay in place.\\n' +\n  '\\n' +\n  'Permission denied\\n' +\n  '\\n' +\n  'Get ready, then press Start. After 3–2–1, speak until the timer ends. You can listen and retry before using the take.\\n' +\n  '\\n' +\n  'Start recording'\n"
+}
