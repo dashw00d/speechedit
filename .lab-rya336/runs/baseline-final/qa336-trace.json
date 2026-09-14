@@ -1,0 +1,471 @@
+{
+  "journey": "RYA-340 selected-sentence Re-record regression",
+  "url": "http://127.0.0.1:3364",
+  "baseline": "origin/main @ e9b6590 (deployment-approximate)",
+  "checks": {
+    "contextMenuHasReRecord": false,
+    "keyboardMenuHasReRecord": false,
+    "keyboardActivatesReRecord": "skipped",
+    "menuOpensRecordSheet": "skipped",
+    "menuReplacesCorrectRange": "skipped",
+    "menuUndoRestores": "skipped",
+    "panelCancelLeavesIntact": true,
+    "panelMicDeniedLeavesIntact": true,
+    "panelOpensRecordSheet": true,
+    "panelReplacesCorrectRange": true,
+    "panelUndoRestores": true,
+    "guestReplacesSentence": true,
+    "guestSavedToSharedProject": true,
+    "hostObservesReplacementAfterSync": true,
+    "otherClientObservesReplacementAfterSync": true
+  },
+  "details": {
+    "selectedSentence": {
+      "ids": [
+        "w_mg5rsej7br",
+        "w_w2m3fcj7br",
+        "w_udezm1m7br",
+        "w_ue9s41g7br"
+      ],
+      "text": "Welcome to this recording.",
+      "start": 0,
+      "end": 2
+    },
+    "panelChips": [
+      "Preview",
+      "Remove paragraph",
+      "Re-record audio",
+      "Share this passage",
+      "More"
+    ],
+    "contextMenu": {
+      "title": "Welcome",
+      "items": [
+        {
+          "label": "Remove paragraph",
+          "disabled": false
+        },
+        {
+          "label": "Make shorter",
+          "disabled": false
+        },
+        {
+          "label": "Add zoom",
+          "disabled": false
+        },
+        {
+          "label": "Protect",
+          "disabled": false
+        },
+        {
+          "label": "Edit text…",
+          "disabled": false
+        },
+        {
+          "label": "Copy quote",
+          "disabled": false
+        },
+        {
+          "label": "Select sentence",
+          "disabled": false
+        },
+        {
+          "label": "Select paragraph",
+          "disabled": false
+        },
+        {
+          "label": "Go here",
+          "disabled": false
+        }
+      ]
+    },
+    "contextMenuHasReRecord": {
+      "menu": {
+        "title": "Welcome",
+        "items": [
+          {
+            "label": "Remove paragraph",
+            "disabled": false
+          },
+          {
+            "label": "Make shorter",
+            "disabled": false
+          },
+          {
+            "label": "Add zoom",
+            "disabled": false
+          },
+          {
+            "label": "Protect",
+            "disabled": false
+          },
+          {
+            "label": "Edit text…",
+            "disabled": false
+          },
+          {
+            "label": "Copy quote",
+            "disabled": false
+          },
+          {
+            "label": "Select sentence",
+            "disabled": false
+          },
+          {
+            "label": "Select paragraph",
+            "disabled": false
+          },
+          {
+            "label": "Go here",
+            "disabled": false
+          }
+        ]
+      }
+    },
+    "keyboardOpensContextMenu": {
+      "opened": true,
+      "via": "sendInputEvent Shift+F10",
+      "focused": {
+        "tag": "BUTTON",
+        "cls": "word",
+        "text": "Welcome"
+      },
+      "menu": {
+        "title": "Welcome",
+        "items": [
+          {
+            "label": "Remove paragraph",
+            "disabled": false
+          },
+          {
+            "label": "Make shorter",
+            "disabled": false
+          },
+          {
+            "label": "Add zoom",
+            "disabled": false
+          },
+          {
+            "label": "Protect",
+            "disabled": false
+          },
+          {
+            "label": "Edit text…",
+            "disabled": false
+          },
+          {
+            "label": "Copy quote",
+            "disabled": false
+          },
+          {
+            "label": "Select sentence",
+            "disabled": false
+          },
+          {
+            "label": "Select paragraph",
+            "disabled": false
+          },
+          {
+            "label": "Go here",
+            "disabled": false
+          }
+        ]
+      }
+    },
+    "keyboardMenuHasReRecord": {
+      "menu": {
+        "title": "Welcome",
+        "items": [
+          {
+            "label": "Remove paragraph",
+            "disabled": false
+          },
+          {
+            "label": "Make shorter",
+            "disabled": false
+          },
+          {
+            "label": "Add zoom",
+            "disabled": false
+          },
+          {
+            "label": "Protect",
+            "disabled": false
+          },
+          {
+            "label": "Edit text…",
+            "disabled": false
+          },
+          {
+            "label": "Copy quote",
+            "disabled": false
+          },
+          {
+            "label": "Select sentence",
+            "disabled": false
+          },
+          {
+            "label": "Select paragraph",
+            "disabled": false
+          },
+          {
+            "label": "Go here",
+            "disabled": false
+          }
+        ]
+      }
+    },
+    "keyboardActivatesReRecord": "context-menu Re-record item missing (see contextMenuHasReRecord)",
+    "menuOpensRecordSheet": "context-menu Re-record item missing (see contextMenuHasReRecord)",
+    "menuReplacesCorrectRange": "context-menu Re-record item missing (see contextMenuHasReRecord)",
+    "menuUndoRestores": "context-menu Re-record item missing (see contextMenuHasReRecord)",
+    "panelCancelLeavesIntact": {
+      "via": "panel",
+      "opened": true,
+      "before": {
+        "recordings": [],
+        "clips": [],
+        "assetCount": 1,
+        "wordCount": 8
+      },
+      "after": {
+        "recordings": [],
+        "clips": [],
+        "assetCount": 1,
+        "wordCount": 8
+      }
+    },
+    "panelMicDeniedLeavesIntact": {
+      "via": "panel",
+      "opened": true,
+      "errorText": "Permission denied",
+      "before": {
+        "recordings": [],
+        "clips": [],
+        "assetCount": 1,
+        "wordCount": 8
+      },
+      "after": {
+        "recordings": [],
+        "clips": [],
+        "assetCount": 1,
+        "wordCount": 8
+      }
+    },
+    "panelOpensRecordSheet": {
+      "sheetOpen": true
+    },
+    "panelReplacesCorrectRange": {
+      "rec": {
+        "ok": true,
+        "target": "Welcome to this recording."
+      },
+      "before": {
+        "recordings": [],
+        "clips": [],
+        "assetCount": 1,
+        "wordCount": 8
+      },
+      "after": {
+        "recordings": [
+          {
+            "id": "recording_8skor7q9nd",
+            "name": "Re-recorded voice.mp3",
+            "duration": 2,
+            "kind": "audio"
+          }
+        ],
+        "clips": [
+          {
+            "start": 0,
+            "duration": 2,
+            "end": 2,
+            "assetId": "recording_8skor7q9nd",
+            "text": "Re-recorded voice.mp3"
+          }
+        ],
+        "assetCount": 2,
+        "wordCount": 8
+      },
+      "expected": {
+        "start": 0,
+        "end": 2
+      },
+      "selected": {
+        "ids": [
+          "w_mg5rsej7br",
+          "w_w2m3fcj7br",
+          "w_udezm1m7br",
+          "w_ue9s41g7br"
+        ],
+        "text": "Welcome to this recording.",
+        "start": 0,
+        "end": 2
+      }
+    },
+    "panelUndoRestores": {
+      "undone": "toast-undo-chip",
+      "restored": {
+        "recordings": [],
+        "clips": [],
+        "assetCount": 1,
+        "wordCount": 8
+      }
+    },
+    "guestReplace": {
+      "ok": true,
+      "entry": "panel",
+      "rec": {
+        "ok": true,
+        "target": "Welcome to this recording."
+      },
+      "labelSeen": true,
+      "selected": {
+        "ids": [
+          "w_mg5rsej7br",
+          "w_w2m3fcj7br",
+          "w_udezm1m7br",
+          "w_ue9s41g7br"
+        ],
+        "text": "Welcome to this recording."
+      }
+    },
+    "guestReplacesSentence": {
+      "ok": true,
+      "entry": "panel",
+      "rec": {
+        "ok": true,
+        "target": "Welcome to this recording."
+      },
+      "labelSeen": true,
+      "selected": {
+        "ids": [
+          "w_mg5rsej7br",
+          "w_w2m3fcj7br",
+          "w_udezm1m7br",
+          "w_ue9s41g7br"
+        ],
+        "text": "Welcome to this recording."
+      }
+    },
+    "guestSaved": true,
+    "guestSavedToSharedProject": {
+      "saved": true
+    },
+    "hostPull": {
+      "pulled": true,
+      "ok": true,
+      "project": {
+        "recordings": [
+          {
+            "id": "rec_6c5e935a-a039-4566-9f7d-0ba34bff5c46",
+            "name": "Re-recorded voice.mp3",
+            "duration": 2,
+            "kind": "audio"
+          }
+        ],
+        "clips": [
+          {
+            "start": 0,
+            "duration": 2,
+            "end": 2,
+            "assetId": "rec_6c5e935a-a039-4566-9f7d-0ba34bff5c46",
+            "text": "Re-recorded voice.mp3"
+          }
+        ],
+        "assetCount": 2,
+        "wordCount": 8
+      }
+    },
+    "hostObservesReplacementAfterSync": {
+      "pulled": true,
+      "ok": true,
+      "project": {
+        "recordings": [
+          {
+            "id": "rec_6c5e935a-a039-4566-9f7d-0ba34bff5c46",
+            "name": "Re-recorded voice.mp3",
+            "duration": 2,
+            "kind": "audio"
+          }
+        ],
+        "clips": [
+          {
+            "start": 0,
+            "duration": 2,
+            "end": 2,
+            "assetId": "rec_6c5e935a-a039-4566-9f7d-0ba34bff5c46",
+            "text": "Re-recorded voice.mp3"
+          }
+        ],
+        "assetCount": 2,
+        "wordCount": 8
+      }
+    },
+    "secondClient": {
+      "labelSeen": true,
+      "draftHasReplacement": false
+    },
+    "otherClientObservesReplacementAfterSync": {
+      "labelSeen": true,
+      "draftHasReplacement": false
+    }
+  },
+  "failures": [
+    "FAIL: selected-sentence right-click menu is missing the \"Re-record audio\" item. Actual items: [\"Remove paragraph\",\"Make shorter\",\"Add zoom\",\"Protect\",\"Edit text…\",\"Copy quote\",\"Select sentence\",\"Select paragraph\",\"Go here\"]",
+    "FAIL: keyboard-opened context menu is missing the \"Re-record audio\" item. Actual items: [\"Remove paragraph\",\"Make shorter\",\"Add zoom\",\"Protect\",\"Edit text…\",\"Copy quote\",\"Select sentence\",\"Select paragraph\",\"Go here\"]"
+  ],
+  "appChunk": "/assets/index-Bg71JEhD.js",
+  "ownerWords": 8,
+  "editLinkShape": "http://127.0.0.1:3364/edit/c80ee10e4e356c15876caa594a78fbbb/edit/<room>#<key>",
+  "pass": false,
+  "finishedAt": "2026-09-14T03:42:44.750Z",
+  "startedAt": "2026-09-14T03:42:35.629Z",
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    },
+    "second-guest": {
+      "partition": "second-guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    }
+  }
+}
