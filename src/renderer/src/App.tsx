@@ -120,6 +120,22 @@ export function App() {
   const [exportOpen, setExportOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [recording, setRecording] = useState<{ project: Project; start: number; end: number; duration: number; words: string } | null>(null)
+
+  function startReRecord() {
+    const editor = useEditor.getState(), selected = new Set(editor.selectedWordIds), words = editor.project.transcript.words.filter(w => selected.has(w.id))
+    try {
+      const range = wordRange(editor.project.transcript.words, editor.selectedWordIds)
+      if (!range) throw new Error('Select the words you want to re-record.')
+      const slot = recordingSlot(editor.project, range.start, range.end)
+      usePlayback.getState().pause()
+      setRecording({ project: editor.project, ...range, duration: slot.duration, words: words.map(w => w.text).join(' ') })
+    } catch (e) { setToast(e instanceof Error ? e.message : 'Could not select the recording slot.') }
+  }
+
+  useEffect(() => {
+    window.addEventListener('speechedit:re-record', startReRecord)
+    return () => window.removeEventListener('speechedit:re-record', startReRecord)
+  }, [])
   const [shareView, setShareView] = useState<'share' | 'inbox'>('share')
   const projectId = useEditor(s => s.project.id)
   const inbox = useReviewInbox(projectId, !isElectron && !isSharedEditor())
@@ -421,16 +437,7 @@ export function App() {
           </div>
         )}
         <main className="workspace">
-          <Transcript onToast={setToast} onReRecord={() => {
-            const editor = useEditor.getState(), selected = new Set(editor.selectedWordIds), words = editor.project.transcript.words.filter(w => selected.has(w.id))
-            try {
-              const range = wordRange(editor.project.transcript.words, editor.selectedWordIds)
-              if (!range) throw new Error('Select the words you want to re-record.')
-              const slot = recordingSlot(editor.project, range.start, range.end)
-              usePlayback.getState().pause()
-              setRecording({ project: editor.project, ...range, duration: slot.duration, words: words.map(w => w.text).join(' ') })
-            } catch (e) { setToast(e instanceof Error ? e.message : 'Could not select the recording slot.') }
-          }} onSharePassage={!isElectron && !isSharedEditor() ? () => { setShareView('share'); setShareOpen(true) } : undefined} />
+          <Transcript onToast={setToast} onReRecord={startReRecord} onSharePassage={!isElectron && !isSharedEditor() ? () => { setShareView('share'); setShareOpen(true) } : undefined} />
           <Monitor onToast={setToast} />
           <Inspector onToast={setToast} />
         </main>
