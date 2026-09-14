@@ -107,6 +107,8 @@ export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: 
     paintIdsRef.current = next
     setPaintIds(next)
   }
+  const selectionToolsRef = useRef<HTMLSpanElement>(null)
+  const selectionTabPending = useRef(false)
   const scriptRef = useRef<HTMLDivElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const wordRefs = useRef(new Map<string, HTMLButtonElement>())
@@ -402,6 +404,7 @@ export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: 
   function applySelection(ids: string[], opts?: { additive?: boolean; loop?: boolean; anchor?: string }) {
     const sorted = sortWordIds(words, ids)
     if (!sorted.length) return
+    selectionTabPending.current = true
     selectWords(sorted, opts?.additive)
     anchorRef.current = opts?.anchor ?? sorted[0]
     if (opts?.loop === true) loopSelection(sorted)
@@ -495,6 +498,10 @@ export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: 
     script.addEventListener('keydown', onKey)
     return () => script.removeEventListener('keydown', onKey)
   }, [words])
+
+  useEffect(() => {
+    selectionTabPending.current = selected.length > 0
+  }, [selected])
 
   const findQueryRef = useRef(findQuery)
   findQueryRef.current = findQuery
@@ -816,14 +823,23 @@ export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: 
       {!popoverAnchor && words.length > 0 && <p className="transcript-guide">Select a word or drag across words. Preview to listen, Remove to cut.</p>}
       {popoverAnchor && choices.length > 0 && (
         <span
+          ref={selectionToolsRef}
           className="word-popover word-selection-tools"
           role="group"
           aria-label="Selected words"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape' || blocksEditorShortcut(e.nativeEvent)) return
+            e.preventDefault()
+            e.stopPropagation()
+            selectionTabPending.current = false
+            scriptRef.current?.focus({ preventScroll: true })
+          }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <span className="word-selection-summary">{selectionSummary} selected</span>
+          <span className="word-selection-summary">{selectionSummary} selected · Tab for actions{selectionHasAudio ? ' · Delete to remove' : ''}</span>
           <span className="word-selection-consequence">{choices[0]?.consequence}</span>
           <span className="word-popover-actions">
+            {selected.length === 1 && !islands && <button type="button" className="chip" title="Correct the transcript text without changing the recording" onClick={() => setEditing(selected[0])}>Correct word</button>}
             <button type="button" className="chip" disabled={!selectionHasAudio} title="Play from the first selected word to the last, once" onClick={() => {
               const span = wordRange(words, selected)
               if (span) usePlayback.getState().playRange(sourceToProgramOf(project, span.start), sourceToProgramOf(project, span.end))
@@ -854,7 +870,6 @@ export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: 
                 {choice.id === 'put-back' ? 'Restore words' : choice.label}
               </button>
             ))}
-            {selected.length === 1 && !islands && <button type="button" className="chip" title="Correct the transcript text without changing the recording" onClick={() => setEditing(selected[0])}>Correct word</button>}
             {onReRecord && <button type="button" className="chip" onClick={onReRecord}>Re-record audio</button>}
             {onSharePassage && <button type="button" className="chip" onClick={onSharePassage}>Share this passage</button>}
             <OverflowMenu tone="chip" place="below" label="More" title="More actions for these words">
@@ -1085,6 +1100,17 @@ export function Transcript({ onToast, onSharePassage, onReRecord }: { onToast?: 
         ref={scriptRef}
         className="script"
         tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey ||
+              blocksEditorShortcut(e.nativeEvent) || !selectionTabPending.current) return
+          const target = e.target as HTMLElement
+          if (target !== e.currentTarget && !target.closest('.word')) return
+          const action = selectionToolsRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')
+          if (!action) return
+          e.preventDefault()
+          selectionTabPending.current = false
+          action.focus()
+        }}
         data-tool={tool}
         data-guard={guardKind}
         onMouseDown={(e) => {
