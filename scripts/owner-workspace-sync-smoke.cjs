@@ -76,7 +76,9 @@ const correctWord = async (win, index, text) => {
   if (!await waitFor(win, `!!document.querySelector('.word-edit')`, 15000)) throw Error('Word editor did not open')
   await js(win, `document.querySelector('.word-edit').focus()`)
   await field(win, '.word-edit', text)
-  await js(win, `(() => { const input=document.querySelector('.word-edit'); input.blur(); if (input.isConnected) input.dispatchEvent(new FocusEvent('focusout',{bubbles:true})); })()`)
+  // blur() already emits focusout. React may leave the input connected until its
+  // update commits; emitting a second event creates a duplicate Undo entry.
+  await js(win, `document.querySelector('.word-edit').blur()`)
   if (!await waitFor(win, `!document.querySelector('.word-edit') && document.querySelectorAll('.word')[${index}]?.textContent === ${JSON.stringify(text)}`, 15000)) throw Error('Word correction did not apply: ' + text)
 }
 
