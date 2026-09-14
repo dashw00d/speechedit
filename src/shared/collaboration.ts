@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { Project, Asset } from '../renderer/src/types'
+import { resolveProgram } from '../renderer/src/lib/resolver'
 
 const id = z.string().min(1).max(120).refine(s => !['__proto__', 'constructor', 'prototype'].includes(s))
 const mediaId = id.regex(/^[a-zA-Z0-9_-]{1,120}$/)
@@ -92,5 +93,36 @@ export function mergeSharedProjects(base: Project, local: Project, remote: Proje
     }
     if (track && clip) track.clips = [...track.clips, clip].sort((a, b) => a.start - b.start)
   }
+  // Recordings live in program time. Independently merging a cut (or another
+  // timing edit) can change the source passage beneath a new recording even
+  // though none of its clip fields conflict. Compare the actual source mapping
+  // across its slot, including cuts before it and changes inside it.
+  const slotMapping = (p: Project, start: number, end: number) => resolveProgram(p).segments
+    .filter(s => s.start < end && s.start + s.duration > start)
+    .map(s => {
+      const from = Math.max(start, s.start), to = Math.min(end, s.start + s.duration)
+      return { from, to, kind: s.kind, sourceFrom: s.inPoint + (from - s.start) * s.speed,
+        sourceTo: s.inPoint + (to - s.start) * s.speed, speed: s.speed }
+    }).reduce<Array<{ from: number; to: number; kind: string; sourceFrom: number; sourceTo: number; speed: number }>>((spans, span) => {
+      const previous = spans.at(-1)
+      // An unrelated split or volume/style boundary does not change timing.
+      if (previous && previous.kind === span.kind && previous.speed === span.speed &&
+        Math.abs(previous.to - span.from) < 1e-7 && Math.abs(previous.sourceTo - span.sourceFrom) < 1e-7) {
+        previous.to = span.to; previous.sourceTo = span.sourceTo
+      } else spans.push(span)
+      return spans
+    }, []).map(s => [s.kind, ...[s.from, s.to, s.sourceFrom, s.sourceTo].map(n => Math.round(n * 1e7) / 1e7)])
+  const timingConflicts = new Set<string>()
+  for (const [branch, clips] of [[local, lm], [remote, rm]] as const) {
+    for (const c of clips.values()) {
+      if (!c.replaceVoice || equal(c, bm.get(c.id))) continue
+      if (!equal(slotMapping(branch, c.start, c.start + c.duration), slotMapping(project, c.start, c.start + c.duration))) {
+        timingConflicts.add('The passage timing changed while someone re-recorded it. Keep your version or use the saved version, then redo the other edit.')
+      }
+    }
+  }
+  // Both draft recovery and "Keep my edits" consume this project. Return a
+  // coherent local snapshot on a timing collision, never the unsafe hybrid.
+  if (timingConflicts.size) return { project: local, conflicts: [...conflicts, ...timingConflicts] }
   return { project, conflicts }
 }

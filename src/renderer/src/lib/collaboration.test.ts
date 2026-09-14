@@ -13,6 +13,7 @@ import { projectFromTake } from './importMedia'
 import { wordsFromAsr } from './asr'
 import { applyCommand } from './commands'
 import { snapshotForReview } from './reviewProject'
+import { replaceAudioRange } from './replaceAudio'
 
 const fixture = () => projectFromTake({
   asset: { id: 'source', name: 'Source.wav', path: '/private/original.wav', browserMediaKey: 'private-key', kind: 'audio', duration: 3, waveform: [], sourceOffset: 0 },
@@ -20,6 +21,30 @@ const fixture = () => projectFromTake({
   analysis: { silence: [], scenes: { times: [], staticRegions: [] }, loudness: [] }
 })
 describe('shared editing document', () => {
+  test('cut and re-record collisions preserve a coherent local version in both orders', () => {
+    const base = prepareSharedProject(fixture())
+    const take = { id: 'take', name: 'Take.wav', path: '/private/take.wav', kind: 'audio' as const, duration: 0.8, waveform: [], isRecording: true }
+    const recorded = replaceAudioRange(base, 0.2, 1, take)
+    const cut = applyCommand(base, { type: 'deleteRange', start: 0.4, end: 0.8, source: 'manual' })
+    for (const [local, remote] of [[cut, recorded], [recorded, cut]]) {
+      const result = mergeSharedProjects(base, local, remote)
+      expect(result.conflicts.join(' ')).toContain('passage timing changed')
+      // Draft reload and Keep my edits use this return value: it must not
+      // contain a recording over the other editor's shortened passage.
+      expect(result.project).toEqual(local)
+      expect(mergeSharedProjects(remote, result.project, remote).conflicts).toEqual([])
+    }
+    const laterCut = applyCommand(base, { type: 'deleteRange', start: 2.1, end: 2.5, source: 'manual' })
+    expect(mergeSharedProjects(base, recorded, laterCut).conflicts).toEqual([])
+    const earlierCut = applyCommand(base, { type: 'deleteRange', start: 0, end: 0.1, source: 'manual' })
+    expect(mergeSharedProjects(base, recorded, earlierCut).conflicts.length).toBeGreaterThan(0)
+    expect(mergeSharedProjects(base, recorded, recorded).conflicts).toEqual([])
+    expect(mergeSharedProjects(base, recorded, { ...base, splits: [0.6] }).conflicts).toEqual([])
+    const renamed = applyCommand(base, { type: 'setWordText', wordId: base.transcript.words[2].id, text: 'Another' })
+    const independent = mergeSharedProjects(base, recorded, renamed)
+    expect(independent.conflicts).toEqual([])
+    expect(independent.project.transcript.words[2].text).toBe('Another')
+  })
   test('preview-only projects cannot render until originals are relinked', () => {
     const project = fixture(); project.assets.source.proxyOnly = true
     expect(validateExportJob(buildExportJob(project, '/tmp/final.mp4')!)).toContain('Relink the original recording')
