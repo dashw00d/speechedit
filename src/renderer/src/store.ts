@@ -1,4 +1,5 @@
 import { isSharedEditor, sharedSession } from './lib/sharedSession'
+import { mergeSharedProjects } from '../../shared/collaboration'
 import { create } from 'zustand'
 import { host } from './host'
 import { applyCommand, programLength } from './lib/commands'
@@ -127,6 +128,7 @@ export interface EditorState {
     project: Project,
     opts?: { path?: string | null; clean?: boolean; lastSavedAt?: number | null; persist?: boolean }
   ) => void
+  applySharedProject: (project: Project, clean: boolean) => void
   newProject: () => void
   loadDemo: () => void
   loadTranscript: (words: Word[]) => void
@@ -589,6 +591,17 @@ export const useEditor = create<EditorState>((set, get) => ({
   setRipple: (value) => set({ ripple: value }),
   setTool: (tool) => set({ tool }),
   setGuardKind: (kind) => set({ guardKind: kind }),
+  applySharedProject: (project, clean) => {
+    const before = get().project
+    // Carry only the incoming delta into every snapshot. Keeping old snapshots
+    // unchanged would let Undo silently erase a collaborator's saved work.
+    // Incoming values win where a peer has superseded a historical local edit.
+    const rebase = (snapshot: Project) => mergeSharedProjects(before, project, snapshot).project
+    const past = get().past.map(rebase), future = get().future.map(rebase)
+    if (historyGroup) historyGroup.base = rebase(historyGroup.base)
+    lastCoalesce = null
+    set({ project, past, future, dirty: !clean })
+  },
   loadProject: (project, opts) => {
     if (isSharedEditor() && sharedSession.projectId && project.id !== sharedSession.projectId) throw new Error('Open another workspace tab to switch projects.')
     const next = normalizeProject(project)

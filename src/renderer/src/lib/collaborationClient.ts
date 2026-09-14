@@ -35,7 +35,7 @@ export class CollaborationClient {
     this.applying = true
     try {
       if (reset) useEditor.getState().loadProject(project, { clean })
-      else useEditor.setState({ project, dirty: !clean, past: [], future: [] })
+      else useEditor.getState().applySharedProject(project, clean)
     } finally { this.applying = false }
   }
   async open() {
