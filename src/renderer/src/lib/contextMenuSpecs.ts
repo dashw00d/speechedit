@@ -99,6 +99,13 @@ function wordMenu(wordId: string): ContextMenuSpec {
   const { choices } = transcriptChoices(project, selected)
   const items: ContextMenuItem[] = fromCommands(choices)
 
+  items.push({
+    id: 're-record',
+    label: 'Re-record audio',
+    hint: 'Record a new take for the selected words. Undo restores the original.',
+    run: () => window.dispatchEvent(new Event('speechedit:re-record'))
+  })
+
   items.push({ id: 'sep-edit', label: '', separator: true })
   items.push({
     id: 'edit-text',
