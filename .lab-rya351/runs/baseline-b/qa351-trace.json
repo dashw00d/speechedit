@@ -1,0 +1,142 @@
+{
+  "url": "http://127.0.0.1:3365",
+  "results": {
+    "scenarios": {
+      "rya342": {
+        "undoEnabledBeforeMerge": true,
+        "undoWorkedBeforeMerge": true,
+        "mergeObservedAfterPeerSave": true,
+        "word3BeforeUndo": "G3",
+        "projectRevisionBefore": 3,
+        "projectRevisionAfter": 4,
+        "revisionAdvanced": true,
+        "undoEnabledAfterMerge": false,
+        "undoButtonAcceptedClick": false,
+        "word3AfterUndoAttempt": "G3",
+        "undoAfterMergeWorked": false,
+        "peerWord5Preserved": true,
+        "checks": {
+          "undoEnabledBeforeMerge": true,
+          "undoWorkedBeforeMerge": true,
+          "mergeObservedAfterPeerSave": true,
+          "revisionAdvanced": true,
+          "undoEnabledAfterMerge": false,
+          "undoAfterMergeWorked": false,
+          "peerEditPreserved": true
+        },
+        "ok": false
+      },
+      "crossCueControl": {
+        "guestStatus": "All changes saved · v6",
+        "peerStatus": "All changes saved · v6",
+        "guestConflict": "",
+        "peerConflict": "",
+        "serverWord0": "CrossA",
+        "serverWord4": "CrossB",
+        "guestWords": [
+          "CrossA",
+          "CrossB"
+        ],
+        "peerWords": [
+          "CrossA",
+          "CrossB"
+        ],
+        "checks": {
+          "noBlockingConflict": true,
+          "bothWordsPersisted": true,
+          "clientsConverged": true
+        },
+        "ok": true
+      },
+      "rya343": {
+        "guestSavedWord6": "SameCueA",
+        "peerLocalWord7": "SameCueB",
+        "peerStatus": "Resolve simultaneous edits · v6",
+        "peerConflict": "Another editor changed the same items.\n\ntracks[v3].clips[cap_bcq9vrqiqp].text\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+        "guestStatus": "All changes saved · v7",
+        "guestConflict": "",
+        "peerWord6": "different",
+        "peerWord7": "SameCueB",
+        "guestWord6": "SameCueA",
+        "guestWord7": "chapter.",
+        "serverWord6": "SameCueA",
+        "serverWord7": "chapter.",
+        "conflictTextObserved": "Another editor changed the same items.\n\ntracks[v3].clips[cap_bcq9vrqiqp].text\n\nYour draft is preserved. Download a copy before choosing which changes to keep.\n\nKeep my conflicting editsUse saved project",
+        "noBlockingConflict": false,
+        "bothWordsPersisted": false,
+        "clientsConverged": false,
+        "checks": {
+          "noBlockingConflict": false,
+          "bothWordsPersisted": false,
+          "clientsConverged": false
+        },
+        "ok": false
+      }
+    },
+    "editLink": "http://127.0.0.1:3365/edit/486852b4009e7f62a7d80dfc1657f6ee/edit/<room>#<key>",
+    "setup": true,
+    "initialWords": [
+      "Welcome",
+      "to",
+      "this",
+      "recording.",
+      "Now",
+      "a",
+      "different",
+      "chapter."
+    ],
+    "pass": false
+  },
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [
+        {
+          "url": "http://127.0.0.1:3365/api/reviews/486852b4009e7f62a7d80dfc1657f6ee/project",
+          "status": 409,
+          "method": "PUT"
+        }
+      ],
+      "gone": []
+    },
+    "peer": {
+      "partition": "peer",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": []
+    }
+  },
+  "failures": [
+    "RYA-342: Undo is disabled after the peer merge (merge wiped local history)",
+    "RYA-343: same-cue different-word edits hit a blocking \"Resolve simultaneous edits\" state (tracks[v3].clips[cap_bcq9vrqiqp].text)",
+    "RYA-343: both words did not persist (server word6=SameCueA, word7=chapter.)",
+    "RYA-343: clients did not converge on both words"
+  ],
+  "finishedAt": "2026-09-14T04:06:42.764Z"
+}
