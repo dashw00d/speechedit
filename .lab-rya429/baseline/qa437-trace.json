@@ -1,0 +1,126 @@
+{
+  "url": "http://127.0.0.1:60063",
+  "results": {
+    "steps": [
+      {
+        "name": "owner-created-link",
+        "value": {
+          "roomId": "f1f11ef6…"
+        },
+        "at": 1789374951777
+      },
+      {
+        "name": "detector-self-test",
+        "value": {
+          "promptDetected": true,
+          "probeText": "A collaborator edited this project. Review shared edits."
+        },
+        "at": 1789374951887
+      },
+      {
+        "name": "guest-saved",
+        "value": {
+          "serverWord0": "RemoteWelcome"
+        },
+        "at": 1789374952272
+      },
+      {
+        "name": "owner-observation",
+        "value": {
+          "autoApplied": false,
+          "prompt": null,
+          "ownerObservedWord0": "Welcome",
+          "ownerCachedWord0After": "Welcome",
+          "ownerPollCount": 0,
+          "observeMs": 45171
+        },
+        "at": 1789374997504
+      },
+      {
+        "name": "discriminating-control",
+        "value": {
+          "controlLoadedFromServer": true,
+          "controlLiveSynced": true
+        },
+        "at": 1789375000684
+      }
+    ],
+    "ownerOriginalWord0": "Welcome",
+    "ownerOriginalWords": [
+      "Welcome",
+      "to",
+      "this",
+      "recording.",
+      "Now",
+      "a",
+      "different",
+      "chapter."
+    ],
+    "editLink": "http://127.0.0.1:60063/edit/f1f11ef6d7d90e7e92eaa05debc96bbd/edit/<room>#<key>",
+    "ownerShareSheetClosed": true,
+    "ownerPreRemoteWord0": "Welcome",
+    "ownerPreRemotePrompt": null,
+    "detectorSelfTest": {
+      "promptDetected": true,
+      "probeText": "A collaborator edited this project. Review shared edits."
+    },
+    "serverWord0AfterGuestSave": "RemoteWelcome",
+    "guestSaved": true,
+    "observeMs": 45171,
+    "ownerAutoApplied": false,
+    "ownerPrompt": null,
+    "ownerObservedWord0": "Welcome",
+    "ownerCachedWord0After": "Welcome",
+    "ownerPollCount": 0,
+    "controlLoadedFromServer": true,
+    "controlLiveSynced": true,
+    "completed": true,
+    "pass": false
+  },
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "reviewRequests": []
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "reviewRequests": []
+    },
+    "control": {
+      "partition": "control",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "reviewRequests": []
+    }
+  },
+  "failures": [
+    "owner never observed the collaborator's saved word edit within 45171 ms (expected the editor to auto-apply \"RemoteWelcome\" or show a clear in-editor shared-edit prompt). owner word[0]=\"Welcome\" (server=\"RemoteWelcome\"), owner cached word[0]=\"Welcome\", owner review-API requests during the window=0. Root cause: the main workspace editor does not construct a CollaborationClient (only /edit/ openers do, src/renderer/src/components/EditPage.tsx:12-21); the sole owner ingress is Share -> \"Bring shared edits into this project\"."
+  ],
+  "finishedAt": "2026-09-14T08:36:40.685Z"
+}

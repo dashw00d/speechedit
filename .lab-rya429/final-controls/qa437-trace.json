@@ -1,0 +1,166 @@
+{
+  "url": "http://127.0.0.1:55935",
+  "results": {
+    "steps": [
+      {
+        "name": "owner-created-link",
+        "value": {
+          "roomId": "67a54ebb…"
+        },
+        "at": 1789374977133
+      },
+      {
+        "name": "detector-self-test",
+        "value": {
+          "promptDetected": true,
+          "probeText": "A collaborator edited this project. Review shared edits."
+        },
+        "at": 1789374977243
+      },
+      {
+        "name": "guest-saved",
+        "value": {
+          "serverWord0": "RemoteWelcome"
+        },
+        "at": 1789374977591
+      },
+      {
+        "name": "owner-observation",
+        "value": {
+          "autoApplied": false,
+          "prompt": "Editing linkYour collaborator saved changes. Bring them into this project.Bring shared edits into this projectYour local edits stay on this device. Bringing in updates can be undone.",
+          "ownerObservedWord0": "Welcome",
+          "ownerCachedWord0After": "Welcome",
+          "ownerPollCount": 1,
+          "observeMs": 2510
+        },
+        "at": 1789374980161
+      },
+      {
+        "name": "discriminating-control",
+        "value": {
+          "controlLoadedFromServer": true,
+          "controlLiveSynced": true
+        },
+        "at": 1789374983542
+      }
+    ],
+    "ownerOriginalWord0": "Welcome",
+    "ownerOriginalWords": [
+      "Welcome",
+      "to",
+      "this",
+      "recording.",
+      "Now",
+      "a",
+      "different",
+      "chapter."
+    ],
+    "editLink": "http://127.0.0.1:55935/edit/67a54ebb33f00b1e7ce8c205ce62616d/edit/<room>#<key>",
+    "ownerShareSheetClosed": true,
+    "ownerPreRemoteWord0": "Welcome",
+    "ownerPreRemotePrompt": null,
+    "detectorSelfTest": {
+      "promptDetected": true,
+      "probeText": "A collaborator edited this project. Review shared edits."
+    },
+    "serverWord0AfterGuestSave": "RemoteWelcome",
+    "guestSaved": true,
+    "observeMs": 2510,
+    "ownerAutoApplied": false,
+    "ownerPrompt": "Editing linkYour collaborator saved changes. Bring them into this project.Bring shared edits into this projectYour local edits stay on this device. Bringing in updates can be undone.",
+    "ownerObservedWord0": "Welcome",
+    "ownerCachedWord0After": "Welcome",
+    "ownerPollCount": 1,
+    "ownerImportUndo": {
+      "pass": true,
+      "layout": {
+        "top": 621,
+        "bottom": 901,
+        "height": 280,
+        "viewport": 971
+      }
+    },
+    "controlLoadedFromServer": true,
+    "controlLiveSynced": true,
+    "conflictPreserved": true,
+    "completed": true,
+    "pass": true,
+    "acceptedBehavior": "in-editor prompt"
+  },
+  "traces": {
+    "owner": {
+      "partition": "owner",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        },
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "reviewRequests": [
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:55935/api/reviews/67a54ebb33f00b1e7ce8c205ce62616d",
+          "at": 1789374979912
+        },
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:55935/api/reviews/67a54ebb33f00b1e7ce8c205ce62616d",
+          "at": 1789374980191
+        },
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:55935/api/reviews/67a54ebb33f00b1e7ce8c205ce62616d",
+          "at": 1789374980215
+        },
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:55935/api/reviews/67a54ebb33f00b1e7ce8c205ce62616d",
+          "at": 1789374982912
+        },
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:55935/api/reviews/67a54ebb33f00b1e7ce8c205ce62616d",
+          "at": 1789374983583
+        },
+        {
+          "method": "GET",
+          "url": "http://127.0.0.1:55935/api/reviews/67a54ebb33f00b1e7ce8c205ce62616d",
+          "at": 1789374985912
+        }
+      ]
+    },
+    "guest": {
+      "partition": "guest",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "reviewRequests": []
+    },
+    "control": {
+      "partition": "control",
+      "console": [
+        {
+          "level": 2,
+          "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+        }
+      ],
+      "network": [],
+      "gone": [],
+      "reviewRequests": []
+    }
+  },
+  "failures": [],
+  "finishedAt": "2026-09-14T08:36:27.201Z"
+}

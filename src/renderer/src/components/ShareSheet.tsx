@@ -1,6 +1,6 @@
-import { mergeSharedProjects, prepareSharedProject } from '../../../shared/collaboration'
-import { readSharedState, writeSharedState, mountSharedProject } from '../lib/sharedSession'
-import type { Project } from '../types'
+import { prepareSharedProject } from '../../../shared/collaboration'
+import { writeSharedState } from '../lib/sharedSession'
+import { bringSharedEdits } from '../lib/ownerSharedEdits'
 import { useEffect, useRef, useState } from 'react'
 import { useDialog } from '../useDialog'
 import { useEditor, usePlayback } from '../store'
@@ -98,20 +98,7 @@ export function ShareSheet({ onClose, onToast, initialView = 'share', inbox }: {
   async function pullEdits() {
     if (!binding) return
     try {
-      const latest = await reviewRequest<ReviewRoom>(`/${binding.id}`, binding.ownerKey)
-      if (!latest.project) return
-      const base = await readSharedState<Project>(`owner-base:${binding.id}`)
-      if (!base) throw new Error('The original sharing baseline is missing in this browser. Open the shared editor and download its edit copy to recover it safely.')
-      const current = useEditor.getState().project
-      const merged = mergeSharedProjects(base, prepareSharedProject(current), latest.project)
-      if (merged.conflicts.length) throw new Error(`Local and remote edits overlap: ${merged.conflicts.slice(0, 4).join(', ')}. Open the shared editor to review and download those edits before replacing local work.`)
-      const originals = { ...current, assets: { ...current.assets } }
-      for (const asset of Object.values(merged.project.assets)) {
-        if (asset.isRecording && !current.assets[asset.id]) originals.assets[asset.id] = await keepRecordingOriginal(asset, binding.id, binding.ownerKey)
-      }
-      if (useEditor.getState().project !== current) throw new Error('Your project changed while downloading recordings. Bring shared edits in again to use the latest version.')
-      useEditor.getState().dispatch({ type: 'replaceProject', project: { ...mountSharedProject(merged.project, binding.id, originals), reviewDecisions: current.reviewDecisions } })
-      await writeSharedState(`owner-base:${binding.id}`, latest.project)
+      const latest = await bringSharedEdits(binding)
       setRoom(latest); setError(''); onToast('Shared edits brought into your project. Originals preserved; Undo restores the previous edit.')
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
