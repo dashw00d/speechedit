@@ -1,0 +1,165 @@
+fixture: A clip=[0,2]  B clip=[4,6]  baseHasVoiceTrack=false
+[DROP] stale-save:B-local+A-remote  kept=["take-B"]  conflicts=["tracks[voice_replacements]"]
+[DROP] stale-save:A-local+B-remote  kept=["take-A"]  conflicts=["tracks[voice_replacements]"]
+[DROP] resolve:B-keep-local -> peer:A-sees-server  kept=["take-B"]  conflicts=[]
+[DROP] resolve:A-keep-local -> peer:B-sees-server  kept=["take-A"]  conflicts=[]
+[KEEP] control:single-A  kept=["take-A"]  conflicts=[]
+[KEEP] control:single-B  kept=["take-B"]  conflicts=[]
+[KEEP] control:no-op  kept=[]  conflicts=[]
+[KEEP] control:identical-edit-both  kept=["take-A"]  conflicts=[]
+[KEEP] control:voice-vs-unrelated-track  kept=["take-A"]  conflicts=[]
+[KEEP] candidate-sim:union-both-clips  kept=["take-A","take-B"]  conflicts=[]
+[KEEP] candidate-sim:conflict-resolved-both-clips  kept=["take-A","take-B"]  conflicts=["tracks[voice_replacements]"]
+{
+  "results": [
+    {
+      "name": "stale-save:B-local+A-remote",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-B"
+      ],
+      "conflicts": [
+        "tracks[voice_replacements]"
+      ],
+      "ok": false,
+      "mustPass": true
+    },
+    {
+      "name": "stale-save:A-local+B-remote",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [
+        "tracks[voice_replacements]"
+      ],
+      "ok": false,
+      "mustPass": true
+    },
+    {
+      "name": "resolve:B-keep-local -> peer:A-sees-server",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": false,
+      "mustPass": true
+    },
+    {
+      "name": "resolve:A-keep-local -> peer:B-sees-server",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": false,
+      "mustPass": true
+    },
+    {
+      "name": "control:single-A",
+      "expected": [
+        "take-A"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:single-B",
+      "expected": [
+        "take-B"
+      ],
+      "kept": [
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:no-op",
+      "expected": [],
+      "kept": [],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:identical-edit-both",
+      "expected": [
+        "take-A"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "control:voice-vs-unrelated-track",
+      "expected": [
+        "take-A"
+      ],
+      "kept": [
+        "take-A"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "candidate-sim:union-both-clips",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [],
+      "ok": true,
+      "mustPass": true
+    },
+    {
+      "name": "candidate-sim:conflict-resolved-both-clips",
+      "expected": [
+        "take-A",
+        "take-B"
+      ],
+      "kept": [
+        "take-A",
+        "take-B"
+      ],
+      "conflicts": [
+        "tracks[voice_replacements]"
+      ],
+      "ok": true,
+      "mustPass": true
+    }
+  ],
+  "failures": [
+    "stale-save:B-local+A-remote: expected both recordings [\"take-A\",\"take-B\"] but the merge kept [\"take-B\"] (a collaborator's clip was dropped)",
+    "stale-save:A-local+B-remote: expected both recordings [\"take-A\",\"take-B\"] but the merge kept [\"take-A\"] (a collaborator's clip was dropped)",
+    "resolve:B-keep-local -> peer:A-sees-server: expected both recordings [\"take-A\",\"take-B\"] but the merge kept [\"take-B\"] (a collaborator's clip was dropped)",
+    "resolve:A-keep-local -> peer:B-sees-server: expected both recordings [\"take-A\",\"take-B\"] but the merge kept [\"take-A\"] (a collaborator's clip was dropped)"
+  ],
+  "pass": false
+}
