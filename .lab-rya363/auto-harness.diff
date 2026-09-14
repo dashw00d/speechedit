@@ -1,0 +1,30 @@
+--- /home/ryan/.paperclip/workspaces/speechedit/astra-rya363/scripts/qa365-two-records-loss.cjs	2026-09-14 01:01:28.830693384 -0500
++++ /tmp/paperclip-run-rya-431-0c67c01e-2d7-FfB4gj/qa363-auto.cjs	2026-09-14 02:33:03.124650398 -0500
+@@ -193,14 +193,10 @@
+   blockGuestGet = false
+   await sleep(500)
+   await click(guest, 'Save now')
+-  if (!await waitFor(guest, `!!document.querySelector('.shared-conflict')`, 30000)) throw Error('Guest did not get the expected stale-sync conflict')
+-  results.guestConflictBanner = true
+-  results.guestConflictText = (await conflictText(guest)).slice(0, 400)
+-  await shot(guest, '03-guest-conflict.png')
+-
+-  // --- guest keeps its conflicting edits ----------------------------------
+-  await click(guest, 'Keep my conflicting edits')
+-  if (!await waitFor(guest, `!document.querySelector('.shared-conflict')`, 60000)) throw Error('Guest conflict did not resolve')
++  if (!await waitFor(guest, `(document.querySelector('.shared-edit-bar [role="status"]')?.textContent||'').includes('All changes saved')`, 30000)) throw Error('Guest did not automatically save both recordings')
++  results.guestConflictBanner = await js(guest, `!!document.querySelector('.shared-conflict')`)
++  if (results.guestConflictBanner) throw Error('Separate passages unexpectedly require conflict resolution')
++  await shot(guest, '03-guest-auto-saved.png')
+   await sleep(1500)
+   await shot(guest, '04-guest-resolved.png')
+ 
+@@ -232,7 +228,7 @@
+   })
+ 
+   results.completed = true
+-  if (!results.guestConflictBanner) fail('guest B did not get the expected stale-sync conflict banner')
++  if (results.guestConflictBanner) fail('Separate passages required conflict resolution')
+   if (results.serverKeepsA === false) fail("owner A's recording was dropped from the server project after B chose 'Keep my conflicting edits'")
+   if (results.serverKeepsB === false) fail("guest B's recording is missing from the server project after resolving the conflict")
+   if (results.ownerKeepsA === false) fail("owner A's own screen lost A's recording after B chose 'Keep my conflicting edits'")
