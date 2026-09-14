@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { ReviewRoom } from '../../../shared/review'
-import type { Project } from '../types'
-import { reviewBindings, reviewRequest, REVIEW_LINKS_CHANGED, type ReviewBinding } from '../lib/reviewApi'
-import { readSharedState } from '../lib/sharedSession'
-import { bringSharedEdits, OWNER_EDITS_APPLIED } from '../lib/ownerSharedEdits'
+import { useEditor } from '../store'
+import { reviewBindings, REVIEW_LINKS_CHANGED, type ReviewBinding } from '../lib/reviewApi'
+import { bringSharedEdits, syncOwnerEdits, OWNER_EDITS_APPLIED } from '../lib/ownerSharedEdits'
 
 export function OwnerSharedEdits({ projectId, onToast }: { projectId: string; onToast: (message: string) => void }) {
   const [bindings, setBindings] = useState(() => reviewBindings(projectId).filter(b => b.mode === 'edit'))
@@ -29,24 +27,27 @@ function OwnerSharedRoom({ binding, label, onToast }: { binding: ReviewBinding; 
       if (checking) return
       checking = true
       try {
-        const room = await reviewRequest<ReviewRoom>(`/${binding.id}`, binding.ownerKey, 'GET', undefined, abort.signal)
-        const base = await readSharedState<Project>(`owner-base:${binding.id}`)
-        if (abort.signal.aborted) return
-        if (!room.published) { setMessage('Preparing editing link…'); return }
-        if (!room.project || room.mode !== 'edit') throw new Error('Editing access is no longer available. Manage this link in Share.')
-        if (!base) throw new Error('This browser cannot safely combine these edits. Open Share, then Open full editor to download an edit copy.')
-        const changed = JSON.stringify(base) !== JSON.stringify(room.project)
-        setPending(changed)
-        setMessage(changed ? 'Your collaborator saved changes. Bring them into this project.' : 'No new updates.')
+        await syncOwnerEdits(binding, abort.signal, status => {
+          if (abort.signal.aborted) return
+          setPending(status.pending)
+          setMessage(status.message)
+        })
         setCheckError('')
       } catch (e) {
-        if (!abort.signal.aborted) { setMessage('Unable to check for updates. Retrying…'); setCheckError(e instanceof Error ? e.message : String(e)) }
+        if (!abort.signal.aborted) { setMessage('Your changes may not be shared yet. Retrying…'); setCheckError(e instanceof Error ? e.message : String(e)) }
       } finally { checking = false }
     }
+    let editTimer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = useEditor.subscribe((state, previous) => {
+      if (state.project === previous.project || state.project.id !== binding.projectId) return
+      setMessage('Sharing your latest changes…')
+      clearTimeout(editTimer)
+      editTimer = setTimeout(() => void check(), 0)
+    })
     void check()
     const timer = setInterval(() => void check(), 3000)
     window.addEventListener(OWNER_EDITS_APPLIED, check)
-    return () => { abort.abort(); clearInterval(timer); window.removeEventListener(OWNER_EDITS_APPLIED, check) }
+    return () => { abort.abort(); unsubscribe(); clearTimeout(editTimer); clearInterval(timer); window.removeEventListener(OWNER_EDITS_APPLIED, check) }
   }, [binding.id, binding.ownerKey])
   async function apply() {
     setBusy(true)
@@ -60,7 +61,7 @@ function OwnerSharedRoom({ binding, label, onToast }: { binding: ReviewBinding; 
   return <aside className="shared-edit-bar" aria-label="Collaborator updates">
     <strong>{label}</strong><span role="status">{message}</span>
     {pending && <button className="chip confirm-primary" disabled={busy} onClick={() => void apply()}>{busy ? 'Bringing in edits…' : 'Bring shared edits into this project'}</button>}
-    <small>Your local edits stay on this device. Bringing in updates can be undone.</small>
+    <small>Your edits are shared automatically. Originals stay on this device. Bringing in updates can be undone.</small>
     {(error || checkError) && <p className="review-error" role="alert">{error || checkError}</p>}
   </aside>
 }
