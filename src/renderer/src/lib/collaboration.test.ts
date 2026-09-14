@@ -48,6 +48,40 @@ describe('shared editing document', () => {
     expect(conflict.conflicts.some(p => p.includes('.text'))).toBe(true)
     expect(conflict.project.transcript.words[0].text).toBe('Welcome')
   })
+  test('different words in one caption merge in either save order', () => {
+    const base = applyCommand(prepareSharedProject(fixture()), { type: 'generateCaptions' })
+    const mine = applyCommand(base, { type: 'setWordText', wordId: base.transcript.words[0].id, text: 'Welcome' })
+    const theirs = applyCommand(base, { type: 'setWordText', wordId: base.transcript.words[1].id, text: 'everyone.' })
+    for (const [local, remote] of [[mine, theirs], [theirs, mine]]) {
+      const result = mergeSharedProjects(base, local, remote)
+      expect(result.conflicts).toEqual([])
+      expect(result.project.transcript.words.slice(0, 2).map(w => w.text)).toEqual(['Welcome', 'everyone.'])
+      expect(result.project.tracks.find(t => t.type === 'caption')!.clips[0].text).toBe('Welcome everyone.')
+    }
+  })
+  test('caption merging preserves spacing and keeps overlapping edits explicit', () => {
+    const base = applyCommand(prepareSharedProject(fixture()), { type: 'generateCaptions' })
+    const caption = base.tracks.find(t => t.type === 'caption')!.clips[0]
+    caption.text = 'One  café\tthree four.'
+    const edited = (text: string) => applyCommand(base, { type: 'setText', clipId: caption.id, text })
+    const result = mergeSharedProjects(base, edited('First  café\tthree four.'), edited('One  café\tthree last.'))
+    expect(result.conflicts).toEqual([])
+    expect(result.project.tracks.find(t => t.type === 'caption')!.clips[0].text).toBe('First  café\tthree last.')
+    for (const [a, b] of [['One  coffee\tthree four.', 'One  tea\tthree four.'], ['One  new café\tthree four.', 'One  other café\tthree four.'], ['', 'One  café\tthree last.']]) {
+      expect(mergeSharedProjects(base, edited(a), edited(b)).conflicts).toContain(`tracks[${caption.trackId}].clips[${caption.id}].text`)
+    }
+    const titled = applyCommand(base, { type: 'addTitle', start: 0, duration: 2, text: 'First middle last' })
+    const titleTrack = titled.tracks.find(t => t.clips.some(c => c.text === 'First middle last'))!
+    titleTrack.type = 'overlay'
+    const title = titleTrack.clips.find(c => c.text === 'First middle last')!
+    const titleMerge = mergeSharedProjects(titled,
+      applyCommand(titled, { type: 'setText', clipId: title.id, text: 'New middle last' }),
+      applyCommand(titled, { type: 'setText', clipId: title.id, text: 'First middle end' }))
+    expect(titleMerge.conflicts).toContain(`tracks[${title.trackId}].clips[${title.id}].text`)
+    const deleted = structuredClone(base)
+    deleted.tracks.find(t => t.type === 'caption')!.clips = []
+    expect(mergeSharedProjects(base, deleted, edited('One  café\tthree last.')).conflicts).toContain(`tracks[${caption.trackId}].clips[${caption.id}]`)
+  })
   test('concurrent track moves conflict without duplicating or resurrecting clips', () => {
     let base = prepareSharedProject(fixture())
     base = applyCommand(base, { type: 'addTitle', start: 0, duration: 2, text: 'Move me' })
