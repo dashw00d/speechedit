@@ -1,0 +1,411 @@
+{
+  "productCommit": "d85e8ef",
+  "base": "7401bf8",
+  "candidate": {
+    "url": "http://127.0.0.1:3491",
+    "results": {
+      "scenarios": {
+        "F": {
+          "link": "http://127.0.0.1:3491/edit/9469ced90bdf63d3a4f3c6561c317d44/edit/<room>#<key>",
+          "hostBaseline": [
+            "Welcome",
+            "to",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostNotified": true,
+          "hostStatus": "Your collaborator saved changes. Bring them into this project.",
+          "hostWordsAfterPull": [
+            "GuestWord",
+            "to",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostWordsAfterEdit": [
+            "GuestWord",
+            "HostWord",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostSyncMs": 152,
+          "serverWordsAfterHostEdit": [
+            "GuestWord",
+            "HostWord",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "guestWordsAfterHostEdit": [
+            "GuestWord",
+            "HostWord",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostEditShared": true,
+          "undoHostShared": true,
+          "undoPullShared": true,
+          "pendingMessage": "Your changes are not shared yet. Bring in your collaborator\u2019s changes first.",
+          "waitingServer": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "mergedWords": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "offlineMessage": "Your changes may not be shared yet. Retrying\u2026",
+          "reconnectedWords": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "OfflineOwner",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "otherHostStatus": "Your changes are not shared yet. Bring in your collaborator\u2019s changes first.",
+          "otherHostServer": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "chapter."
+          ],
+          "conflictAlert": "Local and remote edits overlap: tracks[v3].clips[cap_zfevrg77uq].text, transcript.words[w_w500cc37u1].text. Open the shared editor to review and download those edits before replacing local work.",
+          "conflictServer": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "GuestConflict"
+          ],
+          "conflictHost": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "HostConflict"
+          ],
+          "hostWordsAfterOpenLink": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "GuestConflict"
+          ],
+          "hostWorkspaceEditSurvivedOpenLink": true,
+          "hostWordsAfterReturnToWorkspace": [
+            "Welcome",
+            "HostWord",
+            "GuestPending",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "GuestConflict"
+          ],
+          "hostWorkspaceEditRecoveredOnReturn": true
+        }
+      },
+      "steps": [
+        {
+          "name": "scenarioF",
+          "value": {
+            "hostNotified": true,
+            "hostEditShared": true,
+            "hostWorkspaceEditSurvivedOpenLink": true
+          },
+          "at": 1789385911511
+        }
+      ],
+      "completed": true,
+      "pass": true
+    },
+    "traces": {
+      "host": {
+        "partition": "host",
+        "console": [
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          },
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          }
+        ],
+        "network": [],
+        "gone": []
+      },
+      "guest": {
+        "partition": "guest",
+        "console": [
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          },
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          }
+        ],
+        "network": [],
+        "gone": []
+      }
+    },
+    "failures": [],
+    "finishedAt": "2026-09-14T11:38:31.511Z"
+  },
+  "baseline": {
+    "url": "http://127.0.0.1:3492",
+    "results": {
+      "scenarios": {
+        "F": {
+          "link": "http://127.0.0.1:3492/edit/b5a9e64a0120167bc735effa5313a247/edit/<room>#<key>",
+          "hostBaseline": [
+            "Welcome",
+            "to",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostNotified": true,
+          "hostStatus": "Your collaborator saved changes. Bring them into this project.",
+          "hostWordsAfterPull": [
+            "GuestWord",
+            "to",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostWordsAfterEdit": [
+            "GuestWord",
+            "HostWord",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostSyncMs": 3523,
+          "serverWordsAfterHostEdit": [
+            "GuestWord",
+            "to",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "guestWordsAfterHostEdit": [
+            "GuestWord",
+            "to",
+            "this",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "hostEditShared": false,
+          "undoHostShared": true,
+          "undoPullShared": false,
+          "pendingMessage": "Your collaborator saved changes. Bring them into this project.",
+          "waitingServer": [
+            "GuestWord",
+            "to",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "mergedWords": [
+            "GuestWord",
+            "to",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "offlineMessage": "Unable to check for updates. Retrying\u2026",
+          "reconnectedWords": [
+            "GuestWord",
+            "to",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "otherHostStatus": "Your collaborator saved changes. Bring them into this project.",
+          "otherHostServer": [
+            "GuestWord",
+            "to",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "chapter."
+          ],
+          "conflictAlert": "Local and remote edits overlap: tracks[v3].clips[cap_1y8a9rsl3q].text. Open the shared editor to review and download those edits before replacing local work.",
+          "conflictServer": [
+            "GuestWord",
+            "to",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "GuestConflict"
+          ],
+          "conflictHost": [
+            "Welcome",
+            "HostWord",
+            "this",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "HostConflict"
+          ],
+          "hostWordsAfterOpenLink": [
+            "GuestWord",
+            "to",
+            "GuestPending",
+            "recording.",
+            "Now",
+            "a",
+            "different",
+            "GuestConflict"
+          ],
+          "hostWorkspaceEditSurvivedOpenLink": false,
+          "hostWordsAfterReturnToWorkspace": [
+            "Welcome",
+            "HostWord",
+            "this",
+            "OwnerPending",
+            "OfflineOwner",
+            "FirstHost",
+            "different",
+            "chapter."
+          ],
+          "hostWorkspaceEditRecoveredOnReturn": true
+        }
+      },
+      "steps": [
+        {
+          "name": "scenarioF",
+          "value": {
+            "hostNotified": true,
+            "hostEditShared": false,
+            "hostWorkspaceEditSurvivedOpenLink": false
+          },
+          "at": 1789385949578
+        }
+      ],
+      "completed": true,
+      "pass": false
+    },
+    "traces": {
+      "host": {
+        "partition": "host",
+        "console": [
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          },
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          }
+        ],
+        "network": [],
+        "gone": []
+      },
+      "guest": {
+        "partition": "guest",
+        "console": [
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          },
+          {
+            "level": 2,
+            "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged."
+          }
+        ],
+        "network": [],
+        "gone": []
+      }
+    },
+    "failures": [
+      "Scenario F co-op failure: host edit in the normal workspace never reached the shared project or the guest (server word1=\"to\", guest word1=\"to\", host word1=\"HostWord\")",
+      "Undo of brought-in guest edits did not reach server and guest",
+      "Pending guest changes were overwritten or host pending state was not explained",
+      "Non-overlapping pending edits did not merge and share",
+      "Offline host falsely claimed its changes were shared",
+      "Host offline changes did not reach guest after reconnect",
+      "Stale second host adopted another tab\u2019s baseline and overwrote shared work",
+      "Scenario F: opening the editing link did not include the host's workspace edit (word1=\"to\" instead of \"HostWord\"); it remains recoverable in the normal workspace, but the shared editor shows a stale copy with no warning"
+    ],
+    "finishedAt": "2026-09-14T11:39:09.578Z"
+  }
+}
