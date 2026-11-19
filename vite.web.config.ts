@@ -6,6 +6,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
+import { WHISPER_MODEL_CACHE_VERSIONS, whisperModelRevision } from './src/shared/whisperModels'
 
 function packageVersion(): string {
   try {
@@ -17,8 +18,6 @@ function packageVersion(): string {
 }
 
 const whisperCacheRoot = resolve('node_modules/.cache/speechedit-browser-whisper')
-const whisperModelRevision = '2575352d61be1bf7225cf8f8b268a4678025fc58'
-const whisperBrowserCacheVersion = 'v2'
 const demoAiModel = 'openrouter/free'
 
 function readRequestJson(request: import('node:http').IncomingMessage, maxBytes = 1_000_000): Promise<unknown> {
@@ -132,7 +131,7 @@ function browserWhisperModelServer(): Plugin {
     server.middlewares.use('/whisper-models', async (request, response) => {
       const pathname = decodeURIComponent((request.url ?? '/').split('?')[0]).replace(/^\/+/, '')
       const parts = pathname.split('/').filter(Boolean)
-      const resourceParts = parts[0] === whisperBrowserCacheVersion ? parts.slice(1) : parts
+      const resourceParts = WHISPER_MODEL_CACHE_VERSIONS.includes(parts[0]) ? parts.slice(1) : parts
       if (resourceParts.length < 3 || resourceParts.some((part) => part === '..' || part.includes('\\'))) {
         response.statusCode = 400
         response.end('Invalid model path')
@@ -157,7 +156,13 @@ function browserWhisperModelServer(): Plugin {
           return
         }
         const [owner, model, ...fileParts] = resourceParts
-        const upstreamUrl = `https://huggingface.co/${encodeURIComponent(owner)}/${encodeURIComponent(model)}/resolve/${whisperModelRevision}/${fileParts.map(encodeURIComponent).join('/')}`
+        const revision = whisperModelRevision(owner, model)
+        if (!revision) {
+          response.statusCode = 404
+          response.end('Unknown Whisper model')
+          return
+        }
+        const upstreamUrl = `https://huggingface.co/${encodeURIComponent(owner)}/${encodeURIComponent(model)}/resolve/${revision}/${fileParts.map(encodeURIComponent).join('/')}`
         const upstream = await fetch(upstreamUrl, { redirect: 'follow' })
         if (!upstream.ok || !upstream.body) {
           response.statusCode = upstream.status || 502

@@ -2,10 +2,15 @@ import { env, pipeline } from '@huggingface/transformers'
 import wasmUrl from '../../../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm?url'
 import runtimeUrl from '../../../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs?url'
 import { browserGpuUnavailableReason } from '../lib/browserGpu'
+import {
+  BROWSER_WHISPER_MODEL,
+  BROWSER_WHISPER_MODEL_REVISION,
+  WHISPER_MODEL_CACHE_VERSION
+} from '../../../shared/whisperModels'
 
-const MODEL = 'onnx-community/whisper-tiny.en_timestamped'
-const MODEL_REVISION = 'aeaa13760958b03fac5062f457d317d3319c3168'
-const MODEL_CACHE_VERSION = 'v3'
+const MODEL = BROWSER_WHISPER_MODEL
+const MODEL_REVISION = BROWSER_WHISPER_MODEL_REVISION
+const MODEL_CACHE_VERSION = WHISPER_MODEL_CACHE_VERSION
 
 type WorkerRequest =
   | { type: 'load'; backend?: 'wasm'; fallbackReason?: string }

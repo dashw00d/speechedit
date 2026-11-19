@@ -4,8 +4,7 @@
 // Prerequisites
 //   bun install && bun run build:web
 //   OPENROUTER_API_KEY=placeholder PORT=5200 bun run start:web
-//     Use the production server, not `dev:web` (its Whisper model proxy pins a different revision). The
-//     placeholder key only makes the status chip read "Demo AI is ready"; no AI request is ever sent.
+//     The placeholder key only makes the status chip read "Demo AI is ready"; no AI request is ever sent.
 //   npm i --no-save playwright-core && npx playwright-core install chromium   (or reuse any Playwright install)
 //   A short speech recording as WebM (VP8/Opus; headless Chromium has no H.264/AAC). The README
 //   images use the public-domain JFK sample from whisper.cpp:
