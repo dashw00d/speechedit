@@ -299,3 +299,7 @@ API clients use the ID and fragment key (the part before the first `&` for passa
 A stale revision returns 409. The key never appears in API URLs. Media uses a room-scoped HttpOnly cookie established by an authenticated room read. Never distribute the owner key as a collaborator link.
 
 Run `bun run smoke:edit http://127.0.0.1:3000` or `bun run smoke:review http://127.0.0.1:3000` against a production web build/server. They use deterministic Whisper results with real compression, upload, independent browser sessions, editing/review, owner merge/acceptance, undo, and revocation. Set `SPEECHEDIT_REVIEW_VIDEO=1` for video. Synthetic fixtures are revoked afterward.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
