@@ -124,8 +124,6 @@ bun run dev:web    # renderer only, in a browser (studio demo works)
 bun test           # unit tests
 ```
 
-If `bun run dev` reports `Electron uninstall`, Bun skipped Electron's post-install download; run `node node_modules/electron/install.js` once and retry.
-
 On WSL, if the window never appears: `NO_SANDBOX=1 bun run dev`.
 
 The window title, Preferences, and Project → Advanced show the version and git commit. **Copy build id** pastes a diagnostic for a run record. The desktop window can shrink to 960×600 so a 1280×720 laptop still fits after the taskbar; Alt+1–4 switch Preview / Review / Script / Timeline when a pane is collapsed.

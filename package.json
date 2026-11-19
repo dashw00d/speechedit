@@ -5,6 +5,8 @@
   "author": "SpeechEdit",
   "main": "./out/main/index.js",
   "scripts": {
+    "postinstall": "bun scripts/ensure-electron.mjs",
+    "predev": "bun scripts/ensure-electron.mjs --strict",
     "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
     "build:web": "vite build --config vite.web.config.ts",
@@ -35,6 +37,9 @@
     "test": "bun test src/renderer/src/lib",
     "mcp": "bun src/mcp/server.ts"
   },
+  "trustedDependencies": [
+    "electron"
+  ],
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
     "jsonrepair": "^3.15.0",
