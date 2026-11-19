@@ -1,6 +1,91 @@
-# SpeechEdit
+# SpeechEdit: edit video by editing the transcript
 
-The local-first reel: transcript NLE + Auto Edit + native FFmpeg. One command bus. The project JSON is the source of truth.
+**SpeechEdit is a local-first, transcript-based video editor.** Delete words in an auto-generated Whisper transcript to cut the video, strip filler words and dead air with Auto Edit, caption the result, and export through native FFmpeg. It runs as an Electron desktop app (Windows ZIP build available) and as a web app that transcribes in your browser with Whisper.
+
+![SpeechEdit editor with a word-level transcript on the left, video preview with captions in the middle, a multi-track timeline below, and six words selected for removal](docs/screenshots/transcript-editor.png)
+
+*The editor after importing an 11-second public-domain speech clip: Whisper produced the word-level transcript and captions, and six words are selected for removal. Captured from the web build.*
+
+## Why SpeechEdit
+
+Cutting a talking-head video, tutorial, screen recording or livestream usually means scrubbing a timeline to find the sentence you want gone. SpeechEdit puts the words in front of you instead: select text, press Delete, and the video, captions and timeline follow. Silence, filler words and repeated takes are detected for you, and every automatic cut is reviewable and undoable.
+
+- **Local-first.** Transcription (Whisper) and rendering (FFmpeg) run on your machine or in your browser. Models for the Assistant are optional.
+- **One command bus.** The mouse, keyboard shortcuts, command palette, Assistant and MCP tools all issue the same reversible editing commands, and the project JSON is the source of truth.
+- **Real NLE underneath.** A multi-track timeline with razor, ripple, snap, trim, zoom, titles, speed, volume, fades and keyframes, not only a text view.
+
+## Features
+
+**Transcript editing**
+- Word-level transcript with click-and-drag selection. **Remove** cuts the selected words, **Restore words** brings them back, **Correct word** fixes a transcription error without touching the audio.
+- Import an existing transcript (SRT, VTT, TXT or Whisper JSON) instead of transcribing.
+- Chapters are created automatically after transcription; search words and chapters with Ctrl+F.
+- Re-record a selected passage in a fixed-length slot with a 3-2-1 countdown; the take replaces only that audio.
+
+**Auto Edit: remove filler words, silence and retakes**
+- Detects silence and filler words, static-screen stretches (sped up 4x), loudness and pace, and suggests retake collapses.
+- Review each suggestion, apply only the safe cuts, or put applied edits back by type.
+- **Quick edit** recipes: Livestream cleanup, Feature presentation, Tutorial and Short highlight (a 9:16 vertical cut aiming for 60 seconds). One Undo reverts a whole recipe.
+
+![Auto Edit issue review listing a picture change during silence with Hear, Silent demo, Speed 4x, Cut and Keep choices](docs/screenshots/auto-edit-review.png)
+
+*Auto Edit issue review on the built-in studio demo reel (audio-only): hear a flagged stretch, then keep it, cut it, speed it up or mark it as a silent demo.*
+
+![Quick edit dialog offering Livestream cleanup, Feature presentation, Tutorial and Short highlight one-click recipes](docs/screenshots/quick-edit.png)
+
+**Timeline and captions**
+- Tracks: V3 captions, V2 overlay, V1 picture, A1 voice. Razor, ripple in/out, snap, trim, move, zoom, titles, B-roll and music.
+- Transform, speed, volume, fades and keyframes. Captions are on by default and export burns the program, not a cut list of the source.
+
+**Export and interchange**
+- Desktop: render MP4 with native FFmpeg (YouTube 1080, vertical 9:16, podcast audio, optional loudness normalization to -16 LUFS).
+- Captions as SRT or VTT, transcript as Markdown or text, YouTube chapter timestamps, and timelines as OpenTimelineIO, Final Cut XML (FCPXML), Premiere XML, Shotcut MLT, Kdenlive or Auto-Editor JSON.
+- Import timelines in the same interchange formats.
+
+**Command palette, Assistant and MCP**
+- Ctrl+K (Mac: Cmd+K) searches every editing action; Cmd+J opens the Assistant in the Inspector.
+- Assistant providers: Ollama, any OpenAI-compatible `/v1` server, Codex CLI or Grok CLI. Without a model it uses local heuristics.
+- `bun run mcp` starts a stdio **MCP server** that exposes the editing tools so an AI agent can edit a project.
+
+![Command palette filtered by the word cut, listing Cut all fillers, Cut leftover, Cut selection and Cut this sentence](docs/screenshots/command-palette.png)
+
+**Share and collaborate (hosted web editor)**
+- Send a review link where reviewers comment, correct transcript words and propose cuts without an account, or a full-editing link for shared changes with conflict handling. Details are in [Share and collaborate](#share-and-collaborate).
+
+## Quick start
+
+SpeechEdit uses [Bun](https://bun.sh). You need `ffmpeg` and `ffprobe` on your PATH for the desktop app and for the hosted review/share server.
+
+**Try it in the browser** (Whisper runs in the page; the first run downloads the model, about 114 MiB):
+
+```bash
+git clone https://github.com/dashw00d/speechedit.git
+cd speechedit
+bun install
+bun run build:web
+bun run start:web      # http://localhost:3000
+```
+
+Open the page, choose **Open media** (or **Studio demo** for a built-in sample reel), and wait for the transcript. The browser edition covers transcript editing, Auto Edit, captions, review links and transcript/caption/timeline export. Rendering the final MP4 needs the desktop app, because it uses native FFmpeg on a recording on disk.
+
+**Run the desktop app from source:**
+
+```bash
+bun install
+bun run dev
+```
+
+See [Run from source](#run-from-source-desktop-app) for WSL notes, and [Windows validation build](#windows-validation-build) for a packaged ZIP that bundles FFmpeg.
+
+## Example: cut a sentence in under a minute
+
+1. **File -> Open media** and pick a recording. Transcription starts automatically.
+2. Drag across the words you want gone, for example a false start. The selection shows how many seconds it removes.
+3. Press **Remove** (or Delete). The timeline closes the gap, and the original recording stays untouched.
+4. Click **Review edits** to see Auto Edit's suggested pause and filler cuts, then **Apply safe edits**.
+5. **Undo** reverts any step. **Export** renders the result (desktop) or saves captions and interchange files.
+
+## How it works
 
 ```
 Transcript / timeline / Auto Edit / shortcuts / palette
@@ -15,16 +100,31 @@ Transcript / timeline / Auto Edit / shortcuts / palette
          captions)            zooms, fades)
 ```
 
-## Run
+Every edit is a command (for example `deleteRange` or `setSpeed`) applied to the project store. The program monitor plays the edited result by skipping cuts, and export renders the same program through FFmpeg. The project is saved as `.speechedit.json`. Transcription is pluggable: Whisper on PATH, a local whisper.cpp install, or any OpenAI-compatible speech-to-text API (Speaches, faster-whisper-server, Groq, OpenAI). The web edition uses a Whisper model in the browser, on WebGPU when available and a CPU fallback otherwise.
+
+## Requirements
+
+- [Bun](https://bun.sh) for install, dev server, tests and the web server.
+- `ffmpeg` and `ffprobe` on PATH for development and for the hosted share/review server (the Windows ZIP and the Docker image include FFmpeg).
+- Desktop: Electron 37 (installed by `bun install`).
+- Browser edition: a current Chromium-based browser; HTTPS or localhost for microphone recording. WebGPU is optional.
+
+## Screenshots
+
+The images in `docs/screenshots/` are real captures of the web build using the built-in studio demo and a public-domain JFK sample clip. Regenerate them with `scripts/capture-screenshots.mjs` (see the header of that file for setup).
+
+## Run from source (desktop app)
 
 Needs `ffmpeg` / `ffprobe` on PATH for development. The Windows ZIP bundles both and checks them at startup; if either binary is missing, SpeechEdit shows one recovery message and refuses import and export. Transcription is pluggable: Whisper on PATH, or any OpenAI-compatible ASR (Speaches, faster-whisper-server, Groq, OpenAI). A second local or API model can group scenes and retakes.
 
 ```bash
 bun install
-bun run dev        # Electron
-bun run dev:web    # renderer; studio demo works
-bun test
+bun run dev        # Electron desktop app
+bun run dev:web    # renderer only, in a browser (studio demo works)
+bun test           # unit tests
 ```
+
+If `bun run dev` reports `Electron uninstall`, Bun skipped Electron's post-install download; run `node node_modules/electron/install.js` once and retry.
 
 On WSL, if the window never appears: `NO_SANDBOX=1 bun run dev`.
 
