@@ -224,6 +224,83 @@ export function syncAutoCaptionsForWords(project: Project, wordIds: string[]): P
   return changed ? { ...project, tracks, updatedAt: Date.now() } : project
 }
 
+/** Auto-generated word captions (not titles, lower thirds, or cards the user restyled). */
+function isWordCaption(clip: Clip): boolean {
+  if (!clip.auto || !clip.text || clip.assetId) return false
+  return !(clip.style?.position === 'center' && (clip.style.fontSize ?? 0) >= 56)
+}
+
+/**
+ * The words an auto caption card was built from, found against the project it was built for.
+ * Returns null when the card no longer matches the transcript (so callers leave it alone).
+ */
+function wordsBehindCaption(project: Project, clip: Clip, live: Word[]): Word[] | null {
+  const first = live.findIndex((word) => sourceToProgramOf(project, word.start) >= clip.start - 0.05)
+  if (first < 0) return null
+  const spoken = plainCaption(clip.text ?? '').split(/\s+/).filter(Boolean)
+  const speaker = live[first].speaker
+  if (speaker && spoken[0] === `${speakerName(project, speaker)}:`) spoken.shift()
+  const group = live.slice(first, first + spoken.length)
+  if (!group.length || group.length !== spoken.length) return null
+  return group.every((word, i) => word.text === spoken[i]) ? group : null
+}
+
+/**
+ * After words are deleted, auto caption cards that were built from them would keep showing
+ * the removed words and keep their old length, so the next cards (which ripple left) overlap
+ * them. Rebuild only the touched cards from the surviving words and drop cards left empty.
+ * Cards whose words are all still present (and everything manual) are returned unchanged.
+ */
+export function refreshAutoCaptionsAfterWordRemoval(before: Project, after: Project): Project {
+  if (before === after || !after.tracks.some((track) => track.type === 'caption')) return after
+  const liveBefore = before.transcript.words.filter((word) => !word.deleted)
+  const liveAfter = after.transcript.words.filter((word) => !word.deleted)
+  if (liveBefore.length === liveAfter.length) return after
+  let changed = false
+  const tracks = after.tracks.map((track) => {
+    if (track.type !== 'caption') return track
+    const clips: Clip[] = []
+    for (const clip of track.clips) {
+      // Cards right of the cut were already rippled in `after`; locate their words through the
+      // card as it stood in `before`, where its start still matches the transcript timing.
+      const original = before.tracks.find((t) => t.id === track.id)?.clips.find((c) => c.id === clip.id)
+      if (!original || !isWordCaption(original)) {
+        clips.push(clip)
+        continue
+      }
+      const group = wordsBehindCaption(before, original, liveBefore)
+      if (!group) {
+        clips.push(clip)
+        continue
+      }
+      const lo = group[0].start
+      const hi = group[group.length - 1].end
+      const survivors = liveAfter.filter((word) => word.start >= lo - 1e-4 && word.end <= hi + 1e-4)
+      if (survivors.length === group.length) {
+        clips.push(clip)
+        continue
+      }
+      changed = true
+      if (!survivors.length) continue
+      const start = sourceToProgramOf(after, survivors[0].start)
+      const end = sourceToProgramOf(after, survivors[survivors.length - 1].end)
+      const duration = Math.max(0.8, end - start)
+      const speaker = group[0].speaker
+      const prefixed = Boolean(speaker) && plainCaption(original.text ?? '').startsWith(`${speakerName(before, speaker!)}:`)
+      clips.push({
+        ...clip,
+        start,
+        duration,
+        inPoint: 0,
+        outPoint: duration,
+        text: captionText(after, survivors, { emphasize: true, speakerPrefix: prefixed })
+      })
+    }
+    return { ...track, clips }
+  })
+  return changed ? { ...after, tracks } : after
+}
+
 export function captionsFollowed(before: Project, after: Project): boolean {
   const prev = new Map(captionClipsOf(before).map((clip) => [clip.id, clip.text]))
   return captionClipsOf(after).some((clip) => prev.has(clip.id) && prev.get(clip.id) !== clip.text)

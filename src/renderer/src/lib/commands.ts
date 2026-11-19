@@ -33,6 +33,7 @@ import {
   parseCaptionCues,
   syncAutoCaptionsForWords,
   withCaptionClips,
+  refreshAutoCaptionsAfterWordRemoval,
   withGeneratedCaptions,
   withLowerThirds
 } from './captions'
@@ -215,7 +216,7 @@ function deleteSourceRange(
       overlap(s, { start: lo, end: hi }) > s.end - s.start - 0.05 ? { ...s, applied: true } : s
     )
   }
-  return touch(next)
+  return touch(refreshAutoCaptionsAfterWordRemoval(project, next))
 }
 
 function subtractFromCuts(cuts: Cut[], lo: number, hi: number): Cut[] {
